@@ -28,12 +28,12 @@ defmodule Mana.Flow do
   `before` sit outside the flow and never advance.
 
   Records get a public `flow` calculation (`step`, `index`, `total`,
-  `progress`, `done`) for interfaces. When a step is entered and
-  `stuck_after` is set, a durable job checks later whether the cursor is
+  `progress`, `done`) for interfaces. When a step is entered (a record
+  created on one included) and `stuck_after` is set, a durable job checks later whether the cursor is
   still there; if so it diagnoses why (`diagnose/2`: a bug or an
   abandonment, from the record's `Mana.History`) and calls `on_stuck` —
-  remind the abandoned, alert on the bug. `funnel/1` counts records per
-  step. The contract carries `x-mana-flow`; the client gets
+  remind the abandoned, alert on the bug. `funnel/2` counts records per
+  step, of the resource or of a query narrowing it. The contract carries `x-mana-flow`; the client gets
   `<Type>Flow.flow`.
   """
 
@@ -102,13 +102,14 @@ defmodule Mana.Flow do
     }
   end
 
-  @doc "How many records stand at each step (and done), in order."
-  def funnel(resource, opts \\ []) do
+  @doc "How many records of `resource` (or of an `Ash.Query` over it) stand at each step (and done), in order."
+  def funnel(resource_or_query, opts \\ []) do
     require Ash.Query
-    field = cursor(resource)
+    query = Ash.Query.new(resource_or_query)
+    field = cursor(query.resource)
 
-    for value <- order(resource) do
-      count = resource |> Ash.Query.filter(^Ash.Expr.ref(field) == ^value) |> Ash.count!(Keyword.put_new(opts, :authorize?, false))
+    for value <- order(query.resource) do
+      count = query |> Ash.Query.filter(^Ash.Expr.ref(field) == ^value) |> Ash.count!(Keyword.put_new(opts, :authorize?, false))
       {value, count}
     end
   end
@@ -142,6 +143,13 @@ defmodule Mana.Flow do
   end
 
   @doc false
+  def advance(%{action_type: :create} = changeset) do
+    Ash.Changeset.after_action(changeset, fn _changeset, record ->
+      schedule(record)
+      {:ok, record}
+    end)
+  end
+
   def advance(changeset) do
     resource = changeset.resource
     steps = steps(resource)
@@ -216,7 +224,7 @@ defmodule Mana.Flow do
     current = Map.get(record, cursor(resource))
 
     with {amount, unit} <- stuck_after(opt(resource, :stuck_after)),
-         true <- current != done(resource) do
+         true <- current != done(resource) and current not in opt(resource, :before, []) do
       inserter = Application.get_env(:mana_core, :deadline_inserter, &insert/1)
       args = %{"resource" => inspect(resource), "id" => record.id, "step" => to_string(current), "kind" => "flow_stuck"}
       inserter.(%{args: args, queue: opt(resource, :queue, :default), scheduled_at: DateTime.add(DateTime.utc_now(), amount, unit)})
@@ -346,7 +354,7 @@ defmodule Mana.Flow.Transformer do
           done: [type: :boolean, allow_nil?: false]
         ]
 
-        with {:ok, dsl} <- Ash.Resource.Builder.add_change(dsl, Mana.Flow.Advance, on: [:update]) do
+        with {:ok, dsl} <- Ash.Resource.Builder.add_change(dsl, Mana.Flow.Advance, on: [:create, :update]) do
           Ash.Resource.Builder.add_new_calculation(dsl, :flow, :map, Mana.Flow.Position,
             public?: true,
             constraints: [fields: position],

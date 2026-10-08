@@ -1474,6 +1474,7 @@ defmodule ManaCoreTest do
 
     test "steps advance in order, refuse what is not reached, skip what does not apply, never move back" do
       signup = Ash.create!(ManaCoreTest.Signup, %{})
+      assert_received {:scheduled, %{args: %{"step" => "terms", "kind" => "flow_stuck"}}}
       assert {:error, error} = go(signup, :save_details)
       assert inspect(error) =~ "flow.step_not_reached"
 
@@ -1489,6 +1490,8 @@ defmodule ManaCoreTest do
       assert %{flow: %{step: "done", index: 3, total: 3, progress: 1.0, done: true}} = Ash.load!(signup, :flow)
 
       demo = Ash.create!(ManaCoreTest.Signup, %{stage: :demo})
+      demo_id = demo.id
+      refute_received {:scheduled, %{args: %{"id" => ^demo_id}}}
       assert {:error, _} = go(demo, :accept_terms)
       assert %{flow: %{index: 0, progress: +0.0, done: false}} = Ash.load!(demo, :flow)
     end
@@ -1517,6 +1520,11 @@ defmodule ManaCoreTest do
 
     test "the funnel counts each step and the contract lists them" do
       assert [terms: _, details: _, address: _, done: _] = Mana.Flow.funnel(ManaCoreTest.Signup)
+      virtual = Ash.create!(ManaCoreTest.Signup, %{kind: :virtual, stage: :details})
+      require Ash.Query
+      narrowed = ManaCoreTest.Signup |> Ash.Query.filter(kind == :virtual) |> Mana.Flow.funnel()
+      assert narrowed[:details] == Enum.count(Ash.read!(ManaCoreTest.Signup), &(&1.kind == :virtual and &1.stage == :details))
+      assert narrowed[:details] >= 1 and virtual.stage == :details
 
       assert [%{"cursor" => "stage", "done" => "done", "steps" => [%{"name" => "terms", "action" => "accept_terms"}, _, %{"name" => "address", "skippable" => true}]}] =
                Mana.Flow.contract(ManaCoreTest.Signup)
