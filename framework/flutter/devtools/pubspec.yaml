@@ -1,0 +1,8 @@
+name: mana_devtools
+description: Private development tools for the vendored Mana framework.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.13.2
+dependencies:
+  analyzer: 14.4.0

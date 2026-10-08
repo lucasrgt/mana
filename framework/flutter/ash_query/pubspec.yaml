@@ -1,0 +1,6 @@
+name: ash_query
+description: Typed page metadata for Ash JSON API consumers.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.13.2

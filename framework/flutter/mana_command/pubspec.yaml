@@ -1,0 +1,24 @@
+name: mana_command
+description: Thin Flutter bindings for result_command executions in Mana apps.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.13.2
+dependencies:
+  flutter:
+    sdk: flutter
+  mana_br:
+    path: ../mana_br
+  mana_primitives:
+    path: ../mana_primitives
+  result_command: ^2.2.0
+  result_dart: ^2.2.0
+dev_dependencies:
+  assay_flutter:
+    git:
+      url: https://github.com/lucasrgt/acceptance-verification-protocol.git
+      path: assay.dart
+      ref: 98e31ee
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0

@@ -1,0 +1,18 @@
+{
+  "oasdiff": {
+    "version": "1.33.0",
+    "platforms": {
+      "linux-x64": {
+        "url": "https://github.com/oasdiff/oasdiff/releases/download/v1.33.0/oasdiff_1.33.0_linux_amd64.tar.gz",
+        "sha256": "43a4e328e2d13ba1552d760aa68d2485c75c5621f309f6ff64ae895188345247",
+        "binarySha256": "fa65aae43c867e9f79da9cb121d3c1a113637883afe014c0680fd5b50696f416"
+      }
+    }
+  },
+  "generator": {
+    "name": "openapi-generator",
+    "version": "7.25.0",
+    "sha256": "41ce4f6b07f196676439d710759fa1ced7a08066d06ff1bf314681470289efae",
+    "url": "https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/7.25.0/openapi-generator-cli-7.25.0.jar"
+  }
+}

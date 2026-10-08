@@ -1,0 +1,107 @@
+groups:
+  - name: mana-runtime
+    rules:
+      - alert: ManaAlertmanagerUnavailable
+        expr: up{job="mana-alertmanager"} == 0 or absent(up{job="mana-alertmanager"})
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Alert delivery service is unavailable
+          action: Restore Alertmanager and inspect Prometheus notification errors; this same delivery path cannot notify while it is down.
+      - alert: ManaAlertDeliveryFailures
+        expr: increase(alertmanager_notification_requests_failed_total{job="mana-alertmanager",integration="webhook"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Alert webhook delivery attempts failed recently
+          action: Check receiver availability, TLS and credentials; use an independent operational channel if this receiver is unavailable.
+      - alert: ManaQueueWaitingTooLong
+        expr: mana_queue_oldest_due_age_seconds{job="mana"} > 120 and on (job, instance) mana_queue_observation_success{job="mana"} == 1 and on (job, instance) (time() - mana_queue_observation_timestamp_seconds{job="mana"} < 45)
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Native Oban work has been due for more than two minutes
+          action: Inspect paused or missing producers, queue capacity and dependencies; do not blindly replay external effects.
+      - alert: ManaDiscardedJobs
+        expr: mana_queue_discarded_present{job="mana"} == 1 and on (job, instance) mana_queue_observation_success{job="mana"} == 1 and on (job, instance) (time() - mana_queue_observation_timestamp_seconds{job="mana"} < 45)
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Native Oban has retained discarded jobs
+          action: Inspect exhausted attempts and reconcile external effects before an explicit retry; disappearance may be retention, not successful delivery.
+      - alert: ManaQueueObserverUnavailable
+        expr: mana_queue_observation_success{job="mana"} == 0 or (time() - mana_queue_observation_timestamp_seconds{job="mana"} >= 45) or (up{job="mana"} unless on (job, instance) mana_queue_observation_success{job="mana"})
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable queue observations are unavailable or stale
+          action: Inspect the native telemetry poller, database access and the queue observation index; missing data does not mean an empty queue.
+      - alert: ManaNotReady
+        expr: probe_success{job="mana-health",check="readiness"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Mana dependency readiness failed
+          action: Compare liveness and metrics availability; inspect database connectivity and saturation before restarting the application.
+      - alert: ManaNotLive
+        expr: probe_success{job="mana-health",check="liveness"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Mana liveness failed
+          action: Inspect the release process and its internal listener.
+      - alert: ManaHealthObserverUnavailable
+        expr: up{job="mana-health"} == 0 or absent(up{job="mana-health",check="readiness"}) or absent(up{job="mana-health",check="liveness"})
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mana health observer unavailable
+          action: Restore the internal Blackbox exporter or its scrape configuration; missing observations are not healthy results.
+      - alert: ManaApiUnavailable
+        expr: up{job="mana"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Mana metrics endpoint unavailable
+          action: Check the release process, scrape credential and network; then inspect livez and readyz.
+      - alert: ManaHttpServerErrors
+        expr: sum by (instance) (rate(mana_http_requests_total{job="mana",status_class="5xx"}[5m])) / sum by (instance) (rate(mana_http_requests_total{job="mana"}[5m])) > 0.05 and sum by (instance) (increase(mana_http_requests_total{job="mana"}[5m])) >= 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than five percent HTTP server errors
+          action: Inspect deployment changes and dependency readiness; do not automatically replay writes.
+      - alert: ManaDatabaseErrors
+        expr: time() - mana_db_last_error_timestamp_seconds{job="mana"} < 300
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Database query errors observed
+          action: Check connectivity, TLS, credentials, locks and query failures in restricted operational logs.
+      - alert: ManaJobFailures
+        expr: time() - mana_jobs_last_failure_timestamp_seconds{job="mana"} < 300
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Native Oban job failures observed
+          action: Inspect the declared queue and native retry state; verify external delivery before manually retrying.
+      - alert: ManaDatabaseQueuePressure
+        expr: histogram_quantile(0.95, sum by (instance, le) (rate(mana_db_queue_duration_microseconds_bucket{job="mana"}[5m]))) > 100000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Database pool queue time above one hundred milliseconds
+          action: Inspect database saturation and queries before changing pool capacity.

@@ -1,0 +1,2 @@
+# Tests spawn the CLI and real local servers; the default 30 s is tight.
+timeout: 4x

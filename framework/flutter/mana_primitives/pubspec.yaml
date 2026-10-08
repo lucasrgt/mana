@@ -1,0 +1,8 @@
+name: mana_primitives
+description: The client half of Mana primitives (verbs, views, attachments), as declared once in Ash and generated into the API client.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.9.0
+dev_dependencies:
+  test: ^1.26.0

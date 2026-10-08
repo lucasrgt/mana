@@ -1,0 +1,9 @@
+#!/bin/sh
+# Runs the Moments CLI, compiling it again when its Dart sources changed.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+exe="$here/.dart_tool/moments"
+if [ ! -x "$exe" ] || [ -n "$(find "$here/bin" "$here/lib" "$here/pubspec.lock" "$here/../cli/lib" -newer "$exe" -print -quit)" ]; then
+  (cd "$here" && dart pub get --enforce-lockfile >/dev/null && dart compile exe bin/moments.dart -o "$exe.$$" >/dev/null && mv -f "$exe.$$" "$exe")
+fi
+exec "$exe" "$@"

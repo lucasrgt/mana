@@ -1,0 +1,14 @@
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+_build/
+deps/
+.toolchain/
+.elixir_ls/
+node_modules/
+*.log
+.proofs/
+.backend/
+.suite/
+.headless/

@@ -1,0 +1,279 @@
+{
+  "moments": {
+    "review-draft": {
+      "backend": {
+        "base": "traveler-workspace",
+        "recipe": "review-draft"
+      },
+      "checks": [
+        {
+          "equals": "rating",
+          "field": "modal",
+          "kind": "restored",
+          "name": "draft_restored"
+        },
+        {
+          "equals": false,
+          "field": "published",
+          "kind": "backend_equals",
+          "match": "transactionId",
+          "name": "review_not_published"
+        }
+      ],
+      "description": "Local stay completed; resumes the modal, scores and comment without publishing.",
+      "projection": {
+        "comment": "",
+        "commentBase": 0,
+        "commentExtent": 0,
+        "focus": "none",
+        "modal": "rating",
+        "route": "/traveler/reviews?debugSession=0",
+        "scores": {},
+        "scrollOffset": 0,
+        "transactionId": ""
+      },
+      "source": {
+        "file": "../../../ash/lib/review_moments.ex",
+        "line": 26,
+        "module": "ReviewMoments",
+        "sha256": "d42a3eab3fe595e8b487b10083f55b1d872afa0fa437ea02f76e4b8a8abe049d"
+      }
+    },
+    "checkout-open": {
+      "backend": {
+        "base": "traveler-workspace",
+        "recipe": "checkout"
+      },
+      "checks": [],
+      "description": "Accepted booking with a pending charge in the isolated database; resumes the saved editing state.",
+      "projection": {
+        "dayFilter": "all",
+        "filter": "all",
+        "route": "/traveler/reservations?debugSession=0",
+        "scrollOffset": 0
+      },
+      "source": {
+        "file": "../../../ash/lib/booking_moments.ex",
+        "line": 34,
+        "module": "BookingMoments",
+        "sha256": "a7c604d9f46765d09db8f420921dc00df1d052e662e64b0d80a4283cf2209400"
+      }
+    },
+    "checkout-confirmed": {
+      "backend": {
+        "base": "traveler-workspace",
+        "recipe": "checkout"
+      },
+      "checks": [],
+      "description": "The same local instance, with the Confirmed filter prepared.",
+      "projection": {
+        "dayFilter": "all",
+        "filter": "confirmed",
+        "route": "/traveler/reservations?debugSession=0",
+        "scrollOffset": 0
+      },
+      "source": {
+        "file": "../../../ash/lib/booking_moments.ex",
+        "line": 41,
+        "module": "BookingMoments",
+        "sha256": "a7c604d9f46765d09db8f420921dc00df1d052e662e64b0d80a4283cf2209400"
+      }
+    },
+    "booking-notifications": {
+      "backend": {
+        "base": "traveler-workspace",
+        "recipe": "notification-inbox"
+      },
+      "checks": [
+        {
+          "equals": "reservation",
+          "field": "filter",
+          "kind": "restored",
+          "name": "list_restored"
+        },
+        {
+          "equals": true,
+          "field": "hasReservations",
+          "kind": "backend_equals",
+          "match": "deliveryIds",
+          "name": "bookings_present"
+        },
+        {
+          "equals": true,
+          "field": "allUnread",
+          "kind": "backend_equals",
+          "match": "deliveryIds",
+          "name": "notifications_unread"
+        }
+      ],
+      "description": "Notifications for local bookings; resumes category and scroll without marking them read.",
+      "projection": {
+        "deliveryIds": "",
+        "filter": "reservation",
+        "route": "/notifications?debugSession=0",
+        "scrollOffset": 0
+      },
+      "source": {
+        "file": "../../../ash/lib/notification_moments.ex",
+        "line": 20,
+        "module": "NotificationMoments",
+        "sha256": "d2516b5765787583a33f21dd7212705934b87c4179ec4af621fb03b534b1a6d4"
+      }
+    }
+  },
+  "screens": {
+    "/notifications?debugSession=0": {
+      "liveUiPrefix": null,
+      "properties": {
+        "deliveryIds": {
+          "maxLength": 3699,
+          "type": "string"
+        },
+        "filter": {
+          "enum": [
+            "all",
+            "reservation",
+            "proposal",
+            "message",
+            "payment",
+            "system"
+          ]
+        },
+        "route": {
+          "enum": [
+            "/notifications?debugSession=0"
+          ]
+        },
+        "scrollOffset": {
+          "max": 10000000,
+          "min": 0,
+          "type": "number"
+        }
+      },
+      "watch": [
+        "lib/features/shared/notifications/notifications_view.dart",
+        "lib/features/shared/notifications/notifications_view_model.dart",
+        "lib/features/shared/notifications/notifications_surface.dart"
+      ]
+    },
+    "/traveler/reservations?debugSession=0": {
+      "liveUiPrefix": "reservations.",
+      "properties": {
+        "dayFilter": {
+          "enum": [
+            "all",
+            "today",
+            "sunday",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday"
+          ]
+        },
+        "filter": {
+          "enum": [
+            "all",
+            "pending",
+            "confirmed",
+            "cancelled"
+          ]
+        },
+        "route": {
+          "enum": [
+            "/traveler/reservations?debugSession=0"
+          ]
+        },
+        "scrollOffset": {
+          "max": 10000000,
+          "min": 0,
+          "type": "number"
+        }
+      },
+      "watch": [
+        "lib/features/traveler/reservations/traveler_reservations_view.dart",
+        "lib/features/traveler/reservations/traveler_reservations_surface.dart",
+        "lib/features/traveler/reservations/traveler_reservation_card.dart",
+        "lib/features/traveler/reservations/traveler_reservations_presentation.dart"
+      ]
+    },
+    "/traveler/reviews?debugSession=0": {
+      "liveUiPrefix": "reviews.",
+      "properties": {
+        "comment": {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "commentBase": {
+          "max": 2000,
+          "min": 0,
+          "type": "number"
+        },
+        "commentExtent": {
+          "max": 2000,
+          "min": 0,
+          "type": "number"
+        },
+        "focus": {
+          "enum": [
+            "none",
+            "comment"
+          ]
+        },
+        "modal": {
+          "enum": [
+            "closed",
+            "rating"
+          ]
+        },
+        "route": {
+          "enum": [
+            "/traveler/reviews?debugSession=0"
+          ]
+        },
+        "scores": {
+          "keyMaxLength": 36,
+          "maxProperties": 32,
+          "type": "object",
+          "values": {
+            "max": 5,
+            "min": 1,
+            "type": "integer"
+          }
+        },
+        "scrollOffset": {
+          "max": 10000000,
+          "min": 0,
+          "type": "number"
+        },
+        "transactionId": {
+          "maxLength": 36,
+          "type": "string"
+        }
+      },
+      "watch": [
+        "lib/features/traveler/reviews/reviews_view.dart",
+        "lib/features/traveler/reviews/reviews_view_model.dart",
+        "lib/features/traveler/reviews/reviews_surface.dart",
+        "lib/features/traveler/reviews/review_moment.dart",
+        "lib/features/traveler/reviews/reviews_presentation.dart"
+      ]
+    }
+  },
+  "version": 2,
+  "watch": [
+    "lib/features/traveler/reservations/traveler_reservations_view.dart",
+    "lib/features/traveler/reservations/traveler_reservations_surface.dart",
+    "lib/features/traveler/reservations/traveler_reservation_card.dart",
+    "lib/features/traveler/reservations/traveler_reservations_presentation.dart",
+    "lib/features/traveler/reviews/reviews_view.dart",
+    "lib/features/traveler/reviews/reviews_view_model.dart",
+    "lib/features/traveler/reviews/reviews_surface.dart",
+    "lib/features/traveler/reviews/review_moment.dart",
+    "lib/features/traveler/reviews/reviews_presentation.dart",
+    "lib/features/shared/notifications/notifications_view.dart",
+    "lib/features/shared/notifications/notifications_view_model.dart",
+    "lib/features/shared/notifications/notifications_surface.dart"
+  ]
+}

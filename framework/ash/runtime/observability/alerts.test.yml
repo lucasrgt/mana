@@ -1,0 +1,324 @@
+rule_files:
+  - mana-alerts.yml
+evaluation_interval: 1m
+tests:
+  - name: Alertmanager loss fires and resolves when the target returns
+    interval: 1m
+    input_series:
+      - series: 'up{job="mana-alertmanager",instance="127.0.0.1:9093"}'
+        values: '1 0+0x2 1+0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ManaAlertmanagerUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ManaAlertmanagerUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: mana-alertmanager
+              instance: 127.0.0.1:9093
+              severity: critical
+            exp_annotations:
+              summary: Alert delivery service is unavailable
+              action: Restore Alertmanager and inspect Prometheus notification errors; this same delivery path cannot notify while it is down.
+      - eval_time: 4m
+        alertname: ManaAlertmanagerUnavailable
+        exp_alerts: []
+  - name: Missing Alertmanager scrape configuration is not healthy
+    interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ManaAlertmanagerUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: mana-alertmanager
+              severity: critical
+            exp_annotations:
+              summary: Alert delivery service is unavailable
+              action: Restore Alertmanager and inspect Prometheus notification errors; this same delivery path cannot notify while it is down.
+  - name: Native preinitialized webhook failure counter alerts and ages out
+    interval: 1m
+    input_series:
+      - series: 'alertmanager_notification_requests_failed_total{job="mana-alertmanager",instance="127.0.0.1:9093",integration="webhook"}'
+        values: '0 1+0x9'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ManaAlertDeliveryFailures
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ManaAlertDeliveryFailures
+        exp_alerts:
+          - exp_labels:
+              job: mana-alertmanager
+              instance: 127.0.0.1:9093
+              integration: webhook
+              severity: warning
+            exp_annotations:
+              summary: Alert webhook delivery attempts failed recently
+              action: Check receiver availability, TLS and credentials; use an independent operational channel if this receiver is unavailable.
+      - eval_time: 7m
+        alertname: ManaAlertDeliveryFailures
+        exp_alerts: []
+  - name: A stopped poller is stale despite available metrics
+    interval: 15s
+    input_series:
+      - series: 'up{job="mana",instance="api:4000"}'
+        values: '1+0x20'
+      - series: 'mana_queue_observation_success{job="mana",instance="api:4000"}'
+        values: '1+0x20'
+      - series: 'mana_queue_observation_timestamp_seconds{job="mana",instance="api:4000"}'
+        values: '0+0x20'
+      - series: 'mana_queue_oldest_due_age_seconds{job="mana",instance="api:4000",queue="account_mail"}'
+        values: '500+0x20'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ManaQueueWaitingTooLong
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ManaQueueObserverUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: mana
+              instance: api:4000
+              severity: warning
+            exp_annotations:
+              summary: Durable queue observations are unavailable or stale
+              action: Inspect the native telemetry poller, database access and the queue observation index; missing data does not mean an empty queue.
+  - name: A metrics target that never published queue observations is unknown
+    interval: 1m
+    input_series:
+      - series: 'up{job="mana",instance="api:4000"}'
+        values: '1+0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ManaQueueObserverUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: mana
+              instance: api:4000
+              severity: warning
+            exp_annotations:
+              summary: Durable queue observations are unavailable or stale
+              action: Inspect the native telemetry poller, database access and the queue observation index; missing data does not mean an empty queue.
+  - name: Waiting age fires only with fresh successful observations and resolves
+    interval: 15s
+    input_series:
+      - series: 'up{job="mana",instance="api:4000"}'
+        values: '1+0x40'
+      - series: 'mana_queue_observation_success{job="mana",instance="api:4000"}'
+        values: '1+0x40'
+      - series: 'mana_queue_observation_timestamp_seconds{job="mana",instance="api:4000"}'
+        values: '0+15x40'
+      - series: 'mana_queue_oldest_due_age_seconds{job="mana",instance="api:4000",queue="account_mail"}'
+        values: '0+15x16 0+0x24'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ManaQueueWaitingTooLong
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ManaQueueWaitingTooLong
+        exp_alerts:
+          - exp_labels:
+              job: mana
+              instance: api:4000
+              queue: account_mail
+              severity: warning
+            exp_annotations:
+              summary: Native Oban work has been due for more than two minutes
+              action: Inspect paused or missing producers, queue capacity and dependencies; do not blindly replay external effects.
+      - eval_time: 5m
+        alertname: ManaQueueWaitingTooLong
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ManaQueueObserverUnavailable
+        exp_alerts: []
+  - name: Failed observations never turn stale waiting ages into current evidence
+    interval: 15s
+    input_series:
+      - series: 'mana_queue_observation_success{job="mana",instance="api:4000"}'
+        values: '0+0x16 1+0x24'
+      - series: 'mana_queue_observation_timestamp_seconds{job="mana",instance="api:4000"}'
+        values: '0+15x40'
+      - series: 'mana_queue_oldest_due_age_seconds{job="mana",instance="api:4000",queue="account_mail"}'
+        values: '500+0x16 0+0x24'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ManaQueueWaitingTooLong
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ManaQueueObserverUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: mana
+              instance: api:4000
+              severity: warning
+            exp_annotations:
+              summary: Durable queue observations are unavailable or stale
+              action: Inspect the native telemetry poller, database access and the queue observation index; missing data does not mean an empty queue.
+      - eval_time: 5m
+        alertname: ManaQueueObserverUnavailable
+        exp_alerts: []
+  - name: Readiness fails independently from metrics and liveness and resolves
+    interval: 1m
+    input_series:
+      - series: 'up{job="mana",instance="api:4000"}'
+        values: '1+0x8'
+      - series: 'probe_success{job="mana-health",check="liveness",instance="http://api:4000/livez"}'
+        values: '1+0x8'
+      - series: 'probe_success{job="mana-health",check="readiness",instance="http://api:4000/readyz"}'
+        values: '1 0+0x2 1+0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ManaNotReady
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ManaNotReady
+        exp_alerts:
+          - exp_labels:
+              job: mana-health
+              check: readiness
+              instance: http://api:4000/readyz
+              severity: critical
+            exp_annotations:
+              summary: Mana dependency readiness failed
+              action: Compare liveness and metrics availability; inspect database connectivity and saturation before restarting the application.
+      - eval_time: 2m
+        alertname: ManaNotLive
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ManaApiUnavailable
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ManaNotReady
+        exp_alerts: []
+  - name: Missing readiness scrape is unknown even when liveness scrape is configured
+    interval: 1m
+    input_series:
+      - series: 'up{job="mana-health",check="liveness",instance="http://api:4000/livez"}'
+        values: '1+0x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ManaHealthObserverUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: mana-health
+              check: readiness
+              severity: warning
+            exp_annotations:
+              summary: Mana health observer unavailable
+              action: Restore the internal Blackbox exporter or its scrape configuration; missing observations are not healthy results.
+  - name: Observer scrape failure resolves after successful collection returns
+    interval: 1m
+    input_series:
+      - series: 'up{job="mana-health",check="liveness",instance="http://api:4000/livez"}'
+        values: '1+0x8'
+      - series: 'up{job="mana-health",check="readiness",instance="http://api:4000/readyz"}'
+        values: '1 0+0x2 1+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ManaHealthObserverUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: mana-health
+              check: readiness
+              instance: http://api:4000/readyz
+              severity: warning
+            exp_annotations:
+              summary: Mana health observer unavailable
+              action: Restore the internal Blackbox exporter or its scrape configuration; missing observations are not healthy results.
+      - eval_time: 4m
+        alertname: ManaHealthObserverUnavailable
+        exp_alerts: []
+  - name: First observed job failure alerts after hold and resolves after the window
+    interval: 1m
+    input_series:
+      - series: 'mana_jobs_last_failure_timestamp_seconds{job="mana",instance="api:4000",queue="account_mail"}'
+        values: '_ _ 120+0x8'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ManaJobFailures
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ManaJobFailures
+        exp_alerts:
+          - exp_labels:
+              job: mana
+              instance: api:4000
+              queue: account_mail
+              severity: warning
+            exp_annotations:
+              summary: Native Oban job failures observed
+              action: Inspect the declared queue and native retry state; verify external delivery before manually retrying.
+      - eval_time: 7m
+        alertname: ManaJobFailures
+        exp_alerts: []
+  - name: Scrape loss is held and resolves on recovery
+    interval: 1m
+    input_series:
+      - series: 'up{job="mana",instance="api:4000"}'
+        values: '1 0+0x2 1+0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ManaApiUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ManaApiUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: mana
+              instance: api:4000
+              severity: critical
+            exp_annotations:
+              summary: Mana metrics endpoint unavailable
+              action: Check the release process, scrape credential and network; then inspect livez and readyz.
+      - eval_time: 4m
+        alertname: ManaApiUnavailable
+        exp_alerts: []
+
+  - name: Retained discards fire after a minute and resolve when absent
+    interval: 1m
+    input_series:
+      - series: 'mana_queue_observation_success{job="mana",instance="api:4000"}'
+        values: '1+0x5'
+      - series: 'mana_queue_observation_timestamp_seconds{job="mana",instance="api:4000"}'
+        values: '0+60x5'
+      - series: 'mana_queue_discarded_present{job="mana",instance="api:4000",queue="account_mail"}'
+        values: '0 1 1 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ManaDiscardedJobs
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ManaDiscardedJobs
+        exp_alerts:
+          - exp_labels:
+              job: mana
+              instance: api:4000
+              queue: account_mail
+              severity: warning
+            exp_annotations:
+              summary: Native Oban has retained discarded jobs
+              action: Inspect exhausted attempts and reconcile external effects before an explicit retry; disappearance may be retention, not successful delivery.
+      - eval_time: 3m
+        alertname: ManaDiscardedJobs
+        exp_alerts: []
+  - name: Stale or failed observations cannot assert a current discard
+    interval: 1m
+    input_series:
+      - series: 'mana_queue_observation_success{job="mana",instance="stale:4000"}'
+        values: '1+0x5'
+      - series: 'mana_queue_observation_timestamp_seconds{job="mana",instance="stale:4000"}'
+        values: '0+0x5'
+      - series: 'mana_queue_discarded_present{job="mana",instance="stale:4000",queue="account_mail"}'
+        values: '1+0x5'
+      - series: 'mana_queue_observation_success{job="mana",instance="failed:4000"}'
+        values: '0+0x5'
+      - series: 'mana_queue_observation_timestamp_seconds{job="mana",instance="failed:4000"}'
+        values: '0+60x5'
+      - series: 'mana_queue_discarded_present{job="mana",instance="failed:4000",queue="account_mail"}'
+        values: '1+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ManaDiscardedJobs
+        exp_alerts: []

@@ -1,0 +1,15 @@
+name: live_ui
+description: Private development bridge for persistent visual edits in a running Flutter app.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.13.2
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.6.0
+  dio: ^5.11.0
+  flutter_test:
+    sdk: flutter
+dev_dependencies:
+  flutter_lints: ^6.0.0

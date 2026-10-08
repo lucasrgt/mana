@@ -1,0 +1,14 @@
+name: moments
+description: The Moments runner of Mana — open, sync and run named situations of a Flutter app against its Ash backend.
+publish_to: none
+environment:
+  sdk: ^3.9.0
+dependencies:
+  args: ^2.7.0
+  crypto: ^3.0.6
+  mana:
+    path: ../cli
+  path: ^1.9.1
+  yaml: ^3.1.2
+dev_dependencies:
+  test: ^1.26.0

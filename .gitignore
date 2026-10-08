@@ -1,0 +1,6 @@
+.dart_tool/
+build/
+.mana/
+.proofs/
+.backend/
+node_modules/

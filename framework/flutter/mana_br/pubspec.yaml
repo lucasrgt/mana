@@ -1,0 +1,13 @@
+name: mana_br
+description: Client half of Mana.BR — Brazilian identifiers validated, masked and typed exactly as the server stores them.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.13.2
+dependencies:
+  flutter:
+    sdk: flutter
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0

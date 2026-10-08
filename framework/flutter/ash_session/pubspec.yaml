@@ -1,0 +1,17 @@
+name: ash_session
+description: Opinionated bearer session lifecycle for generated Ash clients.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ^3.13.2
+dependencies:
+  dio: ^5.11.0
+  signals_core: ^7.0.0
+  flutter_secure_storage: ^10.3.1
+  mana_storage:
+    path: ../mana_storage
+  web: ^1.1.1
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0

@@ -1,0 +1,10 @@
+name: off_focus_value
+description: Minimal Flutter web reproduction of stale off-focus semantics values.
+publish_to: none
+environment:
+  sdk: ^3.13.2
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  uses-material-design: true

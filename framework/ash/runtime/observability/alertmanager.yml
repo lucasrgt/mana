@@ -1,0 +1,22 @@
+route:
+  receiver: mana-operations
+  group_by: [alertname, job, instance, queue]
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 4h
+receivers:
+  - name: mana-operations
+    webhook_configs:
+      - url_file: /etc/alertmanager/receiver-url
+        send_resolved: true
+        timeout: 5s
+        http_config:
+          follow_redirects: false
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/receiver-token
+          tls_config:
+            min_version: TLS12
+# The deployment supplies an authorized HTTPS destination and its credential.
+# Keep API/metrics on a private listener and persist /alertmanager across restarts.
+# The local proof adds its private CA; public endpoints use normal system trust.
