@@ -9,10 +9,9 @@ limits and the Moments that prove each journey. The contract for agents is in
 
 | Folder | What it is |
 | --- | --- |
-| [`cli/`](cli/README.md) | `mana setup`, `doctor` and `agent`, driven by the project's `mana.toml` |
+| [`cli/`](cli/README.md) | `mana new` (a whole project to start from), `setup`, `doctor`, `lab` and `agent`, driven by the project's `mana.toml` |
 | [`moments/`](moments/README.md) | the Moments runner: open, sync and run named situations in a browser, `flutter_tester` or Android |
 | [`contracts/`](contracts/README.md) | Ash → OpenAPI → Dart client, with `oasdiff` blocking breaking changes |
-| [`scaffold/`](scaffold/README.md) | an editable fullstack slice as a starting point |
 | **Elixir** (`ash/`) | |
 | [`ash/core`](ash/core/README.md) | Spark extensions: privacy, retention, limits, errors, enums, search, uploads, storage, webhooks, verbs, views, history and more |
 | [`ash/moments`](ash/moments/README.md) | the `moment` DSL and backend recipes |

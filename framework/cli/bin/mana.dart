@@ -319,6 +319,10 @@ Future<void> main(List<String> arguments) async {
       return _web(arguments.skip(1).toList());
     case 'mix':
       return _mix(arguments.skip(1).toList());
+    case 'lab':
+      return _lab(arguments.skip(1).toList());
+    case 'new':
+      return _new(arguments.skip(1).toList());
     case 'forms':
       return _forms(arguments.skip(1).toList());
     case 'features':
@@ -532,6 +536,46 @@ Future<void> _mix(List<String> arguments) async {
         for (final key in ['MIX_ENV'])
           if (Platform.environment[key] case final value?) key: value,
       },
+    );
+  } on ManaFailure catch (error) {
+    stderr.writeln(error.message);
+    exitCode = 1;
+  }
+}
+
+Future<void> _new(List<String> arguments) async {
+  try {
+    final parser = ArgParser()
+      ..addOption('mana-url')
+      ..addOption('mana-ref')
+      ..addFlag('setup', defaultsTo: true);
+    final values = parser.parse(arguments);
+    if (values.rest.length != 1) {
+      throw const ManaFailure(
+        'Use mana new <folder> [--mana-url <git url>] [--mana-ref <commit>] [--no-setup]',
+      );
+    }
+    await newProject(
+      values.rest.single,
+      manaUrl: values.option('mana-url'),
+      manaRef: values.option('mana-ref'),
+      setup: values.flag('setup'),
+    );
+  } on ManaFailure catch (error) {
+    stderr.writeln(error.message);
+    exitCode = 1;
+  }
+}
+
+Future<void> _lab(List<String> arguments) async {
+  try {
+    final backend = arguments.firstOrNull == '--backend' && arguments.length > 1
+        ? arguments[1]
+        : null;
+    await lab(
+      findProject(),
+      backend == null ? arguments : arguments.skip(2).toList(),
+      backend: backend,
     );
   } on ManaFailure catch (error) {
     stderr.writeln(error.message);

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "name": "notes-empty",
+  "initialMoment": "notes-empty",
+  "ports": {
+    "api": 4100,
+    "web": 4101,
+    "suite": 4102,
+    "bridge": 18900
+  },
+  "database": "__name___dev",
+  "databaseImage": "postgres:16",
+  "restartOnOpen": true,
+  "sync": {
+    "mix": "../backend",
+    "args": ["moments.export", "__Name__.Moments.App", "../app/moments/manifest.json"]
+  },
+  "services": [
+    {
+      "name": "__dash__-api",
+      "cwd": "..",
+      "port": 4100,
+      "commandTimeout": 300000,
+      "environment": {
+        "MOMENTS_SUITE_ORIGIN": "http://127.0.0.1:4102",
+        "MANA_MOMENTS_INSTANCE": "${project}/moments/.backend/instance.json",
+        "MANA_DATABASE": "__name___dev"
+      },
+      "watch": ["backend/lib", "backend/config", "backend/mix.exs", "backend/mix.lock"],
+      "prepare": ["mana/framework/cli/mana", "lab", "prepare"],
+      "prepareIdempotent": true,
+      "compile": ["mana/framework/cli/mana", "lab", "mix", "compile"],
+      "serve": ["mana/framework/cli/mana", "lab", "serve"],
+      "ready": {
+        "url": "http://127.0.0.1:4100/healthz",
+        "json": {"service": "__dash__-api"}
+      }
+    }
+  ],
+  "recipes": "elixir",
+  "inputs": "recipe",
+  "flutterDefines": {
+    "MANA_MOMENTS": "true",
+    "MANA_MOMENT_BOOTSTRAP": "true",
+    "APP_API_URL": "${instance.apiUrl}"
+  },
+  "headless": {
+    "file": "test/moments/headless.dart",
+    "function": "headlessMain"
+  }
+}

@@ -126,6 +126,14 @@ Every JSON:API request labelled with the feature of the verb it reaches; request
 - **Instead of:** error dashboards by endpoint; guessing which feature a slow route belongs to
 - **Docs:** `framework/ash/core/lib/mana/feature.ex`
 
+### New project and lab (`new-project`)
+
+mana new writes a whole project around Mana (Ash backend, Flutter app, generated client, Moments, Mana as a pinned submodule); mana lab runs that backend against a Moments sandbox.
+
+- **Use:** mana new <folder> [--mana-ref <release>] then moments suite --headless --project app; MANA_MOMENTS_INSTANCE=app/moments/.backend/instance.json mana lab prepare|serve|test|mix. Replace the starter Notes domain with yours and keep the wiring (OpenApi module, recipes, MomentHost/MomentViewBinding in the app).
+- **Instead of:** copying an existing app to start a new one; hand-wiring Moments, contracts and the client in a fresh project; per-project scripts that point a backend at the sandbox database
+- **Docs:** `framework/cli/README.md`
+
 ## Primitives
 
 ### Validation on both sides (`validation`)

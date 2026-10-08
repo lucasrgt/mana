@@ -403,8 +403,8 @@ The DSL can declare the libraries that make up a screen or journey:
 client_roots(["lib/features/bookmarks.dart"])
 ```
 
-These roots are added to `watch` automatically. The scaffold already declares
-them. A journey that crosses screens needs the roots of all of them.
+These roots are added to `watch` automatically; a project from `mana new`
+already declares them. A journey that crosses screens needs the roots of all of them.
 
 With the [Dart parser prepared](../flutter/devtools/README.md),
 `moments affected --base <commit>` follows imports, exports, parts,

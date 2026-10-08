@@ -10,6 +10,8 @@ export 'src/client.dart';
 export 'src/evals.dart';
 export 'src/examples.dart';
 export 'src/intents.dart';
+export 'src/lab.dart';
+export 'src/new_project.dart';
 export 'src/notebook.dart';
 export 'src/mcp.dart';
 export 'src/primitives.dart';

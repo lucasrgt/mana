@@ -472,3 +472,14 @@ use = "Start Mana.Feature in the supervision tree; plug Mana.Feature.Plug, otp_a
 replaces = ["error dashboards by endpoint", "guessing which feature a slow route belongs to"]
 docs = "framework/ash/core/lib/mana/feature.ex"
 
+
+[[capability]]
+id = "new-project"
+name = "New project and lab"
+layer = "core"
+status = "available"
+summary = "mana new writes a whole project around Mana (Ash backend, Flutter app, generated client, Moments, Mana as a pinned submodule); mana lab runs that backend against a Moments sandbox."
+keywords = ["new project", "start", "template", "scaffold", "bootstrap", "submodule", "lab", "sandbox database"]
+use = "mana new <folder> [--mana-ref <release>] then moments suite --headless --project app; MANA_MOMENTS_INSTANCE=app/moments/.backend/instance.json mana lab prepare|serve|test|mix. Replace the starter Notes domain with yours and keep the wiring (OpenApi module, recipes, MomentHost/MomentViewBinding in the app)."
+replaces = ["copying an existing app to start a new one", "hand-wiring Moments, contracts and the client in a fresh project", "per-project scripts that point a backend at the sandbox database"]
+docs = "framework/cli/README.md"

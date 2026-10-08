@@ -1,0 +1,44 @@
+version = 1
+
+[products.__name__]
+backend = "backend"
+frontend = "app"
+
+[products.packages]
+frontend = ["packages/api"]
+
+[[setup.tasks]]
+name = "cli"
+cwd = "mana/framework/cli"
+command = ["dart", "pub", "get", "--enforce-lockfile"]
+
+[[setup.tasks]]
+name = "contracts"
+command = ["mana/framework/cli/mana", "contracts", "install"]
+
+[[setup.tasks]]
+name = "moments"
+cwd = "mana/framework/moments"
+command = ["dart", "pub", "get", "--enforce-lockfile"]
+
+[[setup.tasks]]
+name = "moments-tools"
+command = ["mana/framework/moments/moments", "tools"]
+
+[[setup.tasks]]
+name = "backend"
+command = ["mana/framework/cli/mana", "mix", "backend", "deps.get"]
+timeout_seconds = 900
+
+[[setup.tasks]]
+name = "app"
+cwd = "app"
+command = ["flutter", "pub", "get"]
+
+[agents.claude]
+command = ["claude"]
+skills = ["mana/framework/agents/skills/mana"]
+
+[agents.codex]
+command = ["codex"]
+skills = ["mana/framework/agents/skills/mana"]

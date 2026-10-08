@@ -1,0 +1,9 @@
+.mana/
+.proofs/
+.backend/
+.dart_tool/
+build/
+backend/_build/
+backend/deps/
+app/moments/.suite/
+app/moments/.backend*

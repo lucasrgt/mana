@@ -112,7 +112,6 @@ Reproducible validation:
 
 ```sh
 (cd framework/cli && dart test)
-node --test framework/scaffold/test/*.test.mjs
 MANA_TEST_CLAUDE="$(mise which claude)" \
 MANA_TEST_CODEX="$(command -v codex)" \
 MANA_TEST_FFF="$PWD/.mana/bin/fff-mcp" \
@@ -130,6 +129,23 @@ Adapter sources: [Claude plugins](https://code.claude.com/docs/en/plugins/create
 [Claude CLI](https://code.claude.com/docs/en/cli-reference),
 [Codex configuration](https://developers.openai.com/codex/config-reference),
 [Codex skills](https://developers.openai.com/codex/skills).
+
+## New projects and the lab
+
+`mana new <folder>` writes a project to start from (see the repository README):
+an Ash backend, a Flutter app with its generated client, two Moments and Mana as a
+submodule pinned to this checkout's commit. `--mana-url`/`--mana-ref` pick another
+source or release; `--no-setup` only writes the files. The template lives in
+`templates/new/`; `__name__`, `__Name__` and `__dash__` become the folder name, its
+module name and its dashed form.
+
+`mana lab prepare|serve|test|mix` runs a project's backend against a Moments
+sandbox's PostgreSQL (`MANA_MOMENTS_INSTANCE`, the `instance.json` that
+`moments up` writes). The database is `MANA_DATABASE` (`<backend>_dev`, or
+`<backend>_test` for `test`); the backend reads `LAB_DATABASE_URL`, `LAB_PORT`,
+`LAB_SECRET_KEY_BASE`, `LAB_TOKEN_SIGNING_SECRET`, `LAB_WEB_ORIGIN(S)`,
+`LAB_SERVER` and `MOMENTS_RECIPE_TOKEN`, and any variable listed in
+`MANA_LAB_PASS` is passed through.
 
 ## Catalog, features and sensors
 
