@@ -225,12 +225,35 @@ defmodule Mana.Verbs do
   defp holds?(%{when: nil}, _record, _resource, _actor), do: true
   defp holds?(%{when: {module, function}}, record, _resource, actor), do: apply(module, function, [record, actor]) == true
 
-  defp holds?(%{when: expression}, record, resource, actor) do
-    match?({:ok, true}, Ash.Expr.eval(condition(expression, actor), record: record, resource: resource))
-  end
+  defp holds?(%{when: expression}, record, resource, actor), do: decide(expression, record, resource, actor) == {:ok, true}
 
   @doc false
   def condition(expression, actor), do: Ash.Expr.fill_template(expression, actor: actor)
+
+  @doc """
+  Evaluates a verb's `when` on `record`: in memory when what it reads is
+  loaded, otherwise (an aggregate, a related calculation) asked of the stored
+  row by its primary key.
+  """
+  def decide(expression, record, resource, actor) do
+    condition = condition(expression, actor)
+
+    case Ash.Expr.eval(condition, record: record, resource: resource, unknown_on_unknown_refs?: true) do
+      {:ok, value} -> {:ok, value}
+      _ -> stored(condition, record, resource)
+    end
+  end
+
+  defp stored(condition, record, resource) do
+    require Ash.Query
+    keys = Ash.Resource.Info.primary_key(resource)
+
+    if keys != [] and Enum.all?(keys, &(not is_nil(Map.get(record, &1)))) do
+      {:ok, resource |> Ash.Query.do_filter(Map.to_list(Map.take(record, keys))) |> Ash.Query.do_filter(condition) |> Ash.exists?(authorize?: false)}
+    else
+      :unknown
+    end
+  end
 
   # A step of a `Mana.Flow` is offered once the flow reached it; the flow
   # itself refuses it before.
@@ -602,8 +625,7 @@ defmodule Mana.Verbs.WhenGate do
   def validate(changeset, _opts, context) do
     with %{} = verb <- verb(changeset),
          true <- changeset.valid?,
-         {:ok, held} when held in [false, nil] <-
-           Ash.Expr.eval(Mana.Verbs.condition(verb.when, context.actor), record: changeset.data, resource: changeset.resource) do
+         {:ok, held} when held in [false, nil] <- Mana.Verbs.decide(verb.when, changeset.data, changeset.resource, context.actor) do
       {:error, unavailable(changeset.resource, verb)}
     else
       _ -> :ok

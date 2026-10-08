@@ -618,10 +618,40 @@ defmodule ManaCoreTest.Alert do
   end
 end
 
+defmodule ManaCoreTest.Slot do
+  use Ash.Resource, domain: ManaCoreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:group, :string, allow_nil?: false, public?: true)
+  end
+
+  relationships do
+    has_many(:group_slots, __MODULE__, source_attribute: :group, destination_attribute: :group)
+  end
+
+  aggregates do
+    count(:group_size, :group_slots)
+  end
+
+  actions do
+    defaults([:read, create: [:group]])
+
+    destroy :remove do
+      require_atomic?(false)
+    end
+  end
+
+  verbs do
+    verb(:remove, risk: :destructive, when: expr(group_size > 1))
+  end
+end
+
 defmodule ManaCoreTest.Domain do
   use Ash.Domain, extensions: [Mana.Domain], validate_config_inclusion?: false
 
   resources do
+    resource(ManaCoreTest.Slot)
     resource(ManaCoreTest.Ping)
     resource(ManaCoreTest.Secret)
     resource(ManaCoreTest.Person)
@@ -1464,6 +1494,18 @@ defmodule ManaCoreTest do
     test "the contract names the log and what is redacted" do
       assert [%{"subject" => "task", "redacted" => ["secret"], "log" => nil}] = Mana.History.contract(ManaCoreTest.Task)
     end
+  end
+
+  test "a verb's condition on an aggregate is asked of the stored row" do
+    [first, second] = for _ <- 1..2, do: Ash.create!(ManaCoreTest.Slot, %{group: "pair"})
+    alone = Ash.create!(ManaCoreTest.Slot, %{group: "alone"})
+    offered = fn slot -> ManaCoreTest.Slot |> Ash.Query.load(:verbs) |> Ash.read!() |> Enum.find(&(&1.id == slot.id)) |> Map.fetch!(:verbs) end
+
+    assert "remove" in offered.(first)
+    refute "remove" in offered.(alone)
+    assert {:error, _} = Ash.destroy(alone, action: :remove)
+    assert :ok = Ash.destroy(first, action: :remove)
+    assert {:error, _} = Ash.destroy(second, action: :remove)
   end
 
   describe "flows" do
