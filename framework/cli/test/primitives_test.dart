@@ -16,6 +16,18 @@ void main() {
       p.join(stage, 'pubspec.yaml'),
     ).writeAsStringSync('name: shop_api\ndependencies:\n  dio: any\n');
     final output = p.join(p.dirname(stage), 'packages', 'shop_api');
+    Directory(p.join(stage, 'lib/src/model')).createSync(recursive: true);
+    File(
+      p.join(stage, 'lib/src/model/order_line_attributes.dart'),
+    ).writeAsStringSync("""
+abstract class OrderLineAttributes {
+  @BuiltValueField(wireName: r'total_cents')
+  int get totalCents;
+
+  @BuiltValueField(wireName: r'verbs')
+  BuiltList<String>? get verbs;
+}
+""");
 
     writePrimitives(stage, 'shop_api', output, {
       'components': {
@@ -156,6 +168,16 @@ void main() {
       p.join(stage, 'lib/src/primitives.dart'),
     ).readAsStringSync();
     expect(generated, contains('abstract class OrderLineVerbs {'));
+    expect(generated, contains('class OrderLineCheckoutRowView {'));
+    expect(
+      generated,
+      contains('  int get totalCents => _attributes.totalCents;'),
+    );
+    expect(
+      generated,
+      contains('  BuiltList<String>? get verbs => _attributes.verbs;'),
+    );
+    expect(generated, contains("import 'package:shop_api/shop_api.dart';"));
     expect(
       generated,
       contains(

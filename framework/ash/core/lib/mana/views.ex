@@ -39,7 +39,14 @@ defmodule Mana.Views do
   @views %Spark.Dsl.Section{name: :views, entities: [@view]}
 
   use Spark.Dsl.Extension, sections: [@views], transformers: [Mana.Views.Validate]
-  use Mana.Primitive, contract: "x-mana-views", catalog: "views"
+  use Mana.Primitive, contract: "x-mana-views", catalog: "views", moments: [:observe]
+
+  @doc "Moments `observe`: `record` as its view `name` reads it, field by field."
+  def observe(record, name) do
+    resource = record.__struct__
+    loaded = Ash.load!(record, loads(resource, name), authorize?: false)
+    Map.new(view!(resource, name).fields, &{to_string(&1), Map.get(loaded, &1)})
+  end
 
   def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:views])
 

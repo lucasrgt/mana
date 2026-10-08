@@ -18,7 +18,12 @@ defmodule Mana.Primitive do
   `x-mana-*` key and refuses a key it has no generator for); discovery (the
   `catalog` id in `framework/catalog.toml`, which `mana doctor` checks); and
   Moments hooks (`moments:` names which of `capture`, `restore`, `fake`,
-  `observe` it implements, so a Moment can stand on it reproducibly).
+  `observe` it implements, so a Moment can stand on it reproducibly):
+  `observe` reads what the primitive says about a record now, for a
+  Moment's assertions; `capture` takes a portable snapshot of a record's
+  primitive state and `restore` rebuilds it elsewhere; `fake` stands in for
+  what the outside world or the clock would do. Each hook is a public
+  function of that name on the primitive (`hooks_implemented?/1` checks it).
   """
 
   @hooks [:capture, :restore, :fake, :observe]
@@ -40,6 +45,12 @@ defmodule Mana.Primitive do
   end
 
   def hooks, do: @hooks
+
+  @doc "Whether every hook `primitive` declares is a function it exports."
+  def hooks_implemented?(primitive) do
+    exported = primitive.__info__(:functions) |> Keyword.keys() |> MapSet.new()
+    Enum.all?(primitive.__mana_primitive__().moments, &MapSet.member?(exported, &1))
+  end
 
   @doc "The primitives a resource uses."
   def of(resource), do: Enum.filter(Spark.extensions(resource), &primitive?/1)

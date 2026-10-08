@@ -25,7 +25,9 @@ defmodule Mana.Entity do
   A deadline is a durable Oban job scheduled when a change leaves the record
   satisfying `when`; when it runs it performs `action` only if `when` still
   holds, so a record that moved on is left alone. It survives deploys and
-  multiple nodes; it is not an in-memory timer. `after` is `{amount, unit}` or
+  multiple nodes; it is not an in-memory timer. Changes to one record run one
+  at a time (a transaction lock per record on Postgres), as messages to one
+  process would: a second payment waits for the first, then finds it paid. `after` is `{amount, unit}` or
   `{Module, :function}` returning the `DateTime` for a record.
   """
 
@@ -59,7 +61,18 @@ defmodule Mana.Entity do
   }
 
   use Spark.Dsl.Extension, sections: [@entity], transformers: [Mana.Entity.Transformer]
-  use Mana.Primitive, contract: "x-mana-entity", catalog: "entities"
+  use Mana.Primitive, contract: "x-mana-entity", catalog: "entities", moments: [:observe, :fake]
+
+  @doc "Moments `observe`: the topics `record` is announced on and the deadlines whose condition holds now."
+  def observe(record) do
+    %{
+      "topics" => topics(record),
+      "deadlines" => for(deadline <- deadlines(record.__struct__), holds?(deadline.when, record), do: to_string(deadline.name))
+    }
+  end
+
+  @doc "Moments `fake`: deadline `name` of the record comes due now, as if its time had passed."
+  def fake(resource, id, name), do: run_deadline(resource, id, to_string(name))
 
   @impl Mana.Primitive
   def contract(resource) do
@@ -165,11 +178,40 @@ defmodule Mana.Entity.Changed do
 
   @impl true
   def change(changeset, _opts, _context) do
-    Ash.Changeset.after_action(changeset, fn _changeset, record ->
+    changeset
+    |> one_at_a_time()
+    |> Ash.Changeset.after_action(fn _changeset, record ->
       if Mana.Entity.deadlines(record.__struct__) != [], do: Mana.Entity.schedule(record)
       Mana.Entity.announce(record)
       {:ok, record}
     end)
+  end
+
+  # Changes to one record run one at a time, like messages to one process:
+  # a second payment waits for the first and then finds the record paid.
+  defp one_at_a_time(%{action_type: type, data: %{id: id}, resource: resource} = changeset)
+       when type in [:update, :destroy] and not is_nil(id) do
+    case repo(resource) do
+      nil ->
+        changeset
+
+      repo ->
+        key = "#{Mana.Entity.type(resource)}:#{id}"
+
+        Ash.Changeset.before_action(changeset, fn changeset ->
+          repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [key])
+          changeset
+        end)
+    end
+  end
+
+  defp one_at_a_time(changeset), do: changeset
+
+  @postgres AshPostgres.DataLayer
+
+  defp repo(resource) do
+    if Ash.DataLayer.data_layer(resource) == @postgres,
+      do: apply(Module.concat(@postgres, Info), :repo, [resource, :mutate])
   end
 
   @impl true

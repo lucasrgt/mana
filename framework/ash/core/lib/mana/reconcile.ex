@@ -134,16 +134,23 @@ if Code.ensure_loaded?(Oban.Worker) do
     @moduledoc """
     Observes the rules of every resource of an app's domains:
     `{"*/30 * * * *", Mana.Reconcile.Worker, args: %{otp_app: "my_app"}}`
-    (add `"apply" => true` once rules repair on their own).
+    (add `"apply" => true` once rules repair on their own). With
+    `config :mana_core, :reconcile_escalate, {Mod, :fun}` every rule's report
+    of each run is handed over (resource, report), so what does not converge
+    reaches a person and what converged again can be closed.
     """
     use Oban.Worker, queue: :maintenance, max_attempts: 1
 
     @impl true
     def perform(%Oban.Job{args: %{"otp_app" => otp_app} = args}) do
+      escalate = Application.get_env(:mana_core, :reconcile_escalate)
+
       for domain <- otp_app |> String.to_existing_atom() |> Application.fetch_env!(:ash_domains),
           resource <- Ash.Domain.Info.resources(domain),
           Mana.Reconcile in Spark.extensions(resource),
-          do: Mana.Reconcile.observe(resource, apply: args["apply"] == true)
+          report <- Mana.Reconcile.observe(resource, apply: args["apply"] == true),
+          {module, function} <- List.wrap(escalate),
+          do: apply(module, function, [resource, report])
 
       :ok
     end

@@ -324,6 +324,62 @@ final class FeatureMap {
     };
   }
 
+  /// What removing [name] takes: the files only it owns (deleted on apply),
+  /// the files it shares (kept, each still owned by the others), the Moments
+  /// only it points to and the verbs in [contracts] that still name it (both
+  /// edited by a person: a Moment or a verb outlives the feature that drew it).
+  Map<String, Object?> removal(String name, Iterable<Object?> contracts) {
+    final feature = named(name);
+    final others = features.where((f) => f.name != name).toList();
+    final owned = describe(feature)['files']! as List<String>;
+    final shared = [
+      for (final path in owned)
+        if (owners(path).length > 1) path,
+    ];
+    final elsewhere = {for (final other in others) ...moments(other)};
+    final verbs = coverage(contracts, only: name)['features']! as List;
+    return {
+      'feature': name,
+      'delete': [
+        for (final path in owned)
+          if (!shared.contains(path)) path,
+      ],
+      'keep': [
+        for (final path in shared)
+          {
+            'path': path,
+            'owners': owners(path).where((n) => n != name).toList(),
+          },
+      ],
+      'moments': [
+        for (final moment in moments(feature))
+          if (!elsewhere.contains(moment)) moment,
+      ],
+      'verbs': verbs.isEmpty ? const [] : (verbs.first as Map)['verbs'],
+    };
+  }
+
+  /// Deletes what [removal] lists under `delete` and drops the feature's
+  /// table from features.toml.
+  void remove(Map<String, Object?> removal) {
+    for (final path in (removal['delete']! as List).cast<String>()) {
+      final target = File(p.join(root, path));
+      if (target.existsSync()) target.deleteSync();
+    }
+    final toml = File(p.join(root, file));
+    final lines = toml.readAsLinesSync();
+    final header = '[features."${removal['feature']}"]';
+    final start = lines.indexOf(header);
+    if (start < 0) throw ManaFailure('$header not found in $file');
+    var end = lines.indexWhere((line) => line.startsWith('['), start + 1);
+    if (end < 0) end = lines.length;
+    final text = [
+      ...lines.sublist(0, start),
+      ...lines.sublist(end),
+    ].join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trimRight();
+    toml.writeAsStringSync('$text\n');
+  }
+
   /// Features touched by the changes since [base] (committed and uncommitted).
   Map<String, Object?> changed(String base) {
     final diff = Process.runSync('git', [

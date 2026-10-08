@@ -135,22 +135,31 @@ Future<Map<String, Object?>> generateClient({
       // structurally identical one (e.g. a phone code for an email code) misleads readers.
       '--inline-schema-options', 'SKIP_SCHEMA_REUSE=true',
     ]);
+    // An operation answering a free-form object imports json_object a second time.
+    final imported = RegExp(r"^import '[^']+';\n", multiLine: true);
     // dart-dio declares a top-level array response as BuiltList but reads it as
     // a BuiltSet, so the cast fails at runtime; read it as the list it declares.
     final listed = <String>{};
     for (final file in Directory(
       p.join(stage, 'lib/src/api'),
     ).listSync().whereType<File>()) {
+      final seen = <String>{};
       file.writeAsStringSync(
-        file.readAsStringSync().replaceAllMapped(
-          RegExp(
-            r'FullType\(BuiltSet, \[FullType\((\w+)\)\]\),(\s*\) as BuiltList<)',
-          ),
-          (match) {
-            listed.add(match[1]!);
-            return 'FullType(BuiltList, [FullType(${match[1]})]),${match[2]}';
-          },
-        ),
+        file
+            .readAsStringSync()
+            .replaceAllMapped(
+              imported,
+              (match) => seen.add(match[0]!) ? match[0]! : '',
+            )
+            .replaceAllMapped(
+              RegExp(
+                r'FullType\(BuiltSet, \[FullType\((\w+)\)\]\),(\s*\) as BuiltList<)',
+              ),
+              (match) {
+                listed.add(match[1]!);
+                return 'FullType(BuiltList, [FullType(${match[1]})]),${match[2]}';
+              },
+            ),
       );
     }
     final serializersFile = File(p.join(stage, 'lib/src/serializers.dart'));

@@ -587,6 +587,7 @@ Future<void> _features(List<String> arguments) async {
     final parser = ArgParser()
       ..addOption('project')
       ..addOption('base', defaultsTo: 'HEAD')
+      ..addFlag('apply', negatable: false)
       ..addFlag('json', negatable: false);
     final values = parser.parse(arguments);
     final json = values.flag('json');
@@ -665,6 +666,29 @@ Future<void> _features(List<String> arguments) async {
               '  verb without a feature: $verb',
           ].join('\n'),
         );
+      case ['remove', final name]:
+        final value = map.removal(name, [
+          for (final file in generatedContracts(root))
+            jsonDecode(file.readAsStringSync()),
+        ]);
+        if (values.flag('apply')) map.remove(value);
+        _print(
+          value,
+          json: json,
+          text: () => [
+            '${values.flag('apply') ? 'Removed' : 'Plan to remove'} feature:$name',
+            for (final path in (value['delete']! as List))
+              '  ${values.flag('apply') ? 'deleted' : 'delete'}: $path',
+            for (final row in (value['keep']! as List).cast<Map>())
+              '  keep (also owned by ${(row['owners'] as List).map((n) => 'feature:$n').join(', ')}): ${row['path']}',
+            for (final moment in (value['moments']! as List))
+              '  moment only this feature points to, review: $moment',
+            for (final verb in (value['verbs']! as List))
+              '  verb still names feature:$name, review: $verb',
+            if (!values.flag('apply'))
+              'Nothing changed; run again with --apply to delete the files and the features.toml entry.',
+          ].join('\n'),
+        );
       case ['check']:
         final value = map.check();
         _print(
@@ -696,7 +720,7 @@ Future<void> _features(List<String> arguments) async {
         );
       default:
         throw const ManaFailure(
-          'Use mana features list|show <name>|which <path...>|check|changed [--base REV]|coverage [name]',
+          'Use mana features list|show <name>|which <path...>|check|changed [--base REV]|coverage [name]|remove <name> [--apply]',
         );
     }
   } on FormatException catch (error) {

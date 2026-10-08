@@ -33,7 +33,17 @@ defmodule Mana.History do
   }
 
   use Spark.Dsl.Extension, sections: [@history], transformers: [Mana.History.Transformer]
-  use Mana.Primitive, contract: "x-mana-history", catalog: "history", moments: [:observe]
+  use Mana.Primitive, contract: "x-mana-history", catalog: "history", moments: [:observe, :capture, :restore]
+
+  @doc "Moments `observe`: the record's entries, oldest first (`export/3`)."
+  def observe(log, subject_type, subject_id), do: export(log, subject_type, subject_id)
+
+  @doc "Moments `capture`: the record's history as a portable fixture (`fixture/4`)."
+  def capture(log, subject_type, subject_id, roles), do: fixture(log, subject_type, subject_id, roles)
+
+  @doc "Moments `restore`: a captured history replayed into a new record (`replay/3`)."
+  def restore(resource, entries, opts \\ []), do: replay(resource, entries, opts)
+  require Ash.Query
 
   @redacted "[redacted]"
 
@@ -84,16 +94,41 @@ defmodule Mana.History do
   end
 
   @doc """
+  How the record stood at `at`, as `actor` may read it: its attributes now,
+  with every change recorded after `at` undone from the entries' `before`
+  (redacted values stay `"[redacted]"`). Nil when the actor may not read it.
+  """
+  def as_of(log, subject_type, subject_id, %DateTime{} = at, actor) do
+    with subject when not is_nil(subject) <- Mana.History.Log.subject(log, subject_type),
+         {:ok, record} <- Ash.get(subject, subject_id, actor: actor) do
+      now =
+        for attribute <- Ash.Resource.Info.public_attributes(subject), into: %{},
+            do: {to_string(attribute.name), plain(Map.get(record, attribute.name))}
+
+      log
+      |> Ash.Query.filter(subject_type == ^subject_type and subject_id == ^to_string(subject_id) and outcome == :done and at > ^at)
+      |> Ash.Query.sort(at: :desc)
+      |> Ash.read!(authorize?: false)
+      |> Enum.reduce(now, fn entry, state -> Map.merge(state, entry.before) end)
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
   `export/3` made portable: each actor id becomes its role in `roles`
   (`%{user_id => "host"}`; unknown actors become `"system"`), so the entries
   can be committed as a fixture and replayed on fresh accounts — a Moment
   recipe maps the roles back with `replay(..., actor: %{"host" => host, ...})`.
+  Only the subject's own actions are kept; notes replay nothing.
   """
   def fixture(log, subject_type, subject_id, roles) do
-    for entry <- export(log, subject_type, subject_id), entry["outcome"] == "done" do
+    actions = for action <- Ash.Resource.Info.actions(Mana.History.Log.subject(log, subject_type)), into: MapSet.new(), do: to_string(action.name)
+
+    for entry <- export(log, subject_type, subject_id), entry["outcome"] == "done", MapSet.member?(actions, entry["action"]) do
       entry
       |> Map.put("actor_id", Map.get(roles, entry["actor_id"], "system"))
-      |> Map.drop(["trace", "at"])
+      |> Map.drop(["trace"])
     end
   end
 
@@ -104,8 +139,11 @@ defmodule Mana.History do
   id or role to the actor that acts now
   (system entries act without one); `params` may fill or rewrite inputs per
   action (`fn action, params -> params end`) — redacted inputs cannot replay
-  without it. An entry whose verb is `external:` (Stripe, e-mail) refuses
-  the replay with `:external`, or is passed over with `external: :skip`;
+  without it. Dates in the inputs move by how long ago the first entry
+  happened (`times: :as_recorded` keeps them), so a recording keeps its
+  relation to now. An entry whose verb is `external:` (Stripe, e-mail) refuses
+  the replay with `:external`, or is passed over with `external: :skip`; notes
+  (`note/3`: a delivery, a webhook) are what happened around it and replay nothing;
   other effects run as the environment runs them (fakes in development and
   tests). Answers `{:ok, record, applied}` or
   `{:error, %{at: index, action: action, error: error}}`.
@@ -118,16 +156,19 @@ defmodule Mana.History do
       end
 
     params = Keyword.get(opts, :params, fn _action, params -> params end)
+    offset = offset(entries, Keyword.get(opts, :times, :shift))
     external = for verb <- Mana.Verbs.declared(resource), verb.external, into: MapSet.new(), do: to_string(verb.name)
     skip_external? = Keyword.get(opts, :external) == :skip
 
+    actions = for action <- Ash.Resource.Info.actions(resource), into: MapSet.new(), do: to_string(action.name)
+
     entries
-    |> Enum.filter(&(&1["outcome"] == "done"))
+    |> Enum.filter(&(&1["outcome"] == "done" and MapSet.member?(actions, &1["action"])))
     |> Enum.reject(&(skip_external? and MapSet.member?(external, &1["verb"])))
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, nil, []}, fn {entry, index}, {:ok, record, applied} ->
       action = String.to_existing_atom(entry["action"])
-      input = params.(action, entry["params"] || %{})
+      input = params.(action, shift(entry["params"] || %{}, offset))
       who = if entry["actor_kind"] == "user" and entry["actor_id"], do: actor.(entry["actor_id"])
       opts = [action: action, actor: who, authorize?: not is_nil(who)]
 
@@ -145,6 +186,34 @@ defmodule Mana.History do
       end
     end)
   end
+
+  # Replayed now, a recording keeps its relation to time: every date in the
+  # inputs moves by how long ago the first entry happened, so a stay that
+  # was two days ahead is two days ahead again and deadlines fall the same.
+  defp offset(_entries, :as_recorded), do: 0
+
+  defp offset(entries, :shift) do
+    with [%{"at" => at} | _] when is_binary(at) <- entries,
+         {:ok, first, _} <- DateTime.from_iso8601(at) do
+      DateTime.diff(DateTime.utc_now(), first, :microsecond)
+    else
+      _ -> 0
+    end
+  end
+
+  @doc false
+  def shift(value, 0), do: value
+  def shift(map, offset) when is_map(map), do: Map.new(map, fn {key, value} -> {key, shift(value, offset)} end)
+  def shift(list, offset) when is_list(list), do: Enum.map(list, &shift(&1, offset))
+
+  def shift(text, offset) when is_binary(text) do
+    case DateTime.from_iso8601(text) do
+      {:ok, at, _} -> at |> DateTime.add(offset, :microsecond) |> DateTime.to_iso8601()
+      _ -> text
+    end
+  end
+
+  def shift(value, _offset), do: value
 
   @doc false
   def entry(changeset, record, outcome, error \\ nil) do
@@ -173,6 +242,40 @@ defmodule Mana.History do
       summary: summary(resource, action.name),
       trace: trace()
     }
+  end
+
+  @doc """
+  Records something that happened to a record outside its own actions: a
+  notice delivered, an e-mail the provider bounced, a code sent by SMS.
+  `fields` names the `action` (a past-tense phrase is not needed: the
+  `summary` is the sentence) and optionally `summary`, `after` (what is
+  known about it), `outcome` (`:done`, or `:failed` with `error`) and `via`
+  (who told us: `"notifications"`, `"webhook:resend"`). Recorded as `system`;
+  a resource without history records nothing.
+  """
+  def note(resource, subject_id, fields) do
+    if Mana.History in Spark.extensions(resource) and subject_id do
+      action = to_string(Map.fetch!(fields, :action))
+
+      Mana.History.Record.write(resource, %{
+        subject_type: Mana.Entity.type(resource),
+        subject_id: to_string(subject_id),
+        action: action,
+        verb: nil,
+        actor_id: nil,
+        actor_kind: :system,
+        via: fields[:via],
+        params: %{},
+        before: %{},
+        after: plain(fields[:after] || %{}),
+        outcome: fields[:outcome] || :done,
+        error: fields[:error],
+        summary: fields[:summary] || String.replace(action, "_", " "),
+        trace: trace()
+      })
+    end
+
+    :ok
   end
 
   # The Moments gesture the change happened in, when one is being traced.
@@ -330,7 +433,8 @@ defmodule Mana.History.Record do
         end)
         |> Ash.Changeset.after_transaction(fn
           changeset, {:error, error} ->
-            write(changeset.resource, Mana.History.entry(changeset, nil, :failed, Mana.History.error_code(error)))
+            entry = Mana.History.entry(changeset, nil, :failed, Mana.History.error_code(error))
+            write(changeset.resource, Map.put(entry, :report, report(changeset.resource, entry, error)))
             {:error, error}
 
           _changeset, result ->
@@ -343,6 +447,37 @@ defmodule Mana.History.Record do
   def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
 
   require Logger
+
+  # A failure the domain did not decide (a crash, a provider down) goes to
+  # the app's error reporter (`config :mana_core, :error_reporter, {Mod, :fun}`,
+  # e.g. Sentry) with the record it happened to; the entry keeps the report's
+  # id, so each side leads to the other.
+  defp report(resource, entry, error) do
+    with {module, function} <- Application.get_env(:mana_core, :error_reporter),
+         %Ash.Error.Unknown{} = unknown <- Ash.Error.to_error_class(error) do
+      apply(module, function, [%{resource: resource, subject_type: entry.subject_type, subject_id: entry.subject_id, action: entry.action, actor_kind: entry.actor_kind}, unknown])
+    else
+      _ -> nil
+    end
+  end
+
+  # The same entries feed analytics and the warehouse: one telemetry event
+  # per change, labelled with the feature of the verb that made it.
+  defp announce(resource, entry) do
+    feature =
+      if Mana.Verbs in Spark.extensions(resource),
+        do: Enum.find_value(Mana.Verbs.declared(resource), &(to_string(&1.name) == entry[:verb] && &1.feature))
+
+    :telemetry.execute([:mana, :history, :entry], %{count: 1}, %{
+      resource: resource,
+      subject_type: entry.subject_type,
+      action: entry.action,
+      verb: entry[:verb],
+      feature: feature,
+      outcome: entry.outcome,
+      actor_kind: entry.actor_kind
+    })
+  end
 
   # A Moments journey links each gesture's request to the records it changed.
   defp trace(resource, entry) do
@@ -361,8 +496,10 @@ defmodule Mana.History.Record do
 
   # The history never decides whether the change happens: a failure to
   # record is logged, not raised into the action.
-  defp write(resource, entry) do
+  @doc false
+  def write(resource, entry) do
     trace(resource, entry)
+    announce(resource, entry)
 
     case resource |> Mana.History.log() |> Ash.Changeset.for_create(:record, entry) |> Ash.create(authorize?: false) do
       {:ok, _} -> :ok
@@ -427,7 +564,7 @@ defmodule Mana.History.Log.Transformer do
   def before?(_), do: true
 
   def transform(dsl) do
-    fields = [:subject_type, :subject_id, :action, :verb, :actor_id, :actor_kind, :via, :params, :before, :after, :outcome, :error, :summary, :trace]
+    fields = [:subject_type, :subject_id, :action, :verb, :actor_id, :actor_kind, :via, :params, :before, :after, :outcome, :error, :summary, :trace, :report]
 
     with {:ok, dsl} <- Builder.add_new_attribute(dsl, :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false, default: &Ash.UUID.generate/0, public?: true),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :subject_type, :string, allow_nil?: false, public?: true),
@@ -444,6 +581,7 @@ defmodule Mana.History.Log.Transformer do
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :error, :string, public?: true),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :summary, :string, allow_nil?: false, public?: true),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :trace, :string, public?: true),
+         {:ok, dsl} <- Builder.add_new_attribute(dsl, :report, :string, public?: true),
          {:ok, dsl} <- Builder.add_new_create_timestamp(dsl, :at, type: :utc_datetime_usec, public?: true),
          {:ok, dsl} <- Builder.add_new_action(dsl, :create, :record, accept: fields),
          {:ok, dsl} <- Builder.add_new_action(dsl, :destroy, :destroy, primary?: true),
@@ -451,8 +589,30 @@ defmodule Mana.History.Log.Transformer do
          {:ok, dsl} <- Builder.add_new_action(dsl, :read, :read, primary?: true),
          {:ok, type} <- Builder.build_action_argument(:subject_type, :string, allow_nil?: false),
          {:ok, id} <- Builder.build_action_argument(:subject_id, :string, allow_nil?: false),
-         {:ok, readable} <- Builder.build_preparation(Mana.History.Readable) do
-      Builder.add_new_action(dsl, :read, :of, arguments: [type, id], preparations: [readable])
+         {:ok, readable} <- Builder.build_preparation(Mana.History.Readable),
+         {:ok, dsl} <- Builder.add_new_action(dsl, :read, :of, arguments: [type, id], preparations: [readable]),
+         {:ok, at} <- Builder.build_action_argument(:at, :string, allow_nil?: false, description: "An ISO 8601 moment, e.g. 2026-10-08T12:00:00Z.") do
+      Builder.add_new_action(dsl, :action, :as_of,
+        returns: :map,
+        arguments: [type, id, at],
+        run: {Mana.History.AsOf, []}
+      )
+    end
+  end
+end
+
+defmodule Mana.History.AsOf do
+  @moduledoc false
+  use Ash.Resource.Actions.Implementation
+
+  @impl true
+  def run(input, _opts, context) do
+    with {:ok, at, _} <- DateTime.from_iso8601(input.arguments.at),
+         state when state != nil <- Mana.History.as_of(input.resource, input.arguments.subject_type, input.arguments.subject_id, at, context.actor) do
+      {:ok, state}
+    else
+      {:error, _} -> {:error, Ash.Error.Changes.InvalidArgument.exception(field: :at, message: "is not an ISO 8601 moment")}
+      nil -> {:error, Ash.Error.Query.NotFound.exception(resource: input.resource)}
     end
   end
 end

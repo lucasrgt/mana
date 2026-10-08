@@ -42,7 +42,14 @@ defmodule Mana.Attachments do
   }
 
   use Spark.Dsl.Extension, sections: [@attachments], transformers: [Mana.Attachments.Transformer]
-  use Mana.Primitive, contract: "x-mana-attachments", catalog: "uploads", moments: [:fake]
+  use Mana.Primitive, contract: "x-mana-attachments", catalog: "uploads", moments: [:fake, :observe]
+
+  @doc "Moments `observe`: the file ids each attached attribute of `record` holds."
+  def observe(record) do
+    for attach <- declared(record.__struct__), into: %{} do
+      {to_string(attach.attribute), Map.get(record, attach.attribute)}
+    end
+  end
 
   @png Base.decode64!("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
 
@@ -68,6 +75,7 @@ defmodule Mana.Attachments do
         "kinds" =>
           for name <- attach.kinds, kind = kinds[name] do
             %{"name" => to_string(name), "accept" => Mana.Uploads.accepted(kind), "max_bytes" => kind.max_bytes}
+            |> Map.merge(for {key, value} <- [max_side: kind.max_side, quality: kind.quality], value, into: %{}, do: {to_string(key), value})
           end
       }
       |> then(fn map ->

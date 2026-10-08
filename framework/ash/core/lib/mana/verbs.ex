@@ -84,7 +84,10 @@ defmodule Mana.Verbs do
   }
 
   use Spark.Dsl.Extension, sections: [@verbs], transformers: [Mana.Verbs.Transformer, Mana.Verbs.Validate]
-  use Mana.Primitive, contract: "x-mana-verbs", catalog: "verbs"
+  use Mana.Primitive, contract: "x-mana-verbs", catalog: "verbs", moments: [:observe]
+
+  @doc "Moments `observe`: what `record` offers `actor` now."
+  def observe(record, actor), do: %{"offered" => offered(record, actor)}
 
   def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:verbs])
   def calculation(resource), do: Spark.Dsl.Extension.get_opt(resource, [:verbs], :calculation, :verbs)
@@ -135,7 +138,11 @@ defmodule Mana.Verbs do
   def allowed(resource, name, actor, input \\ %{}) do
     verb = verb!(resource, name)
 
-    if collection_holds?(resource, verb, actor, input), do: :ok, else: {:error, refusal(resource, verb, actor, input)}
+    cond do
+      not knob_on?(verb, actor) -> {:error, Mana.Error.new("feature.disabled", "this is turned off right now", status: 403)}
+      collection_holds?(resource, verb, actor, input) -> :ok
+      true -> {:error, refusal(resource, verb, actor, input)}
+    end
   end
 
   @doc false
@@ -208,8 +215,12 @@ defmodule Mana.Verbs do
   end
 
   @doc false
-  def knob_on?(%{knob: nil}, _actor), do: true
-  def knob_on?(%{knob: knob}, actor), do: Mana.Knobs.enabled?(Application.fetch_env!(:mana_core, :knobs), knob, actor)
+  def knob_on?(verb, actor) do
+    knobs = Application.get_env(:mana_core, :knobs)
+
+    (is_nil(verb.knob) or Mana.Knobs.enabled?(Application.fetch_env!(:mana_core, :knobs), verb.knob, actor)) and
+      (is_nil(knobs) or is_nil(verb.feature) or Mana.Knobs.feature_on?(knobs, verb.feature, actor))
+  end
 
   defp holds?(%{when: nil}, _record, _resource, _actor), do: true
   defp holds?(%{when: {module, function}}, record, _resource, actor), do: apply(module, function, [record, actor]) == true
@@ -501,7 +512,7 @@ defmodule Mana.Verbs.Transformer do
           verbs = Transformer.get_entities(dsl, [:verbs])
 
           with {:ok, dsl} <-
-                 if(Enum.any?(verbs, & &1.knob),
+                 if(Enum.any?(verbs, &(&1.knob || &1.feature)),
                    do: Ash.Resource.Builder.add_change(dsl, Mana.Verbs.KnobGate, on: [:create, :update, :destroy]),
                    else: {:ok, dsl}
                  ) do
@@ -515,7 +526,8 @@ defmodule Mana.Verbs.Transformer do
 
             if Enum.any?(verbs, &(&1.when && not &1.collection)) do
               with {:ok, gate} <- Transformer.build_entity(Ash.Resource.Dsl, [:validations], :validate, validation: Mana.Verbs.WhenGate, on: [:update, :destroy]),
-                   do: {:ok, Transformer.add_entity(dsl, [:validations], gate, type: :append)}
+                   dsl = Transformer.add_entity(dsl, [:validations], gate, type: :append),
+                   do: Ash.Resource.Builder.add_change(dsl, Mana.Verbs.Recheck, on: [:update, :destroy])
             else
               {:ok, dsl}
             end
@@ -564,7 +576,7 @@ defmodule Mana.Verbs.KnobGate do
 
   @impl true
   def change(changeset, _opts, context) do
-    case Enum.find(Mana.Verbs.declared(changeset.resource), &(Mana.Verbs.action(&1) == changeset.action.name and &1.knob)) do
+    case Enum.find(Mana.Verbs.declared(changeset.resource), &(Mana.Verbs.action(&1) == changeset.action.name and (&1.knob || &1.feature))) do
       nil ->
         changeset
 
@@ -615,6 +627,52 @@ defmodule Mana.Verbs.WhenGate do
     do: Enum.find(Mana.Verbs.declared(changeset.resource), &(Mana.Verbs.action(&1) == changeset.action.name and not is_nil(&1.when) and not &1.idempotent and not &1.collection))
 
   defp unavailable(resource, verb), do: Mana.Verbs.unavailable(resource, verb)
+end
+
+defmodule Mana.Verbs.Recheck do
+  @moduledoc false
+  # Two people may perform a verb on one record at the same moment, each
+  # having read it before the other wrote. On Postgres the record is locked
+  # for the transaction and `when` is asked again of the row as it stands
+  # now, so the second one is refused instead of applying over the first.
+  use Ash.Resource.Change
+  require Ash.Query
+
+  @postgres AshPostgres.DataLayer
+
+  @impl true
+  def change(changeset, _opts, context) do
+    with %{} = verb <- verb(changeset),
+         %{} = record when not is_nil(record.id) <- changeset.data,
+         repo when not is_nil(repo) <- repo(changeset.resource) do
+      Ash.Changeset.before_action(changeset, fn changeset ->
+        repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["#{Mana.Entity.type(changeset.resource)}:#{record.id}"])
+
+        holds? =
+          changeset.resource
+          |> Ash.Query.do_filter(Map.to_list(Map.take(record, Ash.Resource.Info.primary_key(changeset.resource))))
+          |> Ash.Query.do_filter(Mana.Verbs.condition(verb.when, context.actor))
+          |> Ash.exists?(authorize?: false)
+
+        if holds?,
+          do: changeset,
+          else: Ash.Changeset.add_error(changeset, Mana.Verbs.unavailable(changeset.resource, verb))
+      end)
+    else
+      _ -> changeset
+    end
+  end
+
+  @impl true
+  def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
+
+  defp verb(changeset),
+    do: Enum.find(Mana.Verbs.declared(changeset.resource), &(Mana.Verbs.action(&1) == changeset.action.name and not is_nil(&1.when) and not &1.idempotent and not &1.collection))
+
+  defp repo(resource) do
+    if Ash.DataLayer.data_layer(resource) == @postgres,
+      do: apply(Module.concat(@postgres, Info), :repo, [resource, :mutate])
+  end
 end
 
 defmodule Mana.Verbs.CollectionGate do

@@ -68,6 +68,14 @@ defmodule Mana.Flow do
   use Spark.Dsl.Extension, sections: [@flow], transformers: [Mana.Flow.Transformer]
   use Mana.Primitive, contract: "x-mana-flow", catalog: "flows", moments: [:observe]
 
+  @doc "Moments `observe`: where `record` stands in its journey and, unless done, why it sits there."
+  def observe(record) do
+    position = position(record)
+    step = Map.get(record, cursor(record.__struct__))
+    diagnosis = if position.done, do: nil, else: diagnose(record, step)
+    %{"position" => position, "diagnosis" => diagnosis && Map.take(diagnosis, [:verdict, :attempts, :failures])}
+  end
+
   def steps(resource), do: Spark.Dsl.Extension.get_entities(resource, [:flow])
   defp opt(resource, key, default \\ nil), do: Spark.Dsl.Extension.get_opt(resource, [:flow], key, default)
 

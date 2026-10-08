@@ -9,9 +9,10 @@ defmodule Mana.Notifications.Sender do
   (a user id), `template`, `category`, `channels`, `opens` (the deep link
   with `:id` filled), `payload` (`%{"<type>_id" => id}` plus the notice's
   `payload` attributes) and the `record`;
-  it returns `:ok` or `{:error, reason}`.
+  it returns `:ok`, `{:error, reason}` when nothing went out, or
+  `{:failed, [{channel, reason}]}` when only those channels failed.
   """
-  @callback deliver(map()) :: :ok | {:error, term()}
+  @callback deliver(map()) :: :ok | {:error, term()} | {:failed, [{atom(), term()}]}
 end
 
 defmodule Mana.Notifications do
@@ -25,8 +26,8 @@ defmodule Mana.Notifications do
         notify :cancel, to: :counterpart, template: "reservation.cancelled", category: :reservations
       end
 
-  After the action succeeds, `sender` (a `Mana.Notifications.Sender`)
-  receives one notice per recipient. `to` is a user-id attribute, a list of
+  Once the action has committed (nothing is announced that rolled back),
+  `sender` (a `Mana.Notifications.Sender`) receives one notice per recipient. `to` is a user-id attribute, a list of
   them, or `:counterpart` — every `Mana.Entity` audience member except the
   actor. `when` (an expression over the record) can hold a notice back;
   `channels` (`[:inbox]` by default) tell the sender where it goes. The
@@ -39,6 +40,8 @@ defmodule Mana.Notifications do
   the same notice about the same record inside `group_within` reaches the
   inbox only, marked `group: %{count: n}`, and `fallback: true` on a notice tries its channels
   in order (push, then email, then SMS) until the sender answers `:ok`.
+  Each delivery joins the record's `Mana.History` when it has one: who was
+  told, the channels that went out, those that failed and what was held.
   """
 
   @notify %Spark.Dsl.Entity{
@@ -81,7 +84,26 @@ defmodule Mana.Notifications do
   }
 
   use Spark.Dsl.Extension, sections: [@notifications], transformers: [Mana.Notifications.Transformer]
-  use Mana.Primitive, contract: "x-mana-notifications", catalog: "notifications", moments: [:observe]
+  use Mana.Primitive, contract: "x-mana-notifications", catalog: "notifications", moments: [:observe, :fake]
+
+  @doc "Moments `observe`: the notices `record` sends after `action` by `actor`, without sending them."
+  def observe(record, action, actor), do: record |> notices(action, actor) |> Enum.map(&Map.delete(&1, :record))
+
+  @doc """
+  Moments `fake`: runs `fun` with every notice held instead of delivered,
+  and answers `{result, notices}`, so a Moment checks who would have heard
+  what without anyone hearing it.
+  """
+  def fake(fun) do
+    previous = Process.put(:mana_dry_run, [])
+
+    try do
+      result = fun.()
+      {result, Enum.reverse(Process.get(:mana_dry_run) || [])}
+    after
+      if previous, do: Process.put(:mana_dry_run, previous), else: Process.delete(:mana_dry_run)
+    end
+  end
 
   def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:notifications])
   def sender(resource), do: Spark.Dsl.Extension.get_opt(resource, [:notifications], :sender, nil)
@@ -188,24 +210,49 @@ defmodule Mana.Notifications do
       end
 
     if held_until, do: hold(resource, notice, later, held_until)
-    send_channels(sender, notice, now, fallback?(resource, notice.template))
+    {sent, failed} = send_channels(sender, notice, now, fallback?(resource, notice.template))
+    record(resource, notice, sent, failed, held_until && %{"channels" => later, "until" => held_until})
+    sent
+  end
+
+  # Each delivery joins the history of the record it is about: who was told,
+  # on which channels, what waited for quiet hours and what failed.
+  defp record(resource, notice, sent, failed, held) do
+    if sent != [] or failed != [] or held do
+      Mana.History.note(resource, notice.payload["#{Mana.Entity.type(resource)}_id"], %{
+        action: :notify,
+        via: "notifications",
+        summary: "notified #{notice.template}",
+        after: %{"template" => notice.template, "to" => notice.to, "sent" => sent, "failed" => Keyword.keys(failed), "held" => held},
+        outcome: if(sent == [] and failed != [], do: :failed, else: :done),
+        error: if(failed != [], do: failed |> Enum.map(fn {channel, reason} -> "#{channel}: #{inspect(reason)}" end) |> Enum.join("; "))
+      })
+    end
   end
 
   defp fallback?(resource, template), do: Enum.any?(declared(resource), &(&1.template == template and &1.fallback))
 
-  defp send_channels(_sender, _notice, [], _fallback), do: []
+  defp send_channels(_sender, _notice, [], _fallback), do: {[], []}
 
   defp send_channels(sender, notice, channels, false) do
-    sender.deliver(%{notice | channels: channels})
-    channels
+    case sender.deliver(%{notice | channels: channels}) do
+      {:error, reason} -> {[], Enum.map(channels, &{&1, reason})}
+      {:failed, failed} -> {channels -- Keyword.keys(failed), failed}
+      _ -> {channels, []}
+    end
   end
 
   defp send_channels(sender, notice, channels, true) do
     {inbox, outbound} = Enum.split_with(channels, &(&1 == :inbox))
-    if inbox != [], do: sender.deliver(%{notice | channels: inbox})
+    {sent, failed} = if inbox != [], do: send_channels(sender, notice, inbox, false), else: {[], []}
 
-    delivered = Enum.find(outbound, &(sender.deliver(%{notice | channels: [&1]}) == :ok))
-    inbox ++ List.wrap(delivered)
+    Enum.reduce_while(outbound, {sent, failed}, fn channel, {sent, failed} ->
+      case sender.deliver(%{notice | channels: [channel]}) do
+        {:error, reason} -> {:cont, {sent, failed ++ [{channel, reason}]}}
+        {:failed, more} -> {:cont, {sent, failed ++ more}}
+        _ -> {:halt, {sent ++ [channel], failed}}
+      end
+    end)
   end
 
   defp group(resource, notice, channels) do
@@ -260,7 +307,9 @@ defmodule Mana.Notifications do
       record: nil
     }
 
-    send_channels(sender(resource), notice, notice.channels, fallback?(resource, notice.template))
+    {sent, failed} = send_channels(sender(resource), notice, notice.channels, fallback?(resource, notice.template))
+    record(resource, notice, sent, failed, nil)
+    sent
   end
 end
 
@@ -284,9 +333,13 @@ defmodule Mana.Notifications.Send do
   @impl true
   def change(changeset, _opts, context) do
     if Enum.any?(Mana.Notifications.declared(changeset.resource), &(&1.action == changeset.action.name)) do
-      Ash.Changeset.after_action(changeset, fn _changeset, record ->
-        Mana.Notifications.send_all(record, changeset.action.name, context.actor)
-        {:ok, record}
+      Ash.Changeset.after_transaction(changeset, fn
+        _changeset, {:ok, record} ->
+          Mana.Notifications.send_all(record, changeset.action.name, context.actor)
+          {:ok, record}
+
+        _changeset, result ->
+          result
       end)
     else
       changeset

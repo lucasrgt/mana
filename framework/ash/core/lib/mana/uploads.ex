@@ -1,6 +1,6 @@
 defmodule Mana.Uploads.Kind do
   @moduledoc false
-  defstruct [:name, :accept, :max_bytes, :thumbnail, :__identifier__, :__spark_metadata__]
+  defstruct [:name, :accept, :max_bytes, :thumbnail, :max_side, :quality, :__identifier__, :__spark_metadata__]
 end
 
 defmodule Mana.Uploads do
@@ -12,6 +12,10 @@ defmodule Mana.Uploads do
         kind :property_photo, accept: :images, max_bytes: 25_000_000, thumbnail: 320
         kind :document, accept: [:images, "application/pdf"]
       end
+
+  `max_side:` and `quality:` reach clients through `x-mana-attachments`:
+  an image is shrunk to that longest edge and re-encoded before it leaves
+  the device, so a phone's 12 MP photo does not cost the upload.
 
   A kind with `thumbnail:` also gets, once ready, a JPEG at most that many
   pixels on its longest edge, made by an Oban job (`thumbnail_queue`) with
@@ -38,7 +42,9 @@ defmodule Mana.Uploads do
       name: [type: :atom, required: true],
       accept: [type: {:or, [{:in, [:images]}, {:list, {:or, [{:in, [:images]}, :string]}}]}, default: :images],
       max_bytes: [type: :pos_integer, default: 25_000_000],
-      thumbnail: [type: :pos_integer, doc: "Longest edge, in pixels, of a JPEG thumbnail made once the image is ready."]
+      thumbnail: [type: :pos_integer, doc: "Longest edge, in pixels, of a JPEG thumbnail made once the image is ready."],
+      max_side: [type: :pos_integer, doc: "Longest edge, in pixels, clients shrink an image to before uploading it."],
+      quality: [type: {:in, 1..100}, doc: "JPEG quality clients re-encode a shrunk image with."]
     ]
   }
 

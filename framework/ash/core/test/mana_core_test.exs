@@ -402,7 +402,7 @@ defmodule ManaCoreTest.Task do
   verbs do
     verb(:finish, when: expr(status == :open), narrate: "finished the task", inverse: :reopen)
     verb(:reopen, when: expr(status == :done))
-    verb(:archive)
+    verb(:archive, feature: "tasks/archive")
     verb(:explode)
     verb(:pin, knob: :pinning)
   end
@@ -425,7 +425,7 @@ defmodule ManaCoreTest.Task do
 end
 
 defmodule ManaCoreTest.Diary do
-  use Ash.Resource, domain: ManaCoreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Resource, Mana.History, Mana.Verbs]
+  use Ash.Resource, domain: ManaCoreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Resource, Mana.History, Mana.Verbs, Mana.Notifications]
 
   privacy do
     subject(:person_id)
@@ -446,10 +446,20 @@ defmodule ManaCoreTest.Diary do
   actions do
     defaults([:read, :destroy, create: [:person_id, :body], update: [:body]])
     update(:mail)
+
+    update :crash do
+      require_atomic?(false)
+      change(fn changeset, _context -> Ash.Changeset.before_action(changeset, fn _ -> raise "provider down" end) end)
+    end
   end
 
   verbs do
     verb(:mail, external: "email")
+  end
+
+  notifications do
+    sender(ManaCoreTest.Sender)
+    notify(:mail, to: :person_id, template: "diary.mailed", channels: [:inbox, :push, :email], fallback: true)
   end
 end
 
@@ -482,6 +492,11 @@ end
 
 defmodule ManaCoreTest.Stuck do
   def staff?(user), do: Map.get(user, :role) == :staff
+
+  def report(failure, _error) do
+    send(Application.get_env(:mana_core, :test_pid), {:reported, failure})
+    "evt-1"
+  end
   def called(record, step), do: send(Application.get_env(:mana_core, :test_pid), {:stuck, record.id, step})
 end
 
@@ -548,6 +563,7 @@ defmodule ManaCoreTest.Knobs do
 
   knob(:pinning, :boolean, default: {__MODULE__, :configured, []}, feature: "tasks", describe: "Pin tasks")
   knob(:page_size, :integer, default: 20)
+  knob(:archiving, :boolean, default: true, enables: "tasks/archive")
 end
 
 defmodule ManaCoreTest.Pricing do
@@ -1267,7 +1283,7 @@ defmodule ManaCoreTest do
       placed = Mana.Primitive.put_contracts(spec, [ManaCoreTest.Domain])
 
       assert [%{"attribute" => "cover_id"}, _] = placed["components"]["schemas"]["listing"]["x-mana-attachments"]
-      assert placed["info"]["x-mana-primitives"] == [%{"contract" => "x-mana-attachments", "catalog" => "uploads", "moments" => ["fake"]}]
+      assert placed["info"]["x-mana-primitives"] == [%{"contract" => "x-mana-attachments", "catalog" => "uploads", "moments" => ["fake", "observe"]}]
       assert Mana.Primitive.of(ManaCoreTest.Ticket) == [Mana.Verbs, Mana.Views]
       assert_raise ArgumentError, fn -> Mana.Attachments.fake(ManaCoreTest.Ticket, :status, Ash.UUID.generate()) end
     end
@@ -1322,7 +1338,9 @@ defmodule ManaCoreTest do
 
       fixture = Mana.History.fixture(ManaCoreTest.HistoryEntry, "task", task.id, %{owner.id => "owner"})
       assert Enum.map(fixture, &{&1["action"], &1["actor_id"]}) == [{"create", "owner"}, {"finish", "owner"}]
-      refute Enum.any?(fixture, &Map.has_key?(&1, "at"))
+      assert Enum.all?(fixture, &is_binary(&1["at"]))
+      day = 86_400_000_000
+      assert Mana.History.shift(%{"slot" => "2026-01-01T00:00:00Z", "n" => 1}, day) == %{"slot" => "2026-01-02T00:00:00.000000Z", "n" => 1}
       assert {:ok, _, [:create, :finish]} = Mana.History.replay(ManaCoreTest.Task, fixture, actor: %{"owner" => owner}, params: fill)
       assert copy.id != task.id
       assert {copy.status, copy.title, copy.secret} == {:done, "Ship", "replayed"}
@@ -1343,7 +1361,43 @@ defmodule ManaCoreTest do
       assert {:error, %{irreversible: [%{verb: :escalate}]}} = Mana.Checkpoint.dry_run(escalate, owner)
     end
 
+    test "a failure the domain did not decide is reported, and the entry keeps the report's id" do
+      Application.put_env(:mana_core, :test_pid, self())
+      Application.put_env(:mana_core, :error_reporter, {ManaCoreTest.Stuck, :report})
+      on_exit(fn -> Application.delete_env(:mana_core, :error_reporter) end)
+      person = %{id: Ash.UUID.generate()}
+      diary = Ash.create!(ManaCoreTest.Diary, %{person_id: person.id, body: "hi"}, actor: person)
+
+      try do
+        diary |> Ash.Changeset.for_update(:crash, %{}, actor: person) |> Ash.update()
+      rescue
+        _ -> :raised
+      end
+
+      assert_received {:reported, %{subject_type: "diary", action: "crash"}}
+      assert [%{"outcome" => "failed", "action" => "crash"}] = Enum.filter(Mana.History.export(ManaCoreTest.HistoryEntry, "diary", diary.id), &(&1["outcome"] == "failed"))
+      assert [%{report: "evt-1"}] = ManaCoreTest.HistoryEntry |> Ash.read!() |> Enum.filter(&(&1.action == "crash"))
+    end
+
+    test "each notice joins the history of its record: who, which channels went out and which failed" do
+      Application.put_env(:mana_core, :test_pid, self())
+      person = %{id: Ash.UUID.generate()}
+      diary = Ash.create!(ManaCoreTest.Diary, %{person_id: person.id, body: "hi"}, actor: person)
+      diary |> Ash.Changeset.for_update(:mail, %{}, actor: person) |> Ash.update!()
+
+      to = person.id
+      entries = fn -> ManaCoreTest.HistoryEntry |> Ash.read!() |> Enum.filter(&(&1.subject_id == diary.id)) |> Enum.sort_by(& &1.at, DateTime) end
+
+      assert [%{actor_kind: :system, via: "notifications", summary: "notified diary.mailed", outcome: :done, error: "push: :no_device",
+                after: %{"to" => ^to, "sent" => ["inbox", "email"], "failed" => ["push"]}}] = Enum.filter(entries.(), &(&1.action == "notify"))
+
+      Mana.History.note(ManaCoreTest.Diary, diary.id, %{action: :email_bounced, via: "webhook:resend", outcome: :failed, error: "bounced"})
+      assert %{summary: "email bounced", outcome: :failed, via: "webhook:resend"} = List.last(entries.())
+      assert :ok = Mana.History.note(ManaCoreTest.Order, Ash.UUID.generate(), %{action: :ignored})
+    end
+
     test "a verb that reaches an outside system is refused by checkpoints and replays" do
+      Application.put_env(:mana_core, :test_pid, self())
       person = %{id: Ash.UUID.generate()}
       diary = Ash.create!(ManaCoreTest.Diary, %{person_id: person.id, body: "hi"}, actor: person)
       diary |> Ash.Changeset.for_update(:mail, %{}, actor: person) |> Ash.update!()
@@ -1559,7 +1613,7 @@ defmodule ManaCoreTest do
       assert {:ok, _} = ManaCoreTest.Knobs.set(:page_size, 50, %{id: Ash.UUID.generate()})
       assert ManaCoreTest.Knobs.get(:page_size) == 50
       assert_raise ArgumentError, fn -> ManaCoreTest.Knobs.get(:missing) end
-      assert [%{name: :pinning, feature: "tasks"}, %{name: :page_size, value: 50}] = ManaCoreTest.Knobs.knobs()
+      assert [%{name: :pinning, feature: "tasks"}, %{name: :page_size, value: 50}, %{name: :archiving, enables: "tasks/archive"}] = ManaCoreTest.Knobs.knobs()
       assert :pinning in ManaCoreTest.Knobs.stale()
       refute :page_size in ManaCoreTest.Knobs.stale()
       assert :ok = ManaCoreTest.Knobs.unset(:page_size)
@@ -1585,6 +1639,57 @@ defmodule ManaCoreTest do
       ManaCoreTest.Knobs.set(:pinning, %{"value" => false, "percent" => 100}, nil)
       assert ManaCoreTest.Knobs.enabled?(:pinning, %{id: Ash.UUID.generate()})
       refute ManaCoreTest.Knobs.enabled?(:pinning)
+    end
+  end
+
+  describe "moments hooks" do
+    test "every hook a primitive declares is a function it has" do
+      primitives = [Mana.Verbs, Mana.Views, Mana.Entity, Mana.Flow, Mana.History, Mana.Notifications, Mana.Attachments]
+
+      for primitive <- primitives do
+        assert primitive.__mana_primitive__().moments != [], "#{inspect(primitive)} declares no Moments hook"
+        assert Mana.Primitive.hooks_implemented?(primitive), "#{inspect(primitive)} lacks a hook it declares"
+      end
+    end
+
+    test "a Moment observes a record, holds its notices and captures its history to rebuild it" do
+      Application.put_env(:mana_core, :test_pid, self())
+      owner = %{id: Ash.UUID.generate()}
+      task = Ash.create!(ManaCoreTest.Task, %{owner_id: owner.id, title: "Observed"}, actor: owner)
+      assert %{"offered" => offered} = Mana.Verbs.observe(task, owner)
+      assert "finish" in offered
+
+      person = %{id: Ash.UUID.generate()}
+      diary = Ash.create!(ManaCoreTest.Diary, %{person_id: person.id, body: "hi"}, actor: person)
+      {_, held} = Mana.Notifications.fake(fn -> diary |> Ash.Changeset.for_update(:mail, %{}, actor: person) |> Ash.update!() end)
+      assert [%{template: "diary.mailed", to: to}] = held
+      assert to == person.id
+      refute_received {:notice, _}
+      assert [%{template: "diary.mailed"}] = Mana.Notifications.observe(diary, :mail, person)
+
+      entries = Mana.History.capture(ManaCoreTest.HistoryEntry, "diary", diary.id, %{person.id => "writer"})
+      assert {:ok, rebuilt, [:create]} = Mana.History.restore(ManaCoreTest.Diary, entries, actor: %{"writer" => person}, external: :skip)
+      assert rebuilt.body == "hi"
+    end
+  end
+
+  describe "feature knobs" do
+    test "a knob that enables a feature turns all its verbs off and on" do
+      owner = %{id: Ash.UUID.generate()}
+      task = Ash.create!(ManaCoreTest.Task, %{owner_id: owner.id, title: "Archive me"}, actor: owner)
+      assert "archive" in Mana.Verbs.offered(task, owner)
+
+      ManaCoreTest.Knobs.set(:archiving, false, nil)
+      on_exit(fn -> ManaCoreTest.Knobs.unset(:archiving) end)
+      refute "archive" in Mana.Verbs.offered(task, owner)
+      assert "finish" in Mana.Verbs.offered(task, owner)
+      assert {:error, error} = Ash.update(task, %{}, action: :archive, actor: owner)
+      assert inspect(error) =~ "feature.disabled"
+      refute Mana.Knobs.feature_on?(ManaCoreTest.Knobs, "tasks/archive/bulk")
+      assert Mana.Knobs.feature_on?(ManaCoreTest.Knobs, "tasks/archived")
+
+      ManaCoreTest.Knobs.set(:archiving, true, nil)
+      assert {:ok, _} = Ash.update(task, %{}, action: :archive, actor: owner)
     end
   end
 

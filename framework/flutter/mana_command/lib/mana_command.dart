@@ -9,6 +9,11 @@ export 'package:mana_br/mana_br.dart';
 export 'package:mana_primitives/mana_primitives.dart';
 export 'package:result_command/result_command.dart';
 
+export 'src/attachments.dart';
+export 'src/flow_builder.dart';
+export 'src/history_view.dart';
+export 'src/verb_form.dart';
+export 'src/notifications.dart';
 export 'src/verb_runner.dart';
 
 export 'package:result_dart/result_dart.dart';

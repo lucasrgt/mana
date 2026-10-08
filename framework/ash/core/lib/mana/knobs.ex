@@ -19,7 +19,9 @@ defmodule Mana.Knobs do
   number knob may declare `min:` and `max:`; `set/3` refuses a value outside
   them. A verb declared with `knob: :coupons_enabled` (`Mana.Verbs`) is offered and
   allowed only while the knob is on for the actor, so turning it off blocks
-  the server, not just the screen. `stale/1` lists knobs nobody changed for
+  the server, not just the screen. A boolean knob with `enables: "checkout"`
+  does that for a whole feature: every verb of `feature:checkout` and its
+  sub-features (`checkout/coupon`) is on only while the knob is. `stale/1` lists knobs nobody changed for
   months — candidates to remove with the code they guard. Ask "does someone
   who is not a developer need to change this while the app runs?"; if not, it
   is configuration, not a knob.
@@ -63,8 +65,19 @@ defmodule Mana.Knobs do
   @doc "The declared knobs with their current value."
   def declared(module) do
     for knob <- module.__knobs__() do
-      %{name: knob.name, type: knob.type, feature: knob.opts[:feature], describe: knob.opts[:describe], min: knob.opts[:min], max: knob.opts[:max], value: get(module, knob.name)}
+      %{name: knob.name, type: knob.type, feature: knob.opts[:feature], enables: knob.opts[:enables], describe: knob.opts[:describe], min: knob.opts[:min], max: knob.opts[:max],
+        value: get(module, knob.name)}
     end
+  end
+
+  @doc "Whether every knob that `enables:` `feature` (or a feature it belongs to) is on for `actor`."
+  def feature_on?(module, feature, actor \\ nil) do
+    Enum.all?(module.__knobs__(), fn knob ->
+      case knob.opts[:enables] do
+        nil -> true
+        enabled -> (feature != enabled and not String.starts_with?(feature, enabled <> "/")) or enabled?(module, knob.name, actor)
+      end
+    end)
   end
 
   defp knob!(module, name),

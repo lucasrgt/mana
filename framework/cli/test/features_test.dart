@@ -169,4 +169,51 @@ moments = ["shop:missing"]
       );
     },
   );
+
+  test(
+    'removing a feature deletes only what it alone owns and names what a person reviews',
+    () {
+      final root = project();
+      final map = FeatureMap.load(root);
+      final contract = {
+        'components': {
+          'schemas': {
+            'order': {
+              'x-mana-verbs': [
+                {'name': 'apply_coupon', 'feature': 'checkout/coupon'},
+              ],
+            },
+          },
+        },
+      };
+      final plan = map.removal('checkout', [contract]);
+      expect(plan['delete'], ['apps/shop/lib/checkout/cart.dart']);
+      expect(plan['keep'], [
+        {
+          'path': 'apps/shop/lib/checkout/coupon.dart',
+          'owners': ['checkout/coupon'],
+        },
+      ]);
+      expect(plan['moments'], ['shop:checkout-empty']);
+      expect(map.removal('checkout/coupon', [contract])['verbs'], [
+        'order.apply_coupon',
+      ]);
+
+      map.remove(plan);
+      expect(
+        File(p.join(root, 'apps/shop/lib/checkout/cart.dart')).existsSync(),
+        isFalse,
+      );
+      expect(
+        File(p.join(root, 'apps/shop/lib/checkout/coupon.dart')).existsSync(),
+        isTrue,
+      );
+      final after = FeatureMap.load(root);
+      expect(after.features.map((f) => f.name), ['checkout/coupon']);
+      expect(
+        File(p.join(root, 'features.toml')).readAsStringSync(),
+        endsWith('moments = ["shop:checkout-coupon"]\n'),
+      );
+    },
+  );
 }

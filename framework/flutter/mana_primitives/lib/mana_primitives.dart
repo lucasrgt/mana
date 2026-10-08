@@ -207,6 +207,8 @@ final class AttachmentKind {
     required this.name,
     required this.accept,
     required this.maxBytes,
+    this.maxSide,
+    this.quality,
   });
 
   /// The kind as the API spells it (`property_photo`).
@@ -215,6 +217,12 @@ final class AttachmentKind {
   /// Accepted content types (`image/jpeg`).
   final List<String> accept;
   final int maxBytes;
+
+  /// Longest edge, in pixels, an image is shrunk to before it is uploaded.
+  final int? maxSide;
+
+  /// JPEG quality a shrunk image is re-encoded with.
+  final int? quality;
 }
 
 /// A resource attribute that holds uploaded files (`Mana.Attachments`).
