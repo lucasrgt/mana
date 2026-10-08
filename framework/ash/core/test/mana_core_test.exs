@@ -524,6 +524,10 @@ defmodule ManaCoreTest.Signup do
       require_atomic?(false)
     end
 
+    update :relabel do
+      accept([:kind])
+    end
+
     update :save_details do
       require_atomic?(false)
       accept([:kind])
@@ -1516,6 +1520,13 @@ defmodule ManaCoreTest do
       record.("unknown")
       assert Mana.Flow.check_stuck(ManaCoreTest.Signup, signup.id, "details") == :bug
       assert %{verdict: :bug, attempts: 2} = Mana.Flow.diagnose(signup, :details)
+    end
+
+    test "only a step's action gives up atomic updates" do
+      signup = Ash.create!(ManaCoreTest.Signup, %{})
+      atomic = &Mana.Flow.Advance.atomic(Ash.Changeset.for_update(signup, &1, %{}), [], %{})
+      assert {:ok, _} = atomic.(:relabel)
+      assert {:not_atomic, _} = atomic.(:accept_terms)
     end
 
     test "the funnel counts each step and the contract lists them" do

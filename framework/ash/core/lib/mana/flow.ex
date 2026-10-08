@@ -307,6 +307,13 @@ defmodule Mana.Flow.Advance do
 
   @impl true
   def change(changeset, _opts, _context), do: Mana.Flow.advance(changeset)
+
+  @impl true
+  def atomic(changeset, _opts, _context) do
+    if Enum.any?(Mana.Flow.steps(changeset.resource), &(&1.action == changeset.action.name)),
+      do: {:not_atomic, "a flow step moves the cursor from the stored record"},
+      else: {:ok, changeset}
+  end
 end
 
 defmodule Mana.Flow.Position do
