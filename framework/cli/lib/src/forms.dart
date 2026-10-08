@@ -124,7 +124,7 @@ Future<Map<String, Object?>> generateForms({
       'Form publication locked; inspect the generating process before recovering its lock',
     );
   }
-  final stagingRoot = Directory(p.join(root, 'framework/ash/.toolchain'))
+  final stagingRoot = Directory(p.join(frameworkRoot(), 'ash/.toolchain'))
     ..createSync(recursive: true);
   final staging = stagingRoot.createTempSync('forms-');
   try {
@@ -241,7 +241,7 @@ Future<Map<String, Object?>> generateForms({
             'sdkVersion': sdkVersion,
             'packages': _digest(packageFile.readAsBytesSync()),
             'producer': treeDigest(
-              p.join(root, 'framework/ash/presentation/lib'),
+              p.join(frameworkRoot(), 'ash/presentation/lib'),
             ),
             'publisher': _digest(
               File(

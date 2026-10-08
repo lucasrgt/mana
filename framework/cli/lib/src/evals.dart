@@ -6,6 +6,7 @@ import 'package:toml/toml.dart';
 
 import 'failure.dart';
 import 'features.dart';
+import 'toolchain.dart';
 
 /// One check of an agent eval: `diff` looks at the lines the agent added
 /// (in files matching `files`), `command` runs in the worktree and passes on
@@ -241,7 +242,7 @@ final class AgentEval {
                 jsonEncode({
                   'mcpServers': {
                     'mana': {
-                      'command': p.join(root, 'framework/cli/mana'),
+                      'command': p.join(frameworkRoot(), 'cli/mana'),
                       'args': [
                         'mcp',
                         '--api',
@@ -273,7 +274,7 @@ final class AgentEval {
       progress?.call('… $agent works on: $task');
       final command = switch (agent) {
         'claude' => [
-          'framework/cli/mana',
+          p.relative(p.join(frameworkRoot(), 'cli/mana'), from: root),
           'agent',
           'claude',
           '--',
@@ -287,7 +288,7 @@ final class AgentEval {
           if (allow.isNotEmpty) ...['--allowedTools', ...allow],
         ],
         'codex' => [
-          'framework/cli/mana',
+          p.relative(p.join(frameworkRoot(), 'cli/mana'), from: root),
           'agent',
           'codex',
           '--',

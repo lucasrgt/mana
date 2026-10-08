@@ -37,7 +37,20 @@ List<String> momentDockerLabels([Map<String, String>? environment]) {
 }
 
 /// The workspace the vendored framework lives in (its parent directory).
-String workspaceRoot() => p.dirname(frameworkRoot());
+/// The folder mounted for `mix`: `MANA_WORKSPACE`, else the nearest folder
+/// above the framework holding a `mana.toml` (a project that takes Mana as a
+/// submodule), else the folder the framework sits in.
+String workspaceRoot() {
+  if (Platform.environment['MANA_WORKSPACE'] case final root?
+      when root.isNotEmpty) {
+    return root;
+  }
+  final framework = frameworkRoot();
+  for (var dir = p.dirname(framework); ; dir = p.dirname(dir)) {
+    if (File(p.join(dir, 'mana.toml')).existsSync()) return dir;
+    if (p.dirname(dir) == dir) return p.dirname(framework);
+  }
+}
 
 String elixirImage() {
   final dockerfile = File(p.join(frameworkRoot(), 'ash/toolchain/Dockerfile'));
@@ -77,8 +90,10 @@ Future<void> mix(
       'Mix project must be inside the vendored workspace',
     );
   }
+  final home =
+      '/workspace/${p.relative(frameworkRoot(), from: root)}/ash/.toolchain/home';
   Directory(
-    p.join(root, 'framework/ash/.toolchain/home'),
+    p.join(frameworkRoot(), 'ash/.toolchain/home'),
   ).createSync(recursive: true);
   final image = await ensureElixirImage();
   final uid = (Process.runSync('id', ['-u']).stdout as String).trim();
@@ -100,11 +115,11 @@ Future<void> mix(
       '-w',
       '/workspace/$path',
       '-e',
-      'HOME=/workspace/framework/ash/.toolchain/home',
+      'HOME=$home',
       '-e',
-      'MIX_HOME=/workspace/framework/ash/.toolchain/home/.mix',
+      'MIX_HOME=$home/.mix',
       '-e',
-      'HEX_HOME=/workspace/framework/ash/.toolchain/home/.hex',
+      'HEX_HOME=$home/.hex',
       '-e',
       'HEX_CACERTS_PATH=/etc/ssl/certs/ca-certificates.crt',
       '-e',
