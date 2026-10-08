@@ -548,7 +548,7 @@ defmodule ManaCoreTest.Signup do
     cursor(:stage)
     before([:demo])
     step(:terms, action: :accept_terms)
-    step(:details, action: :save_details)
+    step(:details, action: :save_details, attempts: [:details_checked, :mail_sent], bugs: [:mail_sent])
     step(:address, action: :save_address, skip_if: expr(kind == :virtual))
     done(:done)
     stuck_after({1, :day})
@@ -1520,6 +1520,19 @@ defmodule ManaCoreTest do
       record.("unknown")
       assert Mana.Flow.check_stuck(ManaCoreTest.Signup, signup.id, "details") == :bug
       assert %{verdict: :bug, attempts: 2} = Mana.Flow.diagnose(signup, :details)
+    end
+
+    test "a step's other attempts count, and a failure of one of its bugs is the platform's" do
+      signup = Ash.create!(ManaCoreTest.Signup, %{})
+      {:ok, signup} = go(signup, :accept_terms)
+      note = &Mana.History.note(ManaCoreTest.Signup, signup.id, %{action: &1, outcome: :failed, error: &2})
+
+      note.(:details_checked, "too_short")
+      note.(:accept_terms, "unknown")
+      assert %{verdict: :abandoned, attempts: 1, failures: ["too_short"]} = Mana.Flow.diagnose(signup, :details)
+
+      note.(:mail_sent, nil)
+      assert %{verdict: :bug, attempts: 2, failures: ["too_short", "mail_sent"]} = Mana.Flow.diagnose(signup, :details)
     end
 
     test "only a step's action gives up atomic updates" do

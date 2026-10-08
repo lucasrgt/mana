@@ -1,6 +1,6 @@
 defmodule Mana.Flow.Step do
   @moduledoc false
-  defstruct [:name, :action, :skip_if, :optional, :__identifier__, :__spark_metadata__]
+  defstruct [:name, :action, :skip_if, :optional, :attempts, :bugs, :__identifier__, :__spark_metadata__]
 end
 
 defmodule Mana.Flow do
@@ -14,6 +14,7 @@ defmodule Mana.Flow do
         step :terms_pending, action: :advance_terms
         step :details_pending, action: :save_details
         step :address_pending, action: :save_address, skip_if: expr(kind == :virtual)
+        step :email_pending, action: :confirm_email, attempts: [:email_sent, :code_refused], bugs: [:email_sent]
         done :complete
         stuck_after {3, :day}
         on_stuck {MyApp.Reminders, :host_stuck}
@@ -46,7 +47,9 @@ defmodule Mana.Flow do
       name: [type: :atom, required: true, doc: "The cursor value while this step is the current one."],
       action: [type: :atom, required: true, doc: "The update action that completes the step."],
       skip_if: [type: :any, doc: "An expression over the record; the step is passed over while it holds."],
-      optional: [type: :boolean, default: false, doc: "Interfaces may offer to skip it."]
+      optional: [type: :boolean, default: false, doc: "Interfaces may offer to skip it."],
+      attempts: [type: {:list, :atom}, default: [], doc: "Other `Mana.History` actions on the record that count as attempts at the step (a code refused elsewhere, an email sent for it, noted with `Mana.History.note/3`)."],
+      bugs: [type: {:list, :atom}, default: [], doc: "Those of `attempts` whose failures are the platform's (an email that did not leave): one makes the diagnosis a bug."]
     ]
   }
 
@@ -269,34 +272,44 @@ defmodule Mana.Flow do
 
   @doc """
   Why `record` sits at `step`, from its `Mana.History` (when it keeps one):
-  `:bug` when an attempt at the step's action failed for a technical reason
-  (an unknown or framework error, not a refused input), `:abandoned`
-  otherwise — no attempt at all, or only refused inputs and then silence.
-  Interfaces answer the first with an alert, the second with a reminder.
+  `:bug` when an attempt at the step failed for a technical reason (an
+  unknown or framework error, or a failure of one of the step's `bugs`), not
+  a refused input; `:abandoned` otherwise — no attempt at all, or only
+  refused inputs and then silence. Attempts are the step's action and its
+  `attempts`; `failures` names each failed one by its error (or its action
+  when it has none). Interfaces answer a bug with an alert, an abandonment
+  with a reminder.
   """
   def diagnose(record, step) do
+    require Ash.Query
     resource = record.__struct__
-    action = Enum.find_value(steps(resource), &(&1.name == step && to_string(&1.action)))
+    declared = Enum.find(steps(resource), &(&1.name == step))
+    actions = if declared, do: Enum.map([declared.action | declared.attempts], &to_string/1), else: []
+    bugs = if declared, do: Enum.map(declared.bugs, &to_string/1), else: []
 
     entries =
-      if Mana.History in Spark.extensions(resource) do
+      if Mana.History in Spark.extensions(resource) and actions != [] do
+        type = Mana.Entity.type(resource)
+        id = to_string(record.id)
+
         resource
         |> Mana.History.log()
         |> Ash.Query.for_read(:read)
-        |> Ash.Query.filter_input(%{subject_type: Mana.Entity.type(resource), subject_id: to_string(record.id), action: action})
+        |> Ash.Query.filter(subject_type == ^type and subject_id == ^id and action in ^actions)
+        |> Ash.Query.sort(at: :asc)
         |> Ash.read!(authorize?: false)
       else
         []
       end
 
-    failures = for entry <- entries, entry.outcome == :failed, do: entry.error
-    technical = Enum.filter(failures, &(&1 in @technical))
+    failed = Enum.filter(entries, &(&1.outcome == :failed))
+    technical? = Enum.any?(failed, &(&1.error in @technical or &1.action in bugs))
 
     %{
       step: step,
-      verdict: if(technical != [], do: :bug, else: :abandoned),
+      verdict: if(technical?, do: :bug, else: :abandoned),
       attempts: length(entries),
-      failures: failures
+      failures: Enum.map(failed, &(&1.error || &1.action))
     }
   end
 end
