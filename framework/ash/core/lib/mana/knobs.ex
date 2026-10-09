@@ -25,6 +25,19 @@ defmodule Mana.Knobs do
   months — candidates to remove with the code they guard. Ask "does someone
   who is not a developer need to change this while the app runs?"; if not, it
   is configuration, not a knob.
+
+  ## Scopes
+
+  A test that changes a knob would change it for every test running beside
+  it. Inside a scope, `get/1`, `enabled?/2`, `set/3` and `unset/1` read and
+  write that scope's own values, falling back to the shared ones:
+  `scoped(MyApp.Knobs, %{coupons_enabled: true})` opens a scope with those
+  values and answers its id, and `Mana.Knobs.Scope` (a Plug) runs each
+  request carrying `x-mana-knob-scope: <id>` inside it. Scopes are honored
+  only where the app configures `config :mana_core, knob_scopes: true`
+  (development and tests); elsewhere the header is ignored. A Moment's
+  recipe puts the id in its launch as `knobScope`, and the Moments runtime
+  sends it with every request of that run.
   """
 
   defmacro __using__(opts) do
@@ -59,6 +72,7 @@ defmodule Mana.Knobs do
       def set(name, value, by), do: Mana.Knobs.set(__MODULE__, name, value, by)
       def unset(name), do: Mana.Knobs.unset(__MODULE__, name)
       def stale(opts \\ []), do: Mana.Knobs.stale(__MODULE__, opts)
+      def scoped(values \\ %{}), do: Mana.Knobs.scoped(__MODULE__, values)
     end
   end
 
@@ -83,9 +97,62 @@ defmodule Mana.Knobs do
   defp knob!(module, name),
     do: Enum.find(module.__knobs__(), &(&1.name == name)) || raise(ArgumentError, "#{inspect(module)} declares no knob #{inspect(name)}")
 
+  @scope_key :mana_knob_scope
+
+  @doc "Whether knob scopes are honored here (`config :mana_core, knob_scopes: true`)."
+  def scopes?, do: Application.get_env(:mana_core, :knob_scopes, false) == true
+
+  @doc "The scope this process reads and writes knobs in, or nil."
+  def scope, do: if(scopes?(), do: Process.get(@scope_key))
+
+  @doc "Runs this process inside `scope` (nil leaves every scope)."
+  def put_scope(nil), do: Process.delete(@scope_key)
+
+  def put_scope(scope) when is_binary(scope) do
+    if valid_scope?(scope), do: Process.put(@scope_key, scope)
+    :ok
+  end
+
+  def valid_scope?(scope), do: is_binary(scope) and Regex.match?(~r/^[A-Za-z0-9_-]{8,64}$/, scope)
+
+  @doc "Opens a scope holding `values` and answers its id."
+  def scoped(module, values) do
+    unless scopes?(), do: raise(ArgumentError, "knob scopes are off; set config :mana_core, knob_scopes: true")
+    scope = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    previous = Process.get(@scope_key)
+    Process.put(@scope_key, scope)
+
+    try do
+      for {name, value} <- values do
+        {:ok, _} = set(module, name, value, nil)
+      end
+    after
+      if previous, do: Process.put(@scope_key, previous), else: Process.delete(@scope_key)
+    end
+
+    scope
+  end
+
+  defp row_name(name, nil), do: to_string(name)
+  defp row_name(name, scope), do: "#{name}@#{scope}"
+
+  defp row(module, name) do
+    case Ash.get(module.__knob_store__(), name, authorize?: false, error?: false) do
+      {:ok, %{value: value}} when is_map(value) -> value
+      _ -> nil
+    end
+  end
+
+  defp stored(module, name) do
+    case scope() do
+      nil -> shared(module, name)
+      scope -> row(module, row_name(name, scope)) || shared(module, name)
+    end
+  end
+
   # Read from the store at most every `knob_ttl_ms` (5 s) per node, so a
   # change made on one machine reaches the others without a broadcast.
-  defp stored(module, name) do
+  defp shared(module, name) do
     key = {__MODULE__, module, name}
     now = System.monotonic_time(:millisecond)
     ttl = Application.get_env(:mana_core, :knob_ttl_ms, 5_000)
@@ -95,12 +162,7 @@ defmodule Mana.Knobs do
         value
 
       _ ->
-        value =
-          case Ash.get(module.__knob_store__(), to_string(name), authorize?: false, error?: false) do
-            {:ok, %{value: value}} when is_map(value) -> value
-            _ -> nil
-          end
-
+        value = row(module, to_string(name))
         :persistent_term.put(key, {value, now})
         value
     end
@@ -138,7 +200,7 @@ defmodule Mana.Knobs do
          :ok <- within(knob.opts, value["value"]) do
       result =
         module.__knob_store__()
-        |> Ash.Changeset.for_create(:set, %{name: to_string(name), value: value, changed_by_id: by && Map.get(by, :id)}, actor: by)
+        |> Ash.Changeset.for_create(:set, %{name: row_name(name, scope()), value: value, changed_by_id: by && Map.get(by, :id)}, actor: by)
         |> Ash.create(authorize?: false)
 
       :persistent_term.erase({__MODULE__, module, name})
@@ -146,11 +208,11 @@ defmodule Mana.Knobs do
     end
   end
 
-  @doc "Forgets the stored value: the knob answers its default again."
+  @doc "Forgets the stored value: the knob answers its default (or, in a scope, the shared value) again."
   def unset(module, name) do
     knob!(module, name)
 
-    with {:ok, row} when not is_nil(row) <- Ash.get(module.__knob_store__(), to_string(name), authorize?: false, error?: false),
+    with {:ok, row} when not is_nil(row) <- Ash.get(module.__knob_store__(), row_name(name, scope()), authorize?: false, error?: false),
          do: Ash.destroy!(row, authorize?: false)
 
     :persistent_term.erase({__MODULE__, module, name})
@@ -210,6 +272,32 @@ defmodule Mana.Knobs.Store.Transformer do
          {:ok, dsl} <- Builder.add_new_action(dsl, :read, :read, primary?: true),
          {:ok, dsl} <- Builder.add_new_action(dsl, :destroy, :destroy, primary?: true) do
       Builder.add_new_action(dsl, :create, :set, accept: [:name, :value, :changed_by_id], upsert?: true, upsert_fields: [:value, :changed_by_id, :updated_at])
+    end
+  end
+end
+
+if Code.ensure_loaded?(Plug.Conn) do
+  defmodule Mana.Knobs.Scope do
+    @moduledoc """
+    Runs a request inside the knob scope its `x-mana-knob-scope` header names
+    (`Mana.Knobs`), where scopes are on; otherwise does nothing. Mount it in
+    the pipeline every API request goes through.
+    """
+    @behaviour Plug
+
+    @impl true
+    def init(options), do: options
+
+    @impl true
+    def call(conn, _options) do
+      if Mana.Knobs.scopes?() do
+        case Plug.Conn.get_req_header(conn, "x-mana-knob-scope") do
+          [scope | _] -> Mana.Knobs.put_scope(scope)
+          [] -> Mana.Knobs.put_scope(nil)
+        end
+      end
+
+      conn
     end
   end
 end

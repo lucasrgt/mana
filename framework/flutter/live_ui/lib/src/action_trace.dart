@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import 'configuration.dart';
+import 'moment_launch.dart' show MomentKnobScope;
 
 /// Positive observations from gesture-originated HTTP requests, not coverage.
 /// Detached jobs and requests scheduled outside this zone are not attributed.
@@ -31,8 +32,9 @@ final class MomentActionTrace {
       request.origin == api.origin &&
       request.userInfo.isEmpty;
 
-  /// Sends each request made inside a gesture with `x-mana-gesture` and
-  /// records the backend's `x-mana-actions` receipt — only to [api] on
+  /// Sends every request with the Moment's `x-mana-knob-scope`, and each one
+  /// made inside a gesture with `x-mana-gesture`, recording the backend's
+  /// `x-mana-actions` receipt — only to [api] on
   /// loopback, and only in builds defined with `MANA_ACTION_TRACE=true`
   /// (Moments sets it for its own runs). One line per app:
   /// `MomentActionTrace.attach(dio, Uri.parse(baseUrl))`.
@@ -42,6 +44,11 @@ final class MomentActionTrace {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
+          final scope = MomentKnobScope.current;
+          if (scope != null &&
+              allows(options.uri, api, backendEnabled: backendEnabled)) {
+            options.headers['x-mana-knob-scope'] = scope;
+          }
           final trace = current;
           if (trace != null &&
               allows(options.uri, api, backendEnabled: backendEnabled)) {

@@ -7,6 +7,12 @@ import 'package:http/http.dart' as http;
 
 import 'timing.dart';
 
+/// The knob scope the running Moment's recipe opened (`knobScope` in its
+/// launch); `MomentActionTrace.attach` sends it with every API request.
+abstract final class MomentKnobScope {
+  static String? current;
+}
+
 /// Fetches only a disposable sandbox account from the authenticated local bridge.
 /// Authentication is delegated to the app's normal session seam.
 Future<String?> prepareMomentLaunch({
@@ -43,6 +49,7 @@ Future<String?> prepareMomentLaunch({
       throw StateError('Moment API does not match this app build');
     }
     final route = launch['route'] as String;
+    MomentKnobScope.current = launch['knobScope'] as String?;
     if (!route.startsWith('/') || route.startsWith('//')) {
       throw StateError('Moment route must stay in the app');
     }

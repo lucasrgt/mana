@@ -4,9 +4,11 @@ defmodule Moments.Recipe do
 
   `prepare/1` puts the situation in place through the app's own Ash actions and
   returns the launch map the engine keeps privately: `route`, the `account` the
-  Flutter app signs in with, and `inputs` resolved by `fill` steps. `observe/2`
-  reads the persisted situation and returns the projection that `backend_equals`
-  checks compare. Neither may run outside development.
+  Flutter app signs in with, `inputs` resolved by `fill` steps and, for a run
+  that needs settings of its own, `knobScope` (`Mana.Knobs.scoped/2`), which
+  the app then sends with every request. `observe/2` reads the persisted
+  situation, inside that scope, and returns the projection that
+  `backend_equals` checks compare. Neither may run outside development.
   """
   @callback prepare(context :: map) :: {:ok, map} | {:error, term}
   @callback observe(launch :: map, projection :: map) :: {:ok, map} | {:error, term}
@@ -37,9 +39,9 @@ defmodule Moments.Recipes do
       result =
         case {module, operation} do
           {{set, key}, "prepare"} -> set.__recipe__(:prepare, key, params["context"] || %{})
-          {{set, key}, "observe"} -> set.__recipe__(:observe, key, params["launch"] || %{}, params["projection"] || %{})
+          {{set, key}, "observe"} -> scoped(params["launch"], fn -> set.__recipe__(:observe, key, params["launch"] || %{}, params["projection"] || %{}) end)
           {module, "prepare"} -> module.prepare(params["context"] || %{})
-          {module, "observe"} -> module.observe(params["launch"] || %{}, params["projection"] || %{})
+          {module, "observe"} -> scoped(params["launch"], fn -> module.observe(params["launch"] || %{}, params["projection"] || %{}) end)
         end
 
       case result do
@@ -56,6 +58,19 @@ defmodule Moments.Recipes do
   end
 
   def call(conn, _options), do: reply(conn, 404, %{error: "not_found"})
+
+  # Mana.Knobs reads its scope from the process.
+  defp scoped(%{"knobScope" => scope}, observe) when is_binary(scope) do
+    Process.put(:mana_knob_scope, scope)
+
+    try do
+      observe.()
+    after
+      Process.delete(:mana_knob_scope)
+    end
+  end
+
+  defp scoped(_launch, observe), do: observe.()
 
   defp authorized?(conn, {module, function, args}) do
     token = apply(module, function, args)

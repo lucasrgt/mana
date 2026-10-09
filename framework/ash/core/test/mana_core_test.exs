@@ -1716,6 +1716,53 @@ defmodule ManaCoreTest do
     end
   end
 
+  describe "knob scopes" do
+    setup do
+      Application.put_env(:mana_core, :knob_scopes, true)
+      on_exit(fn -> Application.delete_env(:mana_core, :knob_scopes) end)
+      ManaCoreTest.Knobs.unset(:page_size)
+      on_exit(fn -> Mana.Knobs.put_scope(nil) end)
+      :ok
+    end
+
+    test "a scope reads its own values over the shared ones, and its writes stay in it" do
+      scope = ManaCoreTest.Knobs.scoped(%{page_size: 5})
+      assert ManaCoreTest.Knobs.get(:page_size) == 20
+
+      Mana.Knobs.put_scope(scope)
+      assert ManaCoreTest.Knobs.get(:page_size) == 5
+      assert {:ok, _} = ManaCoreTest.Knobs.set(:page_size, 7, nil)
+      assert ManaCoreTest.Knobs.get(:page_size) == 7
+
+      Mana.Knobs.put_scope(nil)
+      assert ManaCoreTest.Knobs.get(:page_size) == 20
+      assert {:ok, _} = ManaCoreTest.Knobs.set(:page_size, 30, nil)
+
+      Mana.Knobs.put_scope(scope)
+      assert :ok = ManaCoreTest.Knobs.unset(:page_size)
+      assert ManaCoreTest.Knobs.get(:page_size) == 30
+      ManaCoreTest.Knobs.scoped(%{}) |> Mana.Knobs.put_scope()
+      assert ManaCoreTest.Knobs.get(:page_size) == 30
+    after
+      Mana.Knobs.put_scope(nil)
+      ManaCoreTest.Knobs.unset(:page_size)
+    end
+
+    test "the header opens a scope only where scopes are on" do
+      scope = ManaCoreTest.Knobs.scoped(%{page_size: 5})
+      conn = Plug.Test.conn(:get, "/") |> Plug.Conn.put_req_header("x-mana-knob-scope", scope)
+
+      Mana.Knobs.Scope.call(conn, [])
+      assert ManaCoreTest.Knobs.get(:page_size) == 5
+
+      Mana.Knobs.put_scope(nil)
+      Application.put_env(:mana_core, :knob_scopes, false)
+      Mana.Knobs.Scope.call(conn, [])
+      assert ManaCoreTest.Knobs.get(:page_size) == 20
+      assert_raise ArgumentError, fn -> ManaCoreTest.Knobs.scoped(%{}) end
+    end
+  end
+
   describe "moments hooks" do
     test "every hook a primitive declares is a function it has" do
       primitives = [Mana.Verbs, Mana.Views, Mana.Entity, Mana.Flow, Mana.History, Mana.Notifications, Mana.Attachments]
