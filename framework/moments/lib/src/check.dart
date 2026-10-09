@@ -55,6 +55,15 @@ Map<String, Object?> _sources(
   return {'manifest': hashBytes(File(manifestFile).readAsBytesSync()), 'files': files, 'declaration': ?declaration};
 }
 
+Future<String?> _commit(String project) async {
+  try {
+    final git = await Process.run('git', ['rev-parse', 'HEAD'], workingDirectory: project);
+    return git.exitCode == 0 ? (git.stdout as String).trim() : null;
+  } on ProcessException {
+    return null;
+  }
+}
+
 /// A full reread of every Dart file, off the event loop the suite's bridges
 /// and workers share.
 Future<Map<String, Object?>> _freshDart(String project, List<String> watch) =>
@@ -384,8 +393,36 @@ Future<Map<String, Object?>> checkMoment({
       ...declaredVersion(),
       'dart': await _freshDart(project, watch),
     };
-    final version = await sourceVersion();
-    final dart = version['dart']! as Map;
+    // The full reread and git run alongside ownership and preparation; they
+    // are awaited before the first comparison that needs them.
+    final declaredSources = declaredVersion();
+    if (declaredSources['manifest'] != hashBytes(manifestBytes))
+      throw const _Unavailable('Declaration changed while loading');
+    final pendingDart = _freshDart(project, watch);
+    final pendingCommit = _commit(project);
+    unawaited(pendingDart.then<void>((_) {}, onError: (Object _) {}));
+    late final Map<String, Object?> version;
+    late final Map dart;
+    final code = <String, Object?>{};
+    report['code'] = code;
+    var versionSettled = false;
+    Future<void> settleVersion() async {
+      if (versionSettled) return;
+      version = {...declaredSources, 'dart': await pendingDart};
+      dart = version['dart']! as Map;
+      final observed = {...code};
+      code
+        ..clear()
+        ..addAll({
+          'commit': await pendingCommit,
+          ...version,
+          'scope':
+              'Dart source inventory, exported manifest and its selected DSL source when present; not a deployment build identity',
+          ...observed,
+        });
+      versionSettled = true;
+    }
+
     void assertDartRuntime(Object? raw) {
       final value = raw as Map?;
       if ((dart['packageCount']! as int) > 0 &&
@@ -399,23 +436,9 @@ Future<Map<String, Object?>> checkMoment({
       }
     }
 
-    if (version['manifest'] != hashBytes(manifestBytes)) throw const _Unavailable('Declaration changed while loading');
-    String? commit;
-    try {
-      final git = Process.runSync('git', ['rev-parse', 'HEAD'], workingDirectory: project);
-      if (git.exitCode == 0) commit = (git.stdout as String).trim();
-    } on ProcessException {
-      commit = null;
-    }
-    final code = <String, Object?>{
-      'commit': commit,
-      ...version,
-      'scope':
-          'Dart source inventory, exported manifest and its selected DSL source when present; not a deployment build identity',
-    };
-    report['code'] = code;
     ({int id, Map<String, Object?> snapshot})? refreshed;
     if (refresh) {
+      await settleVersion();
       refreshed = await refreshForCheck(
         request: request,
         name: name!,
@@ -462,6 +485,7 @@ Future<Map<String, Object?>> checkMoment({
           journey ? {'name': name, 'fresh': true, 'prepare': true} : {'name': name, 'prepare': false},
         );
     if ((opened['state'] as Map?)?['name'] != name) throw const _Unavailable('Unexpected Moment opened');
+    await settleVersion();
     Object? expected = (opened['state']! as Map)['projection'];
     final revision = opened['revision'];
     final deadline = nowMs() + timeout;

@@ -174,12 +174,24 @@ Future<Map<String, Object?>> runSuite({
   Object? statusError;
   try {
     final instance = (jsonDecode(File(instanceFile).readAsStringSync()) as Map).cast<String, Object?>();
+    final owned = assertOwned(instance);
+    if ((owned['State'] as Map?)?['Running'] != true) throw const MomentsError('Owned backend is not running');
+    // Ownership was proven above; per-Moment checks re-read the same container
+    // without blocking the event loop the workers share.
+    final ownedId = owned['Id']! as String;
     Future<void> assertAvailable() async {
-      if ((assertOwned(instance)['State'] as Map?)?['Running'] != true)
+      final result = await Process.run('docker', [
+        'inspect',
+        '--format',
+        '{{.State.Running}} {{.Name}} {{index .Config.Labels "dev.moments.owner"}}',
+        ownedId,
+      ]);
+      if (result.exitCode != 0 ||
+          (result.stdout as String).trim() != 'true /${instance['container']} ${instance['id']}') {
         throw const MomentsError('Owned backend is not running');
+      }
     }
 
-    await assertAvailable();
     final supervisor = (jsonDecode(File(runtimeFile).readAsStringSync()) as Map).cast<String, Object?>();
     Future<void> poll() async {
       final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);

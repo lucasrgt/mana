@@ -288,12 +288,13 @@ final class MomentController extends ChangeNotifier {
     }
   }
 
-  /// A short debounce avoids writing each cursor blink/keystroke to disk.
+  /// A short debounce coalesces a burst of rebuilds into one write; it sits
+  /// on every journey step's path to its postcondition, so it stays small.
   void capture(Map<String, dynamic> value) {
     if (_disposed || projection == null) return;
     _pending?.cancel();
     final atRevision = revision;
-    _pending = Timer(const Duration(milliseconds: 120), () {
+    _pending = Timer(const Duration(milliseconds: 30), () {
       unawaited(_send('capture', atRevision, value));
     });
   }
