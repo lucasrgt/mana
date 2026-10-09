@@ -62,3 +62,7 @@ Body onceBody(HttpRequest request, {int limit = 16384}) {
   Future<Map<String, Object?>>? parsed;
   return () => parsed ??= readJson(request, limit: limit);
 }
+
+/// When the bridge first saw a request, so handlers can report time spent
+/// before they ran.
+final arrivals = Expando<double>('arrival');

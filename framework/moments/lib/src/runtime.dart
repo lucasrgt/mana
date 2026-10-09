@@ -113,7 +113,7 @@ final class Moments implements WatchedMoments, GestureMoments {
             options,
             contract,
             file,
-            DartSources(project, ((contract['watch'] as List?) ?? const []).cast<String>()),
+            DartSources.watched(project, ((contract['watch'] as List?) ?? const []).cast<String>()),
           )
           .._mapFile = mapFile
           .._directory = directory;
@@ -135,6 +135,8 @@ final class Moments implements WatchedMoments, GestureMoments {
   late Map<String, Map<String, Object?>> _states;
   Map<String, Object?>? _state;
   Map<String, Object?>? _observed;
+  var _observation = 0;
+  var _nextObservation = Completer<void>();
   String? _activeClient;
   bool _supportsFrame = false, _supportsCaptureFrame = false;
   _Frame? _frame;
@@ -351,7 +353,7 @@ final class Moments implements WatchedMoments, GestureMoments {
     _moveStarted = nowMs();
     _persist(next);
     _revision = uuidV4();
-    _observed = null;
+    _setObserved(null);
     _lastCaptureSequence = 0;
     _frame = null;
     _blocker = null;
@@ -574,7 +576,7 @@ final class Moments implements WatchedMoments, GestureMoments {
 
   @override
   void markCodeApplied(Map<String, Object?> checkpoint) {
-    if (_revision != checkpoint['revision'] || _codeHash() != checkpoint['codeHash']) {
+    if (_revision != checkpoint['revision'] || _sources.snapshot(reuse: false)['digest'] != checkpoint['codeHash']) {
       throw const MomentsError('Moment or source changed during refresh; awaiting the next refresh');
     }
     _appliedCodeHash = checkpoint['codeHash']! as String;
@@ -600,7 +602,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         _options.onRuntimeClaim?.call(client);
         _restart.claim(client);
         _activeClient = client;
-        _observed = null;
+        _setObserved(null);
         _lastCaptureSequence = 0;
         _frame = null;
         _blocker = null;
@@ -662,7 +664,7 @@ final class Moments implements WatchedMoments, GestureMoments {
       // Diagnostic only. Never persist it or replace a saved draft with the
       // login screen; an old observation must not certify a blocked runtime.
       if (_blocker != null) {
-        _observed = null;
+        _setObserved(null);
         frame?.observed = null;
       }
       reply(response, 200, {'accepted': true});
@@ -695,14 +697,14 @@ final class Moments implements WatchedMoments, GestureMoments {
         _lastCaptureSequence = data['sequence']! as int;
         frame.sequence = data['sequence']! as int;
       }
-      _observed = {
+      _setObserved({
         'revision': _revision,
         'client': _activeClient,
         'projection': projection,
         'reportedAt': DateTime.now().toUtc().toIso8601String(),
         'timing': null,
         if (frame.capture) 'captureSequence': frame.sequence,
-      };
+      });
       frame.observed = _observed;
       reply(response, 200, {'accepted': true});
     } else if (method == 'POST' && op == 'restart-ack') {
@@ -725,9 +727,17 @@ final class Moments implements WatchedMoments, GestureMoments {
           {...entry, 'saved': _states.containsKey(entry['name']), 'active': _state?['name'] == entry['name']},
       ]);
     } else if (method == 'GET' && op == 'look') {
+      // `after` + `wait` hold the answer until the next UI report, so a
+      // journey wakes on the report instead of sleeping between reads.
+      final after = int.tryParse(url.queryParameters['after'] ?? '');
+      final wait = (int.tryParse(url.queryParameters['wait'] ?? '') ?? 0).clamp(0, 2000);
+      if (after != null && after == _observation && wait > 0) {
+        await _nextObservation.future.timeout(Duration(milliseconds: wait), onTimeout: () {});
+      }
       final dart = _dartState();
       reply(response, 200, {
         ..._snapshot(),
+        'observation': _observation,
         'observed': _observed,
         'blocker': _blocker,
         'dart': dart,
@@ -772,14 +782,14 @@ final class Moments implements WatchedMoments, GestureMoments {
         _lastCaptureSequence = data['sequence']! as int;
       }
       final timing = sanitizeTiming(data['timing']) ?? _observed?['timing'];
-      _observed = {
+      _setObserved({
         'revision': _revision,
         'client': _activeClient,
         'projection': projection,
         'timing': timing,
         'reportedAt': DateTime.now().toUtc().toIso8601String(),
         'openToObservedMs': _moveStarted == null ? null : nowMs() - _moveStarted!,
-      };
+      });
       _moveStarted = null;
       reply(response, 200, {'saved': op == 'capture', 'observed': true});
     } else {
@@ -788,9 +798,18 @@ final class Moments implements WatchedMoments, GestureMoments {
     return true;
   }
 
+  void _setObserved(Map<String, Object?>? value) {
+    _observed = value;
+    _observation++;
+    final reached = _nextObservation;
+    _nextObservation = Completer<void>();
+    reached.complete();
+  }
+
   void close() {
     _frame = null;
     _restart.close();
+    unawaited(_sources.close());
     for (final waiter in [..._waiters]) {
       reply(waiter, 503, {'error': 'Bridge stopped'});
     }

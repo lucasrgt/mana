@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:mana/mana.dart' show openPrivate, uuidV4;
 import 'package:path/path.dart' as p;
@@ -32,7 +33,6 @@ Map<String, Object?> _sources(
   String manifestFile,
   Map<String, Object?> manifest,
   Map<String, Object?> scene,
-  DartSources inventory,
 ) {
   final files = <String, String>{
     for (final path in (manifest['watch']! as List).cast<String>())
@@ -52,13 +52,13 @@ Map<String, Object?> _sources(
     }
     declaration = {'file': source['file'], 'sha256': source['sha256'], 'configDigest': source['configDigest']};
   }
-  return {
-    'manifest': hashBytes(File(manifestFile).readAsBytesSync()),
-    'files': files,
-    'declaration': ?declaration,
-    'dart': inventory.snapshot(fresh: true),
-  };
+  return {'manifest': hashBytes(File(manifestFile).readAsBytesSync()), 'files': files, 'declaration': ?declaration};
 }
+
+/// A full reread of every Dart file, off the event loop the suite's bridges
+/// and workers share.
+Future<Map<String, Object?>> _freshDart(String project, List<String> watch) =>
+    Isolate.run(() => DartSources(project, watch).snapshot(fresh: true));
 
 List<Map<String, Object?>> evaluateChecks(
   List<Map<String, Object?>> checks, {
@@ -304,7 +304,7 @@ Future<Map<String, Object?>> checkMoment({
       lastHeartbeat = nowMs();
     }
     final result = await transport(path, lease != null && data != null ? {...data, 'journeyId': lease['id']} : data);
-    if (path == '/moments/look') assertActor(result);
+    if (path.startsWith('/moments/look')) assertActor(result);
     return result;
   }
 
@@ -376,9 +376,15 @@ Future<Map<String, Object?>> checkMoment({
       report['operation'] = materialized ? 'materialized-navigation' : 'navigation';
       report['verification'] = 'not-performed';
     }
-    final inventory = DartSources(project, (manifest['watch']! as List).cast<String>());
-    Map<String, Object?> sourceVersion() => _sources(project, manifestFile!, manifest, scene, inventory);
-    final version = sourceVersion();
+    // While polling, the runtime's own digest (assertDartRuntime) stands in for
+    // a full reread; the boundaries below still reread every Dart file.
+    Map<String, Object?> declaredVersion() => _sources(project, manifestFile!, manifest, scene);
+    final watch = (manifest['watch']! as List).cast<String>();
+    Future<Map<String, Object?>> sourceVersion() async => {
+      ...declaredVersion(),
+      'dart': await _freshDart(project, watch),
+    };
+    final version = await sourceVersion();
     final dart = version['dart']! as Map;
     void assertDartRuntime(Object? raw) {
       final value = raw as Map?;
@@ -418,7 +424,8 @@ Future<Map<String, Object?>> checkMoment({
         poll: poll,
         restart: restart,
       );
-      if (!deepEqual(version, sourceVersion())) throw const _Unavailable('Source changed during refresh; run it again');
+      if (!deepEqual(version, await sourceVersion()))
+        throw const _Unavailable('Source changed during refresh; run it again');
       report['stage'] = 'check';
     }
     final requiresBackend = scene['backend'] != null || checks.any((c) => c['kind'] == 'backend_equals');
@@ -477,7 +484,7 @@ Future<Map<String, Object?>> checkMoment({
     assertDartRuntime(look['dart']);
     void validateInspection(Map<String, Object?> inspection) {
       assertDartRuntime((inspection['moment'] as Map?)?['dart']);
-      if (!deepEqual(version, sourceVersion())) {
+      if (!deepEqual({...version}..remove('dart'), declaredVersion())) {
         throw const _Unavailable('Source changed while awaiting the gesture outcome');
       }
       final supervisor = inspection['supervisor'] as Map?;
@@ -522,7 +529,7 @@ Future<Map<String, Object?>> checkMoment({
     }
 
     if (journey) {
-      if (!deepEqual(version, sourceVersion())) throw const _Unavailable('Source changed during preparation');
+      if (!deepEqual(version, await sourceVersion())) throw const _Unavailable('Source changed during preparation');
       report['stage'] = 'steps';
       markPhase('steps');
       await executeSteps(
@@ -542,6 +549,7 @@ Future<Map<String, Object?>> checkMoment({
     if (navigation) {
       report['stage'] = 'capture';
       report['capture'] = await settle();
+      if (!deepEqual(version, await sourceVersion())) throw const _Unavailable('Source changed during the capture');
       report['status'] = 'captured';
       report['verification'] =
           ((report['steps'] as List?) ?? const []).cast<Map>().any(
@@ -599,7 +607,7 @@ Future<Map<String, Object?>> checkMoment({
             moment?['revision'] != revision ||
             last['codeChanged'] == true ||
             moment?['codeChanged'] == true ||
-            !deepEqual(version, sourceVersion())) {
+            !deepEqual({...version}..remove('dart'), declaredVersion())) {
           throw const _Unavailable('Source or runtime changed during the check; run it again');
         }
         if (requiresBackend) {
@@ -669,7 +677,15 @@ Future<Map<String, Object?>> checkMoment({
           break;
         }
         // Retry observations only. Preparation and gestures remain exactly once.
-        await _sleep(poll);
+        final observation = last['observation'];
+        if (observation is int) {
+          await request('/moments/look?after=$observation&wait=250');
+        } else {
+          await _sleep(poll);
+        }
+      }
+      if (!deepEqual(version, await sourceVersion())) {
+        throw const _Unavailable('Source or runtime changed during the check; run it again');
       }
     }
   } on Object catch (error, stack) {

@@ -9,13 +9,6 @@ import 'support.dart';
 
 Matcher throwing(String text) => throwsA(predicate((e) => '$e'.contains(text), 'mentions "$text"'));
 
-Future<int> freePort() async {
-  final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-  final port = server.port;
-  await server.close();
-  return port;
-}
-
 final dart = Platform.resolvedExecutable;
 List<String> sh(String script) => ['sh', '-c', script];
 

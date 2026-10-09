@@ -46,13 +46,6 @@ final class ActorFixture {
   );
 }
 
-Future<int> freePort() async {
-  final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-  final port = server.port;
-  await server.close();
-  return port;
-}
-
 Future<({int status, String text, HttpHeaders headers})> get(
   String url, [
   Map<String, String> headers = const {},

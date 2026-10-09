@@ -187,22 +187,36 @@ void main() {
     );
   });
 
-  test('runtime refuses stale shared code immediately and dependency changes require launcher restart', () {
+  test('runtime refuses stale shared code once its file event lands and dependency changes require restart', () async {
     final f = Fixture();
     final runtime = Moments.create(
       f.project,
       MomentsOptions(manifestFile: p.join(f.project, 'moments/manifest.json'), initialName: 'inbox'),
     )!;
     addTearDown(runtime.close);
+    Future<void> until(bool Function() condition) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (!condition() && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(condition(), isTrue);
+    }
+
     expect(runtime.inspect()['codeChanged'], false);
+    final checkpoint = runtime.checkpoint();
     f.put(p.join(f.dependency, 'lib/shared.dart'), '// changed before watcher tick');
-    expect(runtime.inspect()['codeChanged'], true);
+    expect(
+      () => runtime.markCodeApplied(checkpoint),
+      throwing('source changed'),
+      reason: 'Marking code applied rescans instead of trusting a pending event',
+    );
+    await until(() => runtime.inspect()['codeChanged'] == true);
     runtime.open('inbox', fresh: true);
     expect(runtime.inspect()['codeChanged'], true, reason: 'Opening a fresh situation cannot mark edited code applied');
     runtime.markCodeApplied(runtime.checkpoint());
     expect((runtime.inspect()['dart']! as Map)['applied'], f.digest());
     f.put(p.join(f.dependency, 'pubspec.yaml'), 'name: shared\nversion: 1.0.1\n');
-    expect((runtime.inspect()['dart']! as Map)['resolutionChanged'], true);
+    await until(() => (runtime.inspect()['dart']! as Map)['resolutionChanged'] == true);
     expect(runtime.checkpoint, throwing('restart the Moments launcher'));
     runtime.open('inbox', fresh: true);
     expect(runtime.inspect()['codeChanged'], true, reason: 'Fresh UI cannot bless unresolved dependency edits');

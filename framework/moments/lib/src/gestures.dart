@@ -31,7 +31,7 @@ final class _Job {
   final int expiresAt;
   bool delivered = false;
   final double startedAt = nowMs();
-  double? deliveredAt;
+  double? deliveredAt, acceptMs, recordMs;
   Timer? timer;
   Map<String, Object?>? timing;
 }
@@ -96,7 +96,9 @@ final class GestureChannel {
           : 'flutter-pointer',
       'timing': {
         'clock': 'node-monotonic',
+        'acceptMs': done.acceptMs,
         'queueMs': (done.deliveredAt ?? nowMs()) - done.startedAt,
+        'recordMs': done.recordMs,
         'deliveryToReceiptMs': done.deliveredAt == null ? null : nowMs() - done.deliveredAt!,
         'runtime': done.timing,
       },
@@ -128,8 +130,10 @@ final class GestureChannel {
       _finish('rejected', 'Runtime changed before dispatch');
       return false;
     }
+    final recording = nowMs();
     try {
       _onDispatch({'journeyId': job.journeyId, 'id': job.id, 'kind': job.kind, 'target': job.target});
+      job.recordMs = nowMs() - recording;
     } on Object {
       _finish('rejected', 'Could not durably record dispatch; inspect before retrying');
       return false;
@@ -193,6 +197,7 @@ final class GestureChannel {
         ],
       });
     } else if (const ['/journey/tap', '/journey/fill', '/journey/reveal'].contains(url.path) && method == 'POST') {
+      final arrived = arrivals[request] ?? nowMs();
       final input = await body();
       final kind = url.pathSegments.last;
       _authorize(input['journeyId']);
@@ -264,6 +269,7 @@ final class GestureChannel {
         response: response,
         expiresAt: DateTime.now().millisecondsSinceEpoch + timeout.inMilliseconds,
       );
+      job.acceptMs = job.startedAt - arrived;
       _job = job;
       job.timer = Timer(timeout, () {
         if (identical(_job, job))

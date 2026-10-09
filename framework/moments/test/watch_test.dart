@@ -329,11 +329,14 @@ void main() {
     expect(watcher.status()['held'], isFalse);
   });
 
-  test('a file event starts the refresh long before the next poll and reports the wait', () async {
+  test('a nested file event starts the refresh long before the next poll and reports the wait', () async {
     final dir = project('moment-watch-event-');
+    Directory(p.join(dir, 'features/deep')).createSync(recursive: true);
+    File(p.join(dir, 'features/deep/view.dart')).writeAsStringSync('one');
     var runs = 0;
     final watcher = watch(
       dir,
+      paths: const ['features/deep/view.dart'],
       interval: 60000,
       debounce: 20,
       eventRoots: [dir],
@@ -341,7 +344,7 @@ void main() {
       moments: Runtime(restoration: () => {'name': 'inbox'}),
     );
     await sleep(50);
-    File(p.join(dir, 'view.dart')).writeAsStringSync('saved');
+    File(p.join(dir, 'features/deep/view.dart')).writeAsStringSync('saved');
     await eventually(() => watcher.status()['phase'] == 'ready');
     expect(runs, 1);
     expect(watcher.status()['waitMs'] as num, inInclusiveRange(20, 1000));
@@ -355,7 +358,7 @@ void main() {
     final watcher = watch(
       dir,
       interval: 60000,
-      machine: Machine(restartWith: (_) async {}),
+      machine: Machine(restartWith: (_) async => null),
       moments: Runtime(restoration: () => {'name': 'inbox'}),
     );
     final result = await watcher.refresh();

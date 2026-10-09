@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,6 +7,8 @@ import 'package:yaml/yaml.dart';
 
 import 'canonical.dart';
 import 'errors.dart';
+import 'json.dart';
+import 'tree_events.dart';
 
 bool _inside(String root, String file) {
   final path = p.relative(file, from: root);
@@ -20,13 +23,30 @@ typedef LocalPackage = ({String name, String root, String library, String config
 
 /// Resolved path dependencies are discovered from Pub, not an extra manual
 /// list. Polling caches content hashes by file metadata; proofs force a reread.
+///
+/// With [events], a long-lived owner also reuses the whole snapshot until a
+/// file event, an unreliable watch or [_maxAgeMs] says to rescan: a large app
+/// takes tens of milliseconds to stat, on the event loop every bridge shares.
 final class DartSources {
   DartSources(String project, [this.watch = const [], this.maxFiles = 20000])
-    : project = Directory(project).resolveSymbolicLinksSync();
+    : project = Directory(project).resolveSymbolicLinksSync(),
+      events = false;
+
+  DartSources.watched(String project, this.watch)
+    : project = Directory(project).resolveSymbolicLinksSync(),
+      maxFiles = 20000,
+      events = true;
+
+  static const _maxAgeMs = 1000;
 
   final String project;
   final List<String> watch;
   final int maxFiles;
+  final bool events;
+  TreeEvents? _events;
+  String? _eventRoots;
+  Map<String, Object?>? _last;
+  var _lastAt = 0.0, _changed = true;
   final _cache = <String, ({String key, String hash})>{};
   String? _graphKey;
   ({Map<String, Object?> metadata, List<LocalPackage> packages, String config})? _graph;
@@ -145,7 +165,42 @@ final class DartSources {
     return _graph;
   }
 
-  Map<String, Object?> snapshot({bool fresh = false}) {
+  /// [reuse] false rescans now even when no event has arrived yet.
+  Map<String, Object?> snapshot({bool fresh = false, bool reuse = true}) {
+    if (!events) return _scan(fresh);
+    final reusable = _last != null && !_changed && (_events?.reliable ?? false) && nowMs() - _lastAt < _maxAgeMs;
+    if (!fresh && reuse && reusable) return {..._last!};
+    _changed = false;
+    final at = nowMs();
+    final result = _scan(fresh);
+    _follow();
+    _last = result;
+    _lastAt = at;
+    return {...result};
+  }
+
+  void _follow() {
+    final packages = _graph?.packages ?? const <LocalPackage>[];
+    final trees = [for (final pkg in packages) pkg.library];
+    final shallow = {
+      project,
+      p.join(project, '.dart_tool'),
+      for (final pkg in packages) pkg.root,
+      for (final path in watch) p.dirname(p.normalize(p.join(project, path))),
+    };
+    final key = jsonEncode([trees, shallow.toList()]);
+    if (key == _eventRoots && (_events?.reliable ?? false)) return;
+    unawaited(_events?.close());
+    _eventRoots = key;
+    _events = TreeEvents(trees, () => _changed = true, shallow: shallow);
+  }
+
+  Future<void> close() async {
+    _last = null;
+    await _events?.close();
+  }
+
+  Map<String, Object?> _scan(bool fresh) {
     final files = <String, String>{}, resolution = <String, Object?>{};
     final current = _resolved(fresh);
     var count = 0;

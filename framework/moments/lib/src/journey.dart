@@ -79,6 +79,7 @@ Future<void> executeSteps({
   Future<Object?> Function()? settle,
   int timeout = 8000,
   int poll = 100,
+  int wait = 250,
 }) async {
   final receipts = <Map<String, Object?>>[];
   report['steps'] = receipts;
@@ -133,8 +134,12 @@ Future<void> executeSteps({
             : 'Operation dispatched; application effects are checked by later steps and final criteria';
         continue;
       }
+      Object? observation;
       while (true) {
-        final look = await request('/moments/look');
+        final look = await request(
+          observation is int ? '/moments/look?after=$observation&wait=$wait' : '/moments/look',
+        );
+        observation = look['observation'];
         final observed = look['observed'] as Map?;
         if (look['revision'] != revision || observed?['client'] != client || look['codeChanged'] == true) {
           throw const JourneyError('Runtime changed while awaiting the gesture outcome');
@@ -165,7 +170,8 @@ Future<void> executeSteps({
             throw JourneyError('Declared gesture postcondition was not reached', receipt['status']! as String);
           }
         }
-        await Future<void>.delayed(Duration(milliseconds: poll));
+        // A bridge that cannot wait for the next report answers at once.
+        if (observation is! int) await Future<void>.delayed(Duration(milliseconds: poll));
       }
     } on Object catch (error) {
       receipt['status'] = error is JourneyError ? error.status : 'unavailable';

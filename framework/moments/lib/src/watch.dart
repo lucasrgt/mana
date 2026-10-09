@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'canonical.dart';
 import 'errors.dart';
 import 'json.dart';
+import 'tree_events.dart';
 
 /// What the watcher needs from the Flutter launcher.
 abstract interface class WatchedMachine {
@@ -64,10 +65,7 @@ final class MomentWatcher {
     _lastSeen = _fingerprint();
     _appliedBackend = backend?.fingerprint();
     _timer = Timer.periodic(interval, (_) => _tick());
-    for (final root in eventRoots.toSet()) {
-      if (!Directory(root).existsSync()) continue;
-      _events.add(Directory(root).watch(recursive: true).listen((_) => _nudge(), onError: (Object _) {}));
-    }
+    _events = eventRoots.isEmpty ? null : TreeEvents(eventRoots, _nudge);
   }
 
   final String project;
@@ -83,7 +81,7 @@ final class MomentWatcher {
   late String _lastSeen;
   String? _appliedBackend;
   late final Timer _timer;
-  final _events = <StreamSubscription<FileSystemEvent>>[];
+  TreeEvents? _events;
   Timer? _wake;
   double? _detectedAt;
   var _held = false, _closed = false, _busy = false, _dirty = false;
@@ -281,8 +279,6 @@ final class MomentWatcher {
     _closed = true;
     _timer.cancel();
     _wake?.cancel();
-    for (final events in _events) {
-      unawaited(events.cancel());
-    }
+    unawaited(_events?.close());
   }
 }

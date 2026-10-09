@@ -11,6 +11,7 @@ import 'gestures.dart';
 import 'http_server.dart';
 import 'inspect.dart';
 import 'journey_lease.dart';
+import 'json.dart' show nowMs;
 import 'private_store.dart';
 import 'rendered.dart';
 import 'runtime.dart';
@@ -119,6 +120,7 @@ final class Bridge {
     var closed = false;
 
     Future<void> handle(HttpRequest request) async {
+      arrivals[request] = nowMs();
       final response = request.response;
       try {
         final host = request.headers.value('host') ?? '';

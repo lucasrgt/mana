@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -106,3 +107,22 @@ List<String> get cliProgram => [Platform.resolvedExecutable, _entry()];
 
 /// This package's CLI from source, for owned processes started by tests.
 List<String> get cliWorker => [Platform.resolvedExecutable, p.join(package, 'bin/moments.dart')];
+
+final _ports = Random.secure();
+
+/// A port a test passes to a server it starts later. Binding port 0 and
+/// closing it races other test files, whose own port-0 binds may be handed the
+/// same number; drawing below the Linux ephemeral range (32768+) avoids that.
+Future<int> freePort() async {
+  for (var attempt = 0; attempt < 50; attempt++) {
+    final port = 20000 + _ports.nextInt(12000);
+    try {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, port);
+      await server.close();
+      return port;
+    } on SocketException {
+      continue;
+    }
+  }
+  throw StateError('No free test port');
+}

@@ -36,6 +36,49 @@ Map<String, Object?> projectionOf(Answer value) => ((value['state']! as Map)['pr
 void json(String root, String path, Object? value) => writeJson(p.join(root, path), value);
 
 void main() {
+  test('look with after and wait answers on the next UI report, or at its deadline', () async {
+    final root = temporary('moments-wait-');
+    for (final dir in ['moments', 'lib']) {
+      Directory(p.join(root, dir)).createSync();
+    }
+    File(p.join(root, 'MOMENTS.md')).writeAsStringSync(
+      '# Test\nmoments: 0.1\nlayers: client=flutter-draft\n\n## empty\nrun: flutter-draft moments/recipes.json#empty\nOpen the form.\n',
+    );
+    File(p.join(root, 'lib/app.dart')).writeAsStringSync('version one');
+    json(root, 'moments/contract.json', {
+      'routes': ['/sign-up'],
+      'fields': {
+        'email': {'maxLength': 100},
+      },
+      'focus': ['none', 'email'],
+      'watch': ['lib/app.dart'],
+    });
+    final blank = {
+      'route': '/sign-up',
+      'fields': {'email': ''},
+      'focus': 'email',
+      'selection': [0, 0],
+    };
+    json(root, 'moments/recipes.json', {'empty': blank});
+    final bridge = await Bridge.start(project: root, port: 0);
+    addTearDown(bridge.close);
+    final opened = await moment(bridge, 'open', {'name': 'empty'});
+    await moment(bridge, 'changes?since=&client=screen');
+    final before = (await moment(bridge, 'look'))['observation']! as int;
+    final idle = Stopwatch()..start();
+    expect((await moment(bridge, 'look?after=$before&wait=150'))['observation'], before);
+    expect(idle.elapsedMilliseconds, inInclusiveRange(140, 1500), reason: 'No report: answer at the deadline');
+    final woken = Stopwatch()..start();
+    final waiting = moment(bridge, 'look?after=$before&wait=2000');
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    await moment(bridge, 'observe', {'client': 'screen', 'revision': opened['revision'], 'projection': blank});
+    final answer = await waiting;
+    expect(answer['observation'], before + 1);
+    expect((answer['observed']! as Map)['client'], 'screen');
+    expect(woken.elapsedMilliseconds, lessThan(1000), reason: 'A report wakes the wait');
+    expect((await moment(bridge, 'look?after=${before + 7}&wait=2000'))['observation'], before + 1);
+  });
+
   test('named recipes restore drafts across bridge/runtime restart without capturing secrets', () async {
     final root = temporary('moments-');
     for (final dir in ['moments', 'lib']) {
