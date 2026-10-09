@@ -706,9 +706,15 @@ The app must also avoid copying passwords into projections, logs or observable
 fields.
 
 The `finalObservation` receipt records attempts, duration and budget of the
-final wait. Each sample requires the same revision, Flutter runtime, Dart/DSL
-sources and backend processes, plus coherent projections between `look` and
-`inspect`. An identity, source or transport change stops as `unavailable`,
+final wait. Each sample requires the same revision, Flutter runtime, DSL
+sources, runtime Dart digest and backend processes, plus coherent projections
+between `look` and `inspect`. Every Dart file is reread in full when the check
+starts and before it reports, off the event loop the bridges share; between
+samples the runtime's digest stands in for that reread. That digest is reused
+until a file event arrives (or for at most a second), so an edit is seen once
+its event lands rather than at the instant of the write; marking refreshed code
+applied always rescans. Steps and the final wait read `look?after=<n>&wait=<ms>`,
+which answers as soon as the screen sends its next report. An identity, source or transport change stops as `unavailable`,
 without repeating gestures or preparation. When the wait runs out, a last
 coherent observation that contradicts the criterion is `failed`; missing
 coherent evidence is `unavailable`. That wait belongs to `run`; `check` and
