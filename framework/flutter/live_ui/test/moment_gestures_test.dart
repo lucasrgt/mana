@@ -293,4 +293,134 @@ void main() {
     expect(outcome, 'not-found');
     expect(watch.elapsedMilliseconds, greaterThanOrEqualTo(300));
   });
+
+  testWidgets('a tap finds an option a lazy list has not built yet', (
+    tester,
+  ) async {
+    String? chosen;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView.builder(
+            itemCount: 60,
+            itemExtent: 48,
+            itemBuilder: (_, index) => TextButton(
+              key: ValueKey('option-$index'),
+              onPressed: () => chosen = '$index',
+              child: Text('Option $index'),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(find.byKey(const ValueKey('option-52')), findsNothing);
+    final outcome = await tester.runAsync(
+      () => MomentGestures().tap('option-52', current: () => true),
+    );
+    await tester.pump();
+    expect(outcome, 'dispatched');
+    expect(chosen, '52');
+  });
+
+  testWidgets('back closes the dialog on top as the system button would', (
+    tester,
+  ) async {
+    late BuildContext context;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (inner) {
+            context = inner;
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    final closed = showDialog<void>(
+      context: context,
+      builder: (_) => const AlertDialog(content: Text('Sure?')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Sure?'), findsOneWidget);
+    expect(
+      await tester.runAsync(() => MomentGestures().back(current: () => true)),
+      'dispatched',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Sure?'), findsNothing);
+    await closed;
+  });
+
+  testWidgets('a swipe turns a page view to the next page', (tester) async {
+    final pages = PageController();
+    addTearDown(pages.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PageView(
+          key: const ValueKey('pages'),
+          controller: pages,
+          children: const [Text('first'), Text('second')],
+        ),
+      ),
+    );
+    final outcome = await tester.runAsync(
+      () => MomentGestures().swipe('pages', 'left', current: () => true),
+    );
+    await tester.pumpAndSettle();
+    expect(outcome, 'dispatched');
+    expect(pages.page, 1);
+    expect(
+      await tester.runAsync(
+        () => MomentGestures().swipe('pages', 'sideways', current: () => true),
+      ),
+      'unsupported',
+    );
+  });
+
+  testWidgets('a long press reaches the long-press handler, not the tap', (
+    tester,
+  ) async {
+    var taps = 0, holds = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Center(
+          child: GestureDetector(
+            key: const ValueKey('held'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => taps++,
+            onLongPress: () => holds++,
+            child: const SizedBox(width: 80, height: 80),
+          ),
+        ),
+      ),
+    );
+    final outcome = await tester.runAsync(
+      () => MomentGestures().longPress('held', current: () => true),
+    );
+    await tester.pump();
+    expect(outcome, 'dispatched');
+    expect((taps, holds), (0, 1));
+  });
+
+  testWidgets('submit runs the field\'s keyboard action once', (tester) async {
+    final submitted = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TextField(
+            key: const ValueKey('search'),
+            controller: TextEditingController(text: 'pizza'),
+            textInputAction: TextInputAction.search,
+            onSubmitted: submitted.add,
+          ),
+        ),
+      ),
+    );
+    final outcome = await tester.runAsync(
+      () => MomentGestures().submit('search', current: () => true),
+    );
+    await tester.pump();
+    expect(outcome, 'dispatched');
+    expect(submitted, ['pizza']);
+  });
 }

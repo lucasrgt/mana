@@ -5,6 +5,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'hand_off.dart';
 import 'timing.dart';
 
 /// The knob scope the running Moment's recipe opened (`knobScope` in its
@@ -50,6 +51,7 @@ Future<String?> prepareMomentLaunch({
     }
     final route = launch['route'] as String;
     MomentKnobScope.current = launch['knobScope'] as String?;
+    MomentHandOff.startRecording();
     if (!route.startsWith('/') || route.startsWith('//')) {
       throw StateError('Moment route must stay in the app');
     }

@@ -42,7 +42,10 @@ void validateSteps(Map<String, Object?> scene, {bool navigation = false}) {
         step['name'] is! String ||
         (step['name'] as String).isEmpty ||
         names.contains(step['name']) ||
-        !const ['tap', 'fill', 'reveal'].contains(kind) ||
+        !gestureKinds.contains(kind) ||
+        (kind == 'swipe' && !swipeDirections.contains(step['direction'])) ||
+        (kind != 'swipe' && step['direction'] != null) ||
+        ((kind == 'back') != (step['target'] == backTarget)) ||
         !_target.hasMatch('${step['target'] ?? ''}') ||
         ((kind == 'fill' || inputRef != null) && !_target.hasMatch('${inputRef ?? ''}')) ||
         until is! List ||
@@ -53,6 +56,15 @@ void validateSteps(Map<String, Object?> scene, {bool navigation = false}) {
     names.add(step['name'] as String);
   }
 }
+
+/// What a step can do (`MomentGestures` in live_ui carries each out).
+const gestureKinds = ['tap', 'fill', 'reveal', 'back', 'swipe', 'long_press', 'submit'];
+
+/// Where a `swipe` drags its target.
+const swipeDirections = ['left', 'right', 'up', 'down'];
+
+/// The target a `back` step names: the platform, not a widget.
+const backTarget = 'system.back';
 
 typedef Request = Future<Map<String, Object?>> Function(String path, [Map<String, Object?>? body]);
 typedef Evaluate =
@@ -102,6 +114,7 @@ Future<void> executeSteps({
         'client': client,
         'target': step['target'],
         if (step['inputRef'] != null) 'inputRef': step['inputRef'],
+        if (step['direction'] != null) 'direction': step['direction'],
       });
       if (result['id'] != id || result['revision'] != revision || result['client'] != client) {
         throw const JourneyError('Gesture receipt has a different runtime identity');

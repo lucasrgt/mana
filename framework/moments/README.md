@@ -663,10 +663,12 @@ declaration does not need to duplicate the final criteria in the last step's
 `until`. Intermediate taps still need `until` to order the transition before the
 next gesture.
 
-The driver supports tapping the centre of widgets with a stable key that are
-visible and reachable by hit testing, filling through private references and
-explicitly revealing mounted targets. It never scrolls implicitly or calls
-business callbacks directly. Receipts include optional diagnostics (dispatch
+The driver taps, long-presses and swipes widgets with a stable key that are
+visible and reachable by hit testing, fills and submits text fields through
+private references, reveals targets (building ones a lazy list has not built
+yet) and presses the platform's back. It never calls business callbacks
+directly. `moments capabilities --json` lists every gesture, the surfaces they
+reach, how backend state is set up and observed, and the limits. Receipts include optional diagnostics (dispatch
 request time in the CLI, queue and delivery→response in the supervisor, frame
 wait and execution in Dart, postcondition wait). They are durations from
 separate monotonic clocks; timestamps from different processes are never
@@ -681,6 +683,22 @@ step(:show_action, reveal: "session.submit")
 step(:sign_in, tap: "session.submit", until: [:authenticated, :destination, :session_persisted])
 ```
 
+The other gestures:
+
+```elixir
+step(:search, submit: "search.field")                       # the keyboard's action key
+step(:next_photo, swipe: "gallery.pages", direction: :left) # left, right, up or down
+step(:row_menu, long_press: "list.row")                     # held past the long-press timeout
+step(:close, back: true)                                    # the platform's back button
+```
+
+`submit` focuses the field and calls `EditableTextState.performAction` with the
+field's own `textInputAction`, so `onSubmitted` runs as from the keyboard.
+`swipe` drags the target's centre across 60% of its size in pointer moves, so
+page views, carousels and dismissibles move as under a finger. `back` sends
+`popRoute` on `flutter/navigation`, as the system button does: the dialog or
+sheet on top closes, or the router's back dispatcher decides.
+
 `fill` points to a `ValueKey<String>` holding exactly one `EditableText`. The
 driver taps the field to focus it and hands the text to the public
 `EditableTextState.updateEditingValue` entry point, so Flutter's formatters and
@@ -690,12 +708,29 @@ autofill or native accessibility. Read-only, ambiguous, hidden or unfocusable
 fields are refused. The current limit is non-empty text of up to 4096 UTF-16
 units.
 
-`reveal` uses `Scrollable.ensureVisible` to bring an already mounted
-`ValueKey<String>` into its scrollables. It does not search lazy lists for items
-not yet built and does not simulate system swipes. A `tap` on a mounted target
-outside the visible area scrolls to it once before hit testing, and waits (up to
-6 s, within the gesture's deadline) for a target that is still loading,
+`reveal` uses `Scrollable.ensureVisible` to bring a `ValueKey<String>` into its
+scrollables. A target a lazy list has not built yet (a long select menu, a
+`ListView.builder`) is first searched for by paging through the mounted
+scrollables, the topmost popup first, at most 200 pages; the ones where it
+never appears go back to where they were. A `tap`, `fill` or other gesture on a
+target out of view scrolls to it the same way before hit testing, and waits (up
+to 6 s, within the gesture's deadline) for a target that is still loading,
 animating, covered or disabled.
+
+Things outside the app (a payment page, a chat app, the browser, the phone's
+maps) never take the screen in a Moment: the app opens them through
+`MomentHandOff.open(label, launch)` from live_ui, which in a running Moment
+records `label` in `MomentHandOff.opened` instead. The app reports it as a
+`handOff` field, and the recipe plays what the other side would do, such as the
+webhook a payment provider sends.
+
+A recipe whose journey needs settings of its own opens a knob scope
+(`Mana.Knobs.scoped/2`) and returns it in its launch as `knobScope`. The app
+then sends `x-mana-knob-scope` with every request, and its backend
+(`Mana.Knobs.Scope` in the request pipeline, `config :mana_core, knob_scopes:
+true` outside production) reads and writes that scope's values; `observe` runs
+inside it. Moments running beside it keep the shared values, so one can turn a
+setting off without the others seeing it.
 
 `from` is a name, never the value. The app's local adapter implements
 `resolveInput(instance, reference)` and decides which fixtures it offers. The

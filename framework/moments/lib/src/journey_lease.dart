@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:mana/mana.dart' show savePrivateState, uuidV4;
 
 import 'errors.dart';
+import 'journey.dart' show gestureKinds;
 import 'json.dart';
 
 final _id = RegExp(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$');
@@ -48,7 +49,7 @@ Map<String, Object?>? readJourneyState(String? file) {
 void validateOperation(Object? value) {
   if (value is! Map ||
       value.keys.any((k) => !const ['operation', 'id', 'target'].contains(k)) ||
-      !const ['prepare', 'tap', 'fill', 'reveal'].contains(value['operation']) ||
+      !['prepare', ...gestureKinds].contains(value['operation']) ||
       (value['operation'] == 'prepare' && value.length != 1) ||
       (value['operation'] != 'prepare' &&
           (value['id'] is! String ||

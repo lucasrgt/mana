@@ -37,7 +37,7 @@ end
 
 defmodule Moments.Step do
   @moduledoc false
-  defstruct [:name, :tap, :fill, :from, :reveal, :until, :__identifier__, :__spark_metadata__]
+  defstruct [:name, :tap, :fill, :from, :reveal, :back, :swipe, :direction, :long_press, :submit, :until, :__identifier__, :__spark_metadata__]
 end
 
 defmodule Moments.Extension do
@@ -82,9 +82,14 @@ defmodule Moments.Extension do
     identifier: :name,
     schema: [
       name: [type: :atom, required: true],
-      tap: [type: :string],
-      fill: [type: :string],
-      reveal: [type: :string],
+      tap: [type: :string, doc: "Taps the widget with this key."],
+      fill: [type: :string, doc: "Types `from`'s value into the text field with this key."],
+      reveal: [type: :string, doc: "Scrolls the widget with this key into view, building it if a lazy list has not yet."],
+      back: [type: :boolean, doc: "Presses the platform's back: closes the dialog or sheet on top, or leaves the page."],
+      swipe: [type: :string, doc: "Drags the widget with this key towards `direction` (a page view, a carousel, a dismissible)."],
+      direction: [type: {:in, [:left, :right, :up, :down]}, doc: "Where `swipe` drags."],
+      long_press: [type: :string, doc: "Holds the widget with this key past the long-press timeout."],
+      submit: [type: :string, doc: "Presses the keyboard's action key (done, search, send) on the text field with this key."],
       from: [type: :string],
       until: [type: {:list, :atom}, default: []]
     ]

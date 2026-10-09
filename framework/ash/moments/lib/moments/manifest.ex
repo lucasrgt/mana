@@ -231,23 +231,21 @@ defmodule Moments.Manifest do
     end
 
     Enum.map(steps, fn step ->
-      kind =
-        cond do
-          is_binary(step.tap) and is_nil(step.fill) and is_nil(step.reveal) ->
-            "tap"
+      gestures =
+        [tap: step.tap, fill: step.fill, reveal: step.reveal, back: step.back, swipe: step.swipe, long_press: step.long_press, submit: step.submit]
+        |> Enum.reject(fn {_, value} -> value in [nil, false] end)
 
-          is_nil(step.tap) and is_binary(step.fill) and is_binary(step.from) and
-              is_nil(step.reveal) ->
-            "fill"
-
-          is_binary(step.reveal) and is_nil(step.tap) and is_nil(step.fill) and is_nil(step.from) ->
-            "reveal"
-
-          true ->
-            raise(ArgumentError, "step requires exactly one of tap, fill/from or reveal")
+      {kind, target} =
+        case gestures do
+          [{:fill, key}] when is_binary(step.from) -> {"fill", key}
+          [{:back, true}] when is_nil(step.from) -> {"back", "system.back"}
+          [{:reveal, key}] when is_nil(step.from) -> {"reveal", key}
+          [{kind, key}] when kind in [:tap, :swipe, :long_press, :submit] and is_binary(key) -> {to_string(kind), key}
+          _ -> raise(ArgumentError, "step requires exactly one of tap, fill/from, reveal, back, swipe, long_press or submit")
         end
 
-      target = step.tap || step.fill || step.reveal
+      unless (kind == "swipe") == not is_nil(step.direction),
+        do: raise(ArgumentError, "swipe requires a direction, and only swipe takes one")
 
       valid = fn value ->
         is_binary(value) and Regex.match?(~r/^[a-zA-Z0-9_.:-]{1,160}$/, value)
@@ -277,6 +275,9 @@ defmodule Moments.Manifest do
       }
       |> then(fn value ->
         if step.from, do: Map.put(value, "inputRef", step.from), else: value
+      end)
+      |> then(fn value ->
+        if step.direction, do: Map.put(value, "direction", to_string(step.direction)), else: value
       end)
     end)
   end

@@ -1,5 +1,6 @@
 export 'src/moments.dart';
 export 'src/moment_launch.dart';
+export 'src/hand_off.dart';
 export 'src/private_store.dart';
 export 'src/view_binding.dart';
 export 'src/draft_field.dart';

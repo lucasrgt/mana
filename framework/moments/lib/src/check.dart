@@ -300,9 +300,7 @@ Future<Map<String, Object?>> checkMoment({
   }
 
   Future<Map<String, Object?>> guarded(String path, [Map<String, Object?>? data]) async {
-    if (materialized &&
-        actorContext != null &&
-        const ['/journey/tap', '/journey/fill', '/journey/reveal'].contains(path)) {
+    if (materialized && actorContext != null && gestureKinds.any((kind) => path == '/journey/$kind')) {
       assertActor(await transport('/moments/look'));
     }
     if (lease != null && nowMs() - lastHeartbeat > 15000) {

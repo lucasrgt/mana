@@ -4,6 +4,7 @@ import 'dart:io';
 import 'action_evidence.dart';
 import 'errors.dart';
 import 'http_server.dart';
+import 'journey.dart' show gestureKinds, swipeDirections, backTarget;
 import 'json.dart';
 import 'timing.dart';
 
@@ -16,6 +17,7 @@ final class _Job {
     required this.target,
     required this.kind,
     required this.text,
+    this.direction,
     required this.revision,
     required this.client,
     required this.codeHash,
@@ -25,6 +27,7 @@ final class _Job {
   final String id;
   final Object? journeyId;
   final String target, kind;
+  final String? direction;
   String? text;
   final Object? revision, client, codeHash;
   final HttpResponse response;
@@ -89,11 +92,12 @@ final class GestureChannel {
       'client': done.client,
       'codeHash': done.codeHash,
       'delivered': done.delivered,
-      'transport': done.kind == 'fill'
-          ? 'flutter-text-input'
-          : done.kind == 'reveal'
-          ? 'flutter-scroll'
-          : 'flutter-pointer',
+      'transport': switch (done.kind) {
+        'fill' || 'submit' => 'flutter-text-input',
+        'reveal' => 'flutter-scroll',
+        'back' => 'flutter-navigation',
+        _ => 'flutter-pointer',
+      },
       'timing': {
         'clock': 'node-monotonic',
         'acceptMs': done.acceptMs,
@@ -152,6 +156,7 @@ final class GestureChannel {
       'target': job.target,
       'kind': job.kind,
       if (job.kind == 'fill') 'text': job.text,
+      if (job.direction != null) 'direction': job.direction,
       'expiresAt': job.expiresAt,
     });
     job.text = null; // Never retain credential contents after one delivery.
@@ -196,13 +201,19 @@ final class GestureChannel {
             if (value['journeyId'] == journeyId) value['receipt'],
         ],
       });
-    } else if (const ['/journey/tap', '/journey/fill', '/journey/reveal'].contains(url.path) && method == 'POST') {
+    } else if (gestureKinds.any((kind) => url.path == '/journey/$kind') && method == 'POST') {
       final arrived = arrivals[request] ?? nowMs();
       final input = await body();
       final kind = url.pathSegments.last;
       _authorize(input['journeyId']);
       final id = input['id'], target = input['target'];
-      if (id is! String || !RegExp(r'^[a-f0-9-]{36}$').hasMatch(id) || target is! String || !_target.hasMatch(target)) {
+      final direction = input['direction'];
+      if (id is! String ||
+          !RegExp(r'^[a-f0-9-]{36}$').hasMatch(id) ||
+          target is! String ||
+          !_target.hasMatch(target) ||
+          ((kind == 'back') != (target == backTarget)) ||
+          (kind == 'swipe' ? !swipeDirections.contains(direction) : direction != null)) {
         throw const MomentsError('Invalid gesture request');
       }
       if (_seen.contains(id))
@@ -263,6 +274,7 @@ final class GestureChannel {
         target: resolvedTarget,
         kind: kind,
         text: text,
+        direction: direction as String?,
         revision: context['revision'],
         client: checkpoint['client'],
         codeHash: checkpoint['codeHash'],
