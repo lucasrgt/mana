@@ -23,12 +23,10 @@ final class RenderedChannel {
   RenderedChannel({
     required this.moments,
     this.timeout = const Duration(milliseconds: 8000),
-    this.sourceMode = 'original',
   });
 
   final ObservedMoments? moments;
   final Duration timeout;
-  final String sourceMode;
   _Capture? _job;
   final _waiters = <({String client, HttpResponse response})>{};
 
@@ -149,7 +147,6 @@ final class RenderedChannel {
           'client': job.client,
           'capturedAt': DateTime.now().toUtc().toIso8601String(),
           'codeHash': job.codeHash,
-          'sourceMode': sourceMode,
         });
       }
       reply(response, 200, {'received': true});

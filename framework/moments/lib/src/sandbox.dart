@@ -497,7 +497,7 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
       stdout.writeln(const JsonEncoder.withIndent('  ').convert(await backendRecipes.inspect(openingName)));
     final resolve = adapter.resolveInput;
     bridge = await Bridge.start(
-      directory: p.join(project, 'live-ui'),
+      project: project,
       sessionDirectory: directory,
       port: bridgePort,
       momentsOptions: MomentsOptions(
@@ -609,6 +609,7 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
       moments: bridge.moments!,
       machine: machine,
       enabled: options.watch,
+      eventRoots: bridge.moments!.sourceLibraries,
       backend: services,
       automaticAllowed: () => bridge!.journeyStatus()['phase'] == 'idle',
     );

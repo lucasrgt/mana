@@ -71,7 +71,6 @@ Map<String, Object?> _screen(Map<String, Object?> manifest, Map<String, Object?>
     'properties': result['properties'],
     'watch': result['watch'],
     'clientRoots': result['clientRoots'] ?? <Object?>[],
-    'liveUiPrefix': result['liveUiPrefix'],
   };
 }
 
@@ -273,7 +272,6 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
       'screens',
       'properties',
       'watch',
-      'liveUiPrefix',
       'recipeHash',
       'domain',
       'generator',

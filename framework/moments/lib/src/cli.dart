@@ -19,7 +19,6 @@ import 'instance_state.dart';
 import 'journey.dart';
 import 'hosts.dart';
 import 'impact.dart' show buildImportsTool;
-import 'live_ui.dart';
 import 'flutter_actor.dart' show webActorWorker;
 import 'managed.dart';
 import 'owned_process.dart';
@@ -74,7 +73,6 @@ const help = '''Moments — edit, resume and verify Flutter
   moments sync                    Exports the Ash DSL
   moments review --plan <file> --evidence <journey>  Associates observations with the Ash plan
   moments affected [--base HEAD]   Plans the affected Moments; runs no actions
-  moments live serve|run|status|patch|reset|incorporate  Live preview of typed properties
   moments host browser <dir> | host preview <dir> <port> <origin>  Browser hosts for isolated sessions
   moments tools                   Compiles the Dart import parser used by affected
 
@@ -555,6 +553,7 @@ String formatResult(Object? raw, CliOptions options) {
       if (const ['attention', 'expired'].contains(journey?['phase']))
         'Journey held. Use moments inspect; after checking the effects, moments recover.',
       if (value['moment'] != null) 'Moment: ${value['moment']}',
+      if (_duration(value['waitMs']) != null) 'Wait after the save was seen: ${_duration(value['waitMs'])}',
       if (_duration(value['totalMs']) != null) 'Compile + resume: ${_duration(value['totalMs'])}',
       if (value['pending'] == true) 'There is a pending edit.',
       value['error'] as String?,
@@ -791,14 +790,6 @@ Future<int> runCli(List<String> args, {String? cwd, ProjectAdapters? adapters}) 
     } on Object catch (error) {
       stderr.writeln(error is MomentsError ? error.message : '$error');
       return 2;
-    }
-  }
-  if (args.firstOrNull == 'live') {
-    try {
-      return await runLive(args.skip(1).toList(), cwd, findProject);
-    } on Object catch (error) {
-      stderr.writeln(error is MomentsError ? error.message : '$error');
-      return 1;
     }
   }
   late CliOptions options;

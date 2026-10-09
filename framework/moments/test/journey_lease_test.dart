@@ -82,11 +82,9 @@ void main() {
 
   test('real bridge rejects competing preparations and refreshes before calling app adapters', () async {
     final project = temporary('journey-lease-');
-    for (final dir in ['moments', 'live-ui', 'lib']) {
+    for (final dir in ['moments', 'lib']) {
       Directory(p.join(project, dir)).createSync();
     }
-    writeJson(p.join(project, 'live-ui/schema.json'), <String, Object?>{});
-    writeJson(p.join(project, 'live-ui/overrides.json'), {'version': 1, 'values': <String, Object?>{}});
     File(p.join(project, 'lib/view.dart')).writeAsStringSync('// view');
     writeJson(p.join(project, 'moments/manifest.json'), {
       'version': 1,
@@ -107,7 +105,7 @@ void main() {
     var prepares = 0, refreshes = 0;
     Completer<void>? completePreparation;
     final bridge = await Bridge.start(
-      directory: p.join(project, 'live-ui'),
+      project: project,
       port: 0,
       momentsOptions: MomentsOptions(
         manifestFile: p.join(project, 'moments/manifest.json'),
@@ -125,7 +123,7 @@ void main() {
         call(bridge.url, bridge.token, path, data);
     final first = (await request('/journey/lease', {'operation': 'acquire', 'name': 'inbox'})).value;
     expect((await request('/journey/lease', {'operation': 'acquire', 'name': 'inbox'})).code, 400);
-    for (final path in ['/moments/open', '/moments/reset', '/dev/refresh', '/dev/renew', '/patch', '/reset']) {
+    for (final path in ['/moments/open', '/moments/reset', '/dev/refresh', '/dev/renew']) {
       expect((await request(path, {'name': 'inbox'})).code, 400, reason: path);
     }
     expect(prepares, 0);
@@ -224,7 +222,6 @@ void main() {
   test('bridge restart retains journey and duplicate startup cannot change live ownership', () async {
     final project = temporary('journey-bridge-durable-');
     Directory(p.join(project, 'moments')).createSync();
-    Directory(p.join(project, 'live-ui')).createSync();
     writeJson(p.join(project, 'moments/manifest.json'), {
       'version': 1,
       'properties': {
@@ -241,7 +238,7 @@ void main() {
       },
     });
     Future<Bridge> start() => Bridge.start(
-      directory: p.join(project, 'live-ui'),
+      project: project,
       port: 0,
       momentsOptions: MomentsOptions(manifestFile: p.join(project, 'moments/manifest.json'), initialName: 'inbox'),
     );

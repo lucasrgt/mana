@@ -12,7 +12,6 @@ use Ash.Domain, extensions: [Moments.Extension]
 
 moments do
   route "/traveler/reservations?debugSession=0"
-  live_ui_prefix "reservations."
   field :filter, "all", values: ["all", "confirmed"]
   field :scrollOffset, 0, min: 0, max: 10_000_000
 

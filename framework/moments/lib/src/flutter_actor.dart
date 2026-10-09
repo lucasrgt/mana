@@ -216,7 +216,7 @@ final class FlutterActorServices {
       final options = await launch.bridgeOptions?.call(handle) ?? const ActorBridgeOptions();
       final apiUrl = api['url']! as String;
       final bridge = handle.bridge = await Bridge.start(
-        directory: p.join(project, 'live-ui'),
+        project: project,
         sessionDirectory: handle.dir,
         port: 0,
         momentsOptions: MomentsOptions(

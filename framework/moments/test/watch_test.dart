@@ -134,6 +134,7 @@ MomentWatcher watch(
   bool enabled = true,
   int interval = 5,
   int debounce = 350,
+  List<String> eventRoots = const [],
   int restoreTimeout = 15000,
   bool Function()? automaticAllowed,
 }) {
@@ -144,6 +145,7 @@ MomentWatcher watch(
     moments: moments,
     backend: backend,
     enabled: enabled,
+    eventRoots: eventRoots,
     interval: Duration(milliseconds: interval),
     debounce: Duration(milliseconds: debounce),
     restoreTimeout: Duration(milliseconds: restoreTimeout),
@@ -325,6 +327,40 @@ void main() {
     await eventually(() => watcher.status()['phase'] == 'ready');
     expect(runs, 1);
     expect(watcher.status()['held'], isFalse);
+  });
+
+  test('a file event starts the refresh long before the next poll and reports the wait', () async {
+    final dir = project('moment-watch-event-');
+    var runs = 0;
+    final watcher = watch(
+      dir,
+      interval: 60000,
+      debounce: 20,
+      eventRoots: [dir],
+      machine: Machine(restartWith: (_) async => runs++),
+      moments: Runtime(restoration: () => {'name': 'inbox'}),
+    );
+    await sleep(50);
+    File(p.join(dir, 'view.dart')).writeAsStringSync('saved');
+    await eventually(() => watcher.status()['phase'] == 'ready');
+    expect(runs, 1);
+    expect(watcher.status()['waitMs'] as num, inInclusiveRange(20, 1000));
+    File(p.join(dir, 'unwatched.dart')).writeAsStringSync('unrelated');
+    await sleep(100);
+    expect(runs, 1, reason: 'An event wakes the check; only the fingerprint decides');
+  });
+
+  test('a manual refresh with nothing detected reports no wait', () async {
+    final dir = project('moment-watch-manual-wait-');
+    final watcher = watch(
+      dir,
+      interval: 60000,
+      machine: Machine(restartWith: (_) async {}),
+      moments: Runtime(restoration: () => {'name': 'inbox'}),
+    );
+    final result = await watcher.refresh();
+    expect(result['phase'], 'ready');
+    expect(result['waitMs'], isNull);
   });
 
   test('manual refresh consumes a save not yet detected by the automatic watcher', () async {

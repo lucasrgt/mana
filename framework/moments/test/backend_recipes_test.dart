@@ -58,11 +58,9 @@ final class Fixture {
     bool configured = true,
   }) async {
     final project = temporary('backend-recipes-');
-    for (final dir in ['moments', 'live-ui', 'lib']) {
+    for (final dir in ['moments', 'lib']) {
       Directory(p.join(project, dir)).createSync();
     }
-    File(p.join(project, 'live-ui/schema.json')).writeAsStringSync('{}');
-    File(p.join(project, 'live-ui/overrides.json')).writeAsStringSync('{"version":1,"values":{}}');
     File(p.join(project, 'lib/view.dart')).writeAsStringSync('source');
     final initial = {'route': '/inbox', 'filter': 'all', 'ids': 'one'};
     final scene = {
@@ -132,7 +130,7 @@ final class Fixture {
     final fixture = Fixture._(project, manifest, recipes, calls)..save();
     late Bridge bridge;
     bridge = await Bridge.start(
-      directory: p.join(project, 'live-ui'),
+      project: project,
       port: 0,
       momentsOptions: MomentsOptions(
         manifestFile: fixture.manifestFile,

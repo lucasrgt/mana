@@ -546,8 +546,10 @@ automatically. The screen must be ready and have a single active binding for
 the declared route. Use stable identities for stateful widgets: a key derived
 from a translated title can destroy the scroll position when the text changes.
 The report states `refresh.strategy` (`reload` or `restart`). `totalMs` measures
-the refresh after it is triggered; the time from save to trigger also includes
-the watcher's polling and debounce.
+the refresh after it is triggered. `waitMs` is the time from the watcher seeing
+the save to the refresh starting (debounce plus any refresh still running); it
+is `null` for a manual refresh with no detected change. The time from the write
+itself to the watcher seeing it is not measured.
 
 ### Resume blocked by the session
 
@@ -1012,17 +1014,15 @@ screens.
 # Without an instance: prepares the environment and asks the default browser to open the route.
 moments open checkout-open
 
-# Adjust the mounted screen; saved in live-ui/overrides.json.
-moments live patch \
-  '{"reservations.title.en":"Bookings","reservations.section.gap":"xxl"}' --wait
+# Save a Dart file: the launcher reloads or restarts and resumes the same screen.
+moments status
 
 # Local screen state and Flutter's last report (no database query):
 moments inspect
-
-# Review and fold the overrides into ordinary Dart/ARB:
-moments live incorporate
-moments live incorporate --write
 ```
+
+Every edit goes through Dart source and the refresh below; there is no separate
+preview layer to fold back into code.
 
 `open` keeps the screen's saved state (filters and vertical offset, for
 example). It creates a new revision, drives the existing instance to the route
@@ -1042,14 +1042,6 @@ Hot restart re-authenticates with the local account, loads current data through
 the API and restores the projection. The same applies when the browser is closed
 and reopened or the bridge restarts. The Moment's name does not undo domain
 actions: a cancelled booking stays cancelled.
-
-`live patch` edits typed properties declared by the screen (copy per locale and
-design-system spacing tokens, for example) without recompiling. There is no
-editor for arbitrary widgets, no snapshot of modals and no restoration of text
-selection. `live incorporate --prefix <screen.>` writes only that screen's
-overrides into ARB keys and Dart constants; the prefix must be the same for the
-review and the write, and changing the prefix, the preview or the code
-invalidates the plan. After incorporating translations, run `flutter gen-l10n`.
 
 ### Ash declaration → manifest → Flutter
 
@@ -1082,7 +1074,7 @@ generate widgets.
 
 The launcher watches the app's Dart libraries, the local (`path`) packages
 resolved by Pub and the extra files in the Ash contract's `watch` list. A change
-groups nearby saves for 350 ms and asks for a reload or restart through the
+groups nearby saves for 100 ms and asks for a reload or restart through the
 [official Flutter machine protocol](https://github.com/flutter/flutter/blob/master/packages/flutter_tools/doc/daemon.md).
 It is not an SDK fork: the launcher drives `flutter run --machine` with its own
 pipes.
@@ -1105,8 +1097,11 @@ terminal; the supervisor does not keep retrying without another change. Edits
 during a compilation stay pending and are grouped for the next one. A Flutter
 operation over 60 s requires stopping and starting the launcher.
 
-The watcher checks content every 150 ms, including atomic file replacements. It
-caches hashes by file metadata; every proof forces a full reread. New Dart files
+File events under each local package's `lib/` wake the content check at once;
+the content hash still decides whether anything changed. The watcher also checks
+every 150 ms, which covers the other watched files, atomic replacements and
+platforms that drop events. It caches hashes by file metadata; every proof
+forces a full reread. New Dart files
 in local libraries are picked up without editing `watch`. Changing manifests or
 resolution needs `flutter pub get` and a launcher restart. It does not watch
 hosted/SDK package bodies, assets, native code or credentials.
@@ -1190,9 +1185,7 @@ and intervals can overlap.
 ## Independent consumers and Ash sources outside Flutter
 
 `sync --project <app>` can create the first manifest; `moments/backend.json` also
-identifies the app root. `live-ui/schema.json` and `overrides.json` are not
-needed when there is no property editing: the bridge starts with no allowed
-properties and keeps refusing unknown patches.
+identifies the app root.
 
 By default the declaration's source must live inside the app. For a sibling
 backend, the app authorises only the folder it needs in `moments/sources.json`:

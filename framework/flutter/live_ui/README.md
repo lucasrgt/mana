@@ -1,8 +1,8 @@
 # live_ui — the Flutter side of Moments
 
-The active path is Dart + [Moments](../../moments/README.md): recompile/refresh
-and resume the declared situation. The package keeps the `live_ui` name for
-compatibility; it also holds the typed property editor described at the end.
+The edit path is Dart + [Moments](../../moments/README.md): save, reload or
+restart, and resume the declared situation. The package keeps the `live_ui` name
+for compatibility.
 
 ## Typed drafts
 
@@ -79,104 +79,6 @@ guarantee idempotency across restarts, tabs, clients or processes; a durable
 write guarantee needs backend support (see Mana's verbs). Moments does not
 depend on any state-management library and does not serialize a reactive graph.
 
-## Property editor (Live UI)
-
-Edits presentation properties on an already compiled Flutter screen without
-restarting the app. The package is consumed through `path:`; it needs no
-publication and no Flutter fork.
-
-```sh
-framework/moments/moments live run
-```
-
-Open the screen. The initial compilation still happens. Once the screen is open,
-run in another terminal (or from the agent):
-
-```sh
-framework/moments/moments live patch '{"signup.title.en":"Your next trip","signup.title.role":"h2","signup.title.tone":"secondary","signup.title.gap":"xxl","signup.submit.en":"Let us start","signup.submit.gap":"lg","signup.submit.corner":"md"}' --wait
-framework/moments/moments live status
-framework/moments/moments live reset --wait
-```
-
-`reset` returns to the original properties without clearing the form. A `null`
-value in a patch removes only that property. `status` lists the schema, revision
-and frame confirmations; it never exposes form fields. `--wait` fails if no
-client confirms within 8 s, but reports that the file was already saved.
-
-`--project /path/to/app` selects another integrated project. `WEB_PORT` and
-`LIVE_UI_PORT` change the default ports 5184 and 18740. `serve` starts only the
-bridge. Stop with Ctrl+C. If a crash leaves session files behind, confirm the
-process recorded in `live-ui/.runtime.json` has ended before removing that file
-and `live-ui/.defines.json` and starting another session.
-
-### Files and limits
-
-- `live-ui/schema.json`: editable properties and accepted values; references to
-  existing tokens, no executable code.
-- `live-ui/overrides.json`: persisted state, versionable. It only shows when Live
-  UI is enabled.
-- `.runtime.json` and `.defines.json`: local ignored files, mode 0600, with an
-  ephemeral token. They must not go into Git.
-
-The bridge atomically replaces the JSON before publishing a revision. Flutter
-receives the revision through long polling, updates an `InheritedNotifier` and
-confirms when a frame ends. The same state tree, controllers and focus stay
-mounted. Changes made directly to the JSON are read when the bridge starts;
-during a session, use `patch` to persist and notify together.
-
-The connection requires debug + `MANA_LIVE_UI=true`. Profile/release use the
-values in the code, including incorporated adjustments. The bridge listens only on
-127.0.0.1 and requires a token; it accepts visual properties only. There is no code
-evaluation, command execution or credential collection. The design system takes
-ordinary optional parameters, without depending on this package.
-
-This does not turn any Dart edit into an instant edit. New widgets, actions,
-dependencies or exposed properties need compilation/hot reload. Promotion to code
-is explicit: `incorporate` prepares the review and `incorporate --write` writes
-the values into Dart/ARB.
-
-On a local web build, one batch of seven properties was confirmed 38.1 ms after the
-patch, and ten following batches had a median of 33.3 ms (min 26.5, max 46.5 ms;
-[samples](measurements.json)). The metric starts after the patch is read and
-validated, before persistence, and ends when the bridge receives Flutter's
-`endOfFrame` confirmation. It excludes the agent's decision, tool calls and the
-physical scanout; it is not a total perceived-latency benchmark.
-
-### Incorporating into the app
-
-```sh
-framework/moments/moments live incorporate
-framework/moments/moments live incorporate --write
-```
-
-The first command shows property, file, current and proposed value, without
-changing sources, and saves an ignored local plan. The second recomputes the plan
-and refuses to write if sources, schema, mapping or preview changed since the
-review. It requires no commit, publication or external approval.
-
-`live-ui/targets.json` maps properties to ARB keys or enum constants in existing
-files inside `lib/`. Text goes to the edited language's ARB; other languages'
-translations stay intact. Labels with ICU placeholders need an explicit
-localisation edit. Properties without a declared target are never incorporated
-silently.
-
-Visual adjustments live in a presentation file as ordinary Dart constants the View
-uses as defaults. That file neither imports Live UI nor reads JSON at runtime. It
-is not an arbitrary Dart rewriter: the adapter recognises explicitly mapped
-`const name = Type.value;` initialisers.
-
-After writing, run `flutter gen-l10n` in the client and use the normal
-recompile/reload flow. Incorporation keeps the preview, since the open app still
-contains the previously compiled defaults. After recompiling, `reset --wait` can
-clear the preview. Reset does not undo incorporation; for that, review/revert only
-the matching hunks in Git.
-
-Writing preserves unrelated content. Write errors try to restore files already
-written, without overwriting a new concurrent change. There is no transaction
-across files that survives an abrupt stop; after an interruption, review the diff
-before repeating. Leftover temporary files block a repetition instead of being
-overwritten.
-
 ## Focused verification
 
 ```sh
@@ -184,6 +86,5 @@ overwritten.
 (cd framework/flutter/live_ui && flutter test)
 ```
 
-The bridge test uses real HTTP and a temporary disk: authentication, origin,
-atomic batch validation, revision delivery, confirmation, reset and persistence
-across sessions.
+The bridge test uses real HTTP and a temporary disk: authentication, origin and
+the absence of the removed presentation endpoints.

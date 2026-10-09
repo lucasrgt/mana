@@ -123,7 +123,6 @@ void main() {
     final snapshot = response.body!;
     expect((snapshot['nodes']! as List).length, 1);
     expect(snapshot['client'], 'owner');
-    expect(snapshot['sourceMode'], 'original');
     expect(jsonEncode(snapshot).contains('private'), isFalse);
   });
 

@@ -71,7 +71,7 @@ final class Fixture {
     Future<void> Function(String name)? afterPreparedOpen,
   }) async {
     final bridge = await Bridge.start(
-      directory: p.join(root, 'live-ui'),
+      project: root,
       port: 0,
       momentsOptions: MomentsOptions(manifestFile: file, prepare: prepare, afterPreparedOpen: afterPreparedOpen),
     );

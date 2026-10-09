@@ -286,7 +286,7 @@ Future<Map<String, Object?>> runSuite({
         );
         final resolve = adapter.resolveInput;
         worker.bridge = await Bridge.start(
-          directory: p.join(project, 'live-ui'),
+          project: project,
           sessionDirectory: p.join(run, 'worker-$index'),
           port: 0,
           momentsOptions: MomentsOptions(

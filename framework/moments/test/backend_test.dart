@@ -79,7 +79,7 @@ void main() {
       'account': {'email': 'fixture@moments.invalid', 'password': 'disposable'},
       'route': '/traveler/reservations',
     };
-    final bridge = await Bridge.start(directory: directory, port: 0, momentsEnabled: false, bootstrap: () => launch);
+    final bridge = await Bridge.start(project: directory, port: 0, momentsEnabled: false, bootstrap: () => launch);
     addTearDown(bridge.close);
     final auth = {'Authorization': 'Bearer ${bridge.token}'};
     expect((await send(bridge, 'GET', '/moments/bootstrap')).status, 401);
@@ -88,7 +88,6 @@ void main() {
       403,
     );
     expect(jsonDecode((await send(bridge, 'GET', '/moments/bootstrap', headers: auth)).text), launch);
-    expect((await send(bridge, 'GET', '/state', headers: auth)).text.contains('disposable'), isFalse);
     expect(
       (await send(
         bridge,
@@ -111,7 +110,7 @@ void main() {
     };
     final renewal = Renewing();
     final bridge = await Bridge.start(
-      directory: directory,
+      project: directory,
       port: 0,
       momentsEnabled: false,
       bootstrap: () => launch,

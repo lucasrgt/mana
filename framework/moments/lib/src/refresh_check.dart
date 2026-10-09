@@ -52,6 +52,7 @@ Future<({int id, Map<String, Object?> snapshot})> refreshForCheck({
     refresh.addAll({
       'phase': current['phase'],
       'strategy': current['strategy'] ?? 'restart',
+      'waitMs': current['waitMs'],
       'compileMs': current['compileMs'],
       'restoreMs': current['restoreMs'],
       'totalMs': current['totalMs'],

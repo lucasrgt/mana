@@ -36,11 +36,9 @@ typedef Answer = ({int status, Map<String, Object?> data});
 /// A bridge over one `inbox` Moment.
 final class Fixture {
   Fixture(String prefix, {bool withChecks = true}) : root = temporary(prefix) {
-    for (final dir in ['live-ui', 'moments', 'lib']) {
+    for (final dir in ['moments', 'lib']) {
       Directory(p.join(root, dir)).createSync();
     }
-    writeJson(p.join(root, 'live-ui/schema.json'), <String, Object?>{});
-    writeJson(p.join(root, 'live-ui/overrides.json'), {'version': 1, 'values': <String, Object?>{}});
     File(p.join(root, 'lib/view.dart')).writeAsStringSync('// view');
     writeJson(manifestFile, {
       'version': 1,
@@ -59,7 +57,7 @@ final class Fixture {
 
   Future<Bridge> start({String? initialName}) async {
     bridge = await Bridge.start(
-      directory: p.join(root, 'live-ui'),
+      project: root,
       port: 0,
       momentsOptions: MomentsOptions(manifestFile: manifestFile, initialName: initialName),
     );

@@ -8,7 +8,7 @@ defmodule Moments.Manifest do
     screens =
       Map.new(manifests, fn m ->
         [route] = m["properties"]["route"]["enum"]
-        {route, Map.take(m, ["properties", "watch", "liveUiPrefix", "clientRoots"])}
+        {route, Map.take(m, ["properties", "watch", "clientRoots"])}
       end)
 
     scenes = Enum.flat_map(manifests, &Map.to_list(&1["moments"]))
@@ -100,7 +100,6 @@ defmodule Moments.Manifest do
       "version" => 1,
       "generator" => "Moments.Extension",
       "domain" => inspect(module),
-      "liveUiPrefix" => Dsl.get_opt(module, [:moments], :live_ui_prefix),
       "properties" => Map.put(properties, "route", %{"enum" => [route]}),
       "clientRoots" => Enum.uniq(client_roots),
       "watch" => Enum.uniq(client_roots ++ Dsl.get_opt(module, [:moments], :watch, [])),

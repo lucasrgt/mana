@@ -407,6 +407,14 @@ final class Moments implements WatchedMoments, GestureMoments {
 
   List<String> get watchPaths => ((_contract['watch'] as List?) ?? const []).cast<String>();
   Map<String, Object?> sourceSnapshot({bool fresh = false}) => _sources.snapshot(fresh: fresh);
+  List<String> get sourceLibraries {
+    try {
+      return [for (final package in _sources.localPackages()) package.library];
+    } on MomentsError {
+      return const [];
+    }
+  }
+
   @override
   String sourceFingerprint() => _codeHash();
 
@@ -425,7 +433,6 @@ final class Moments implements WatchedMoments, GestureMoments {
       codeChanged = null;
       sourceIssue = 'A watched source is unavailable';
     }
-    final route = (_state?['projection'] as Map?)?['route'];
     return {
       ..._snapshot(),
       'observed': _observed,
@@ -437,10 +444,6 @@ final class Moments implements WatchedMoments, GestureMoments {
         for (final name in names) {'name': name, 'saved': _states.containsKey(name), 'active': _state?['name'] == name},
       ],
       'watch': _contract['watch'],
-      'liveUiPrefix':
-          ((_contract['screens'] as Map?)?[route] as Map?)?['liveUiPrefix'] ??
-          current.manifest?['liveUiPrefix'] ??
-          _contract['liveUiPrefix'],
       'declaration': _options.manifestFile ?? _mapFile,
       'codeChanged': codeChanged,
       'sourceIssue': ?sourceIssue,

@@ -113,7 +113,6 @@ defmodule Moments.Extension do
     schema: [
       route: [type: :string, required: true],
       base: [type: :atom],
-      live_ui_prefix: [type: :string],
       watch: [type: {:list, :string}, default: []],
       client_roots: [type: {:list, :string}, default: []]
     ],

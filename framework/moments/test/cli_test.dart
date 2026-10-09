@@ -288,10 +288,6 @@ void main() {
 
   test('short CLI fresh replaces only the selected saved UI and rejects a stale capture', () async {
     final (:root, :app) = fixture();
-    final directory = p.join(app, 'live-ui');
-    Directory(directory).createSync();
-    File(p.join(directory, 'schema.json')).writeAsStringSync('{}');
-    writeJson(p.join(directory, 'overrides.json'), {'version': 1, 'values': <String, Object?>{}});
     final initial = {'route': '/inbox', 'filter': 'all', 'draft': ''};
     final manifestFile = p.join(app, 'moments/manifest.json');
     writeJson(manifestFile, {
@@ -312,7 +308,7 @@ void main() {
       },
     });
     final bridge = await Bridge.start(
-      directory: directory,
+      project: app,
       port: 0,
       momentsOptions: MomentsOptions(manifestFile: manifestFile, initialName: 'inbox'),
     );

@@ -38,11 +38,9 @@ void json(String root, String path, Object? value) => writeJson(p.join(root, pat
 void main() {
   test('named recipes restore drafts across bridge/runtime restart without capturing secrets', () async {
     final root = temporary('moments-');
-    for (final dir in ['live-ui', 'moments', 'lib']) {
+    for (final dir in ['moments', 'lib']) {
       Directory(p.join(root, dir)).createSync();
     }
-    json(root, 'live-ui/schema.json', <String, Object?>{});
-    json(root, 'live-ui/overrides.json', {'version': 1, 'values': <String, Object?>{}});
     File(p.join(root, 'MOMENTS.md')).writeAsStringSync(
       '# Test\nmoments: 0.1\nlayers: client=flutter-draft\n\n## empty\nrun: flutter-draft moments/recipes.json#empty\nOpen the form.\n\n## filled\nfrom: empty\nrun: flutter-draft moments/recipes.json#filled\nFill the email.\n',
     );
@@ -68,7 +66,7 @@ void main() {
         'selection': [18, 18],
       },
     });
-    var bridge = await Bridge.start(directory: p.join(root, 'live-ui'), port: 0);
+    var bridge = await Bridge.start(project: root, port: 0);
     try {
       final opened = await moment(bridge, 'open', {'name': 'filled'});
       expect((projectionOf(opened)['fields']! as Map)['email'], 'pilot@example.test');
@@ -164,7 +162,7 @@ void main() {
       );
       expect(session.readAsStringSync(), disk);
       await bridge.close();
-      bridge = await Bridge.start(directory: p.join(root, 'live-ui'), port: 0);
+      bridge = await Bridge.start(project: root, port: 0);
       final restored = await moment(bridge, 'changes?since=&client=restarted');
       expect(
         bridge.moments!.hasObservedRuntime(),
@@ -190,13 +188,10 @@ void main() {
       );
       final waiting = moment(bridge, 'changes?since=${restored['revision']}&client=restarted');
       await Future<void>.delayed(const Duration(milliseconds: 15));
-      final presentation = await call(bridge.url, bridge.token, '/state');
-      final orphanedPresentation = raw(bridge, '/changes?since=${presentation.value['revision']}&session=retired');
       final orphanedInspector = raw(bridge, '/render/next?client=restarted');
-      // Let both real HTTP long-polls reach the bridge before transferring ownership.
+      // Let the real HTTP long-poll reach the bridge before transferring ownership.
       await Future<void>.delayed(const Duration(milliseconds: 15));
       await moment(bridge, 'changes?since=&client=new-owner');
-      expect(await orphanedPresentation, 204, reason: 'Do not retain an old presentation poll for 20 seconds');
       expect(await orphanedInspector, 409, reason: 'Old inspector must stop polling');
       expect((await waiting)['status'], 409);
       final reset = await moment(bridge, 'reset', {});
@@ -211,11 +206,9 @@ void main() {
 
   test('warm screen navigation preserves filters and scroll across process restart', () async {
     final root = temporary('screen-moment-');
-    for (final dir in ['live-ui', 'screen', 'lib']) {
+    for (final dir in ['screen', 'lib']) {
       Directory(p.join(root, dir)).createSync();
     }
-    json(root, 'live-ui/schema.json', <String, Object?>{});
-    json(root, 'live-ui/overrides.json', {'version': 1, 'values': <String, Object?>{}});
     File(p.join(root, 'screen/MOMENTS.md')).writeAsStringSync(
       '# Test\nmoments: 0.1\nlayers: app=flutter-screen\n\n## checkout-open\nrun: flutter-screen recipes.json#checkout-open\nOpen the reservations.\n',
     );
@@ -249,7 +242,7 @@ void main() {
     };
     json(root, 'screen/.session.json', legacy);
     final session = File(p.join(root, 'screen/.session.json'));
-    var bridge = await Bridge.start(directory: p.join(root, 'live-ui'), port: 0, momentsOptions: options);
+    var bridge = await Bridge.start(project: root, port: 0, momentsOptions: options);
     expect(
       jsonDecode(session.readAsStringSync()),
       legacy,
@@ -310,7 +303,7 @@ void main() {
         reason: 'An edit during compilation cannot be marked applied',
       );
       await bridge.close();
-      bridge = await Bridge.start(directory: p.join(root, 'live-ui'), port: 0, momentsOptions: options);
+      bridge = await Bridge.start(project: root, port: 0, momentsOptions: options);
       expect(projectionOf(await moment(bridge, 'changes?since=&client=two')), saved);
       expect(projectionOf(await moment(bridge, 'reset', {})), initial);
     } finally {
@@ -320,10 +313,7 @@ void main() {
 
   test('Ash manifest drives the bridge catalog, restores named views, and validates captures', () async {
     final root = temporary('ash-moments-');
-    Directory(p.join(root, 'live-ui')).createSync();
     Directory(p.join(root, 'moments')).createSync();
-    json(root, 'live-ui/schema.json', <String, Object?>{});
-    json(root, 'live-ui/overrides.json', {'version': 1, 'values': <String, Object?>{}});
     // Generated from the retained Ash declarations; independent of the active pilot catalog.
     final manifest = (readJson(p.join(package, 'test/fixtures/legacy-moments.json'))! as Map).cast<String, Object?>();
     for (final path in (manifest['watch']! as List).cast<String>()) {
@@ -340,7 +330,7 @@ void main() {
       fresh: fresh,
       prepare: (_) async {},
     );
-    var bridge = await Bridge.start(directory: p.join(root, 'live-ui'), port: 0, momentsOptions: options());
+    var bridge = await Bridge.start(project: root, port: 0, momentsOptions: options());
     Future<({int code, Object? data})> request(String op, [Map<String, Object?>? body]) async {
       final client = HttpClient();
       try {
@@ -472,7 +462,7 @@ void main() {
       );
       expect(projection(await request('open', {'name': 'checkout-confirmed'})), saved);
       await bridge.close();
-      bridge = await Bridge.start(directory: p.join(root, 'live-ui'), port: 0, momentsOptions: options());
+      bridge = await Bridge.start(project: root, port: 0, momentsOptions: options());
       expect(projection(await request('changes?since=&client=second')), saved);
       expect((await request('open', {'name': 'missing'})).code, 400);
       (((manifest['moments']! as Map)['checkout-confirmed'] as Map)['projection'] as Map)['dayFilter'] = 'today';
@@ -492,7 +482,7 @@ void main() {
       await request('open', {'name': 'checkout-open'});
       await bridge.close();
       bridge = await Bridge.start(
-        directory: p.join(root, 'live-ui'),
+        project: root,
         port: 0,
         momentsOptions: options(openName: 'checkout-confirmed'),
       );
@@ -508,7 +498,7 @@ void main() {
       (((disk['states']! as Map)['checkout-confirmed'] as Map)['projection'] as Map)['filter'] = 'retired';
       json(root, 'moments/.session.json', disk);
       bridge = await Bridge.start(
-        directory: p.join(root, 'live-ui'),
+        project: root,
         port: 0,
         momentsOptions: options(openName: 'checkout-confirmed', fresh: true),
       );
@@ -520,11 +510,9 @@ void main() {
 
   test('prepared open awaits launch restoration; check-only opens never reapply sessions', () async {
     final root = temporary('prepared-session-');
-    for (final dir in ['live-ui', 'moments']) {
+    for (final dir in ['moments']) {
       Directory(p.join(root, dir)).createSync();
     }
-    json(root, 'live-ui/schema.json', <String, Object?>{});
-    json(root, 'live-ui/overrides.json', {'version': 1, 'values': <String, Object?>{}});
     json(root, 'moments/manifest.json', {
       'version': 1,
       'watch': <Object?>[],
@@ -549,7 +537,7 @@ void main() {
     var fail = false;
     late Bridge bridge;
     bridge = await Bridge.start(
-      directory: p.join(root, 'live-ui'),
+      project: root,
       port: 0,
       momentsOptions: MomentsOptions(
         manifestFile: p.join(root, 'moments/manifest.json'),

@@ -40,6 +40,10 @@ abstract interface class WatchedMoments {
 /// Resolved local Dart inventory plus explicitly watched files. Content
 /// hashing also sees atomic saves. Backend services supply their own source
 /// fingerprint; builds, credentials and generated outputs stay outside it.
+///
+/// File events under [eventRoots] only wake the hash check early; the
+/// fingerprint stays the authority, and polling still covers files outside
+/// those roots and platforms that drop events.
 final class MomentWatcher {
   MomentWatcher({
     required this.project,
@@ -48,8 +52,9 @@ final class MomentWatcher {
     required this.moments,
     this.backend,
     this.enabled = true,
+    List<String> eventRoots = const [],
     Duration interval = const Duration(milliseconds: 150),
-    this.debounce = const Duration(milliseconds: 350),
+    this.debounce = const Duration(milliseconds: 100),
     this.restoreTimeout = const Duration(seconds: 15),
     bool Function()? automaticAllowed,
     void Function(String text)? log,
@@ -59,6 +64,10 @@ final class MomentWatcher {
     _lastSeen = _fingerprint();
     _appliedBackend = backend?.fingerprint();
     _timer = Timer.periodic(interval, (_) => _tick());
+    for (final root in eventRoots.toSet()) {
+      if (!Directory(root).existsSync()) continue;
+      _events.add(Directory(root).watch(recursive: true).listen((_) => _nudge(), onError: (Object _) {}));
+    }
   }
 
   final String project;
@@ -74,6 +83,9 @@ final class MomentWatcher {
   late String _lastSeen;
   String? _appliedBackend;
   late final Timer _timer;
+  final _events = <StreamSubscription<FileSystemEvent>>[];
+  Timer? _wake;
+  double? _detectedAt;
   var _held = false, _closed = false, _busy = false, _dirty = false;
   var _changedAt = DateTime.fromMillisecondsSinceEpoch(0);
   var _sequence = 0;
@@ -105,12 +117,15 @@ final class MomentWatcher {
       return {..._status, 'pending': _dirty};
     }
     _busy = true;
-    _dirty = false;
     final started = nowMs();
+    final waitMs = _dirty && _detectedAt != null ? started - _detectedAt! : null;
+    _dirty = false;
+    _detectedAt = null;
     final id = ++_sequence;
     _publish({
       'id': id,
       'phase': 'compiling',
+      'waitMs': waitMs,
       'error': null,
       'blocker': null,
       'compileMs': null,
@@ -213,8 +228,10 @@ final class MomentWatcher {
       if (hash != _lastSeen) {
         _lastSeen = hash;
         if (enabled) {
+          if (!_dirty) _detectedAt = nowMs();
           _dirty = true;
           _changedAt = DateTime.now();
+          _schedule(debounce);
         }
       }
       if (const ['starting', 'waiting-runtime'].contains(_status['phase']) && machine.ready()) {
@@ -236,6 +253,14 @@ final class MomentWatcher {
     }
   }
 
+  void _nudge() => _schedule(const Duration(milliseconds: 15));
+
+  void _schedule(Duration delay) {
+    if (_closed) return;
+    _wake?.cancel();
+    _wake = Timer(delay, _tick);
+  }
+
   Map<String, Object?> status() => {..._status, 'pending': _dirty, 'held': _held};
 
   void Function() pause() {
@@ -255,5 +280,9 @@ final class MomentWatcher {
   void close() {
     _closed = true;
     _timer.cancel();
+    _wake?.cancel();
+    for (final events in _events) {
+      unawaited(events.cancel());
+    }
   }
 }
