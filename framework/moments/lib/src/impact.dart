@@ -71,6 +71,11 @@ String importsBinary() {
 
 Future<void> buildImportsTool() async {
   final directory = _devtools();
+  // A fresh checkout has not resolved the parser's pinned packages yet.
+  if (!File(p.join(directory, '.dart_tool/package_config.json')).existsSync()) {
+    final resolve = await Process.run('dart', ['pub', 'get', '--enforce-lockfile'], workingDirectory: directory);
+    if (resolve.exitCode != 0) throw const MomentsError('Mana import tool packages could not be resolved');
+  }
   final before = _importsIdentity();
   final binary = p.join(directory, '.dart_tool/mana-imports'), temp = '$binary.${uuidV4()}';
   try {
