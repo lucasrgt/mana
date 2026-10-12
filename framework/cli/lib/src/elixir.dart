@@ -74,9 +74,24 @@ Future<String> ensureElixirImage() async {
   return image;
 }
 
+/// Whether `mix` runs on the Elixir already installed on this machine instead
+/// of the pinned image: `MANA_ELIXIR=local`. For a machine that is itself the
+/// sandbox (a dev container, a CI job) and has no container engine to ask.
+bool localElixir([Map<String, String>? environment]) =>
+    (environment ?? Platform.environment)['MANA_ELIXIR'] == 'local';
+
+// A fresh checkout has its own empty Mix home: install Hex and rebar there
+// first, quietly, when they are missing.
+const _mixScript =
+    'mix local.hex --force --if-missing >/dev/null 2>&1; '
+    'mix local.rebar --force --if-missing >/dev/null 2>&1; '
+    'exec mix "\$@"';
+
 /// Runs `mix` in the pinned Elixir image with [project] (inside the
 /// workspace) as the working directory. Only the names in [environment] are
-/// passed into the container, with the values given here.
+/// passed into the container, with the values given here. With
+/// `MANA_ELIXIR=local` it runs on this machine's Elixir instead, in the same
+/// folder and with the same Mix home, and inherits this process's environment.
 Future<void> mix(
   String project,
   List<String> args, {
@@ -88,6 +103,24 @@ Future<void> mix(
   if (path.startsWith('..') || p.isAbsolute(path)) {
     throw const ManaFailure(
       'Mix project must be inside the vendored workspace',
+    );
+  }
+  if (localElixir()) {
+    final home = p.join(frameworkRoot(), 'ash/.toolchain/home');
+    Directory(home).createSync(recursive: true);
+    return _wait(
+      await Process.start(
+        'sh',
+        ['-c', _mixScript, 'mix', ...args],
+        workingDirectory: p.absolute(project),
+        environment: {
+          'MIX_HOME': p.join(home, '.mix'),
+          'HEX_HOME': p.join(home, '.hex'),
+          'ERL_FLAGS': '+S 4:4',
+          ...environment,
+        },
+        mode: ProcessStartMode.inheritStdio,
+      ),
     );
   }
   final home =
@@ -128,17 +161,17 @@ Future<void> mix(
       image,
       'sh',
       '-c',
-      // A fresh checkout has its own empty Mix home: install Hex and rebar
-      // there first, quietly, when they are missing.
-      'mix local.hex --force --if-missing >/dev/null 2>&1; '
-          'mix local.rebar --force --if-missing >/dev/null 2>&1; '
-          'exec mix "\$@"',
+      _mixScript,
       'mix',
       ...args,
     ],
     environment: environment,
     mode: ProcessStartMode.inheritStdio,
   );
+  return _wait(child);
+}
+
+Future<void> _wait(Process child) async {
   final subscriptions = [
     for (final signal in [ProcessSignal.sigint, ProcessSignal.sigterm])
       signal.watch().listen((_) => child.kill(ProcessSignal.sigterm)),

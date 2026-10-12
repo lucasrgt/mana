@@ -147,6 +147,12 @@ sandbox's PostgreSQL (`MANA_MOMENTS_INSTANCE`, the `instance.json` that
 `LAB_SERVER` and `MOMENTS_RECIPE_TOKEN`, and any variable listed in
 `MANA_LAB_PASS` is passed through.
 
+On a machine that is itself the sandbox (a dev container, a CI job) the lab
+needs no container engine: `MANA_LAB_POSTGRES=postgres://user:password@host:port`
+names a PostgreSQL server already running there, used in place of the Moments
+sandbox (`psql` must be installed), and `MANA_ELIXIR=local` runs `mix` on the
+machine's own Elixir instead of the pinned image.
+
 ## Catalog, features and sensors
 
 Mana is one system. `framework/catalog.toml` lists every piece with how to use it
