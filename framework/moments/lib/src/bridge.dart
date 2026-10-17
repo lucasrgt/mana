@@ -14,6 +14,8 @@ import 'journey_lease.dart';
 import 'json.dart' show nowMs;
 import 'private_store.dart';
 import 'agent_view.dart';
+import 'check.dart' show checkMoment;
+import 'journey.dart' show Request;
 import 'rendered.dart';
 import 'runtime.dart';
 
@@ -32,6 +34,38 @@ void _writePrivate(String path, String content, {bool exclusive = false}) {
     handle.closeSync();
   }
 }
+
+/// The same transport `moments navigate` uses, for a journey the bridge runs on
+/// behalf of a tool that only speaks HTTP to it.
+Request _loopback(String runtimeFile) => (path, [data]) async {
+  final session = (jsonDecode(File(runtimeFile).readAsStringSync()) as Map).cast<String, Object?>();
+  final timeout = Duration(
+    milliseconds: path.startsWith('/render/') || path.startsWith('/journey/')
+        ? 10000
+        : path == '/moments/open'
+        ? 30000
+        : 5000,
+  );
+  final client = HttpClient();
+  try {
+    final request = await client
+        .openUrl(data == null ? 'GET' : 'POST', Uri.parse('${session['url']}$path'))
+        .timeout(timeout);
+    request.headers
+      ..set('Authorization', 'Bearer ${session['token']}')
+      ..set('Content-Type', 'application/json');
+    if (data != null) request.add(utf8.encode(jsonEncode(data)));
+    final response = await request.close().timeout(timeout);
+    final text = await utf8.decoder.bind(response).join().timeout(timeout);
+    final body = (jsonDecode(text) as Map).cast<String, Object?>();
+    if (response.statusCode < 200 || response.statusCode >= 300) throw MomentsError('${body['error']}');
+    return body;
+  } on TimeoutException {
+    throw MomentsError('The bridge did not answer $path within ${timeout.inSeconds} s.');
+  } finally {
+    client.close(force: true);
+  }
+};
 
 /// The loopback HTTP hub between a running Flutter app and the Moments
 /// runner: `/moments/*`, gestures, rendered captures, journey ownership and
@@ -266,6 +300,15 @@ final class Bridge {
               moments: moments,
               development: development,
             ),
+          );
+        }
+        if (moments != null && method == 'POST' && url.path == '/moments/navigate') {
+          final name = (await body())['name'];
+          if (name is! String || name.isEmpty) throw const MomentsError('Moment name required');
+          return reply(
+            response,
+            200,
+            await checkMoment(project: project, name: name, request: _loopback(runtimeFile), navigation: true),
           );
         }
         if (moments != null && await moments.handle(request, url, body)) return;

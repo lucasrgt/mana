@@ -86,6 +86,10 @@ final class AgentChannel {
         }
         if (text != null && (text is! String || text.length > 4000)) throw const MomentsError('Text too long');
         args = {'node': node, 'action': action, if (text != null) 'text': text};
+      } else if (op == 'picture') {
+        final scale = input['scale'];
+        if (scale != null && (scale is! num || scale < 0.05 || scale > 2)) throw const MomentsError('Scale must be between 0.05 and 2');
+        args = {if (scale != null) 'scale': scale};
       } else {
         args = {};
       }

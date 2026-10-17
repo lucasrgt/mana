@@ -75,7 +75,7 @@ final class AgentViewReporter {
           report = request['op'] == 'act'
               ? await _act(request)
               : request['op'] == 'picture'
-              ? await _picture()
+              ? await _picture((request['scale'] as num?)?.toDouble() ?? 1)
               : await _look();
         } on Object catch (error) {
           report = {
@@ -199,14 +199,17 @@ final class AgentViewReporter {
     };
   }
 
-  Future<Map<String, Object?>> _picture() async {
+  Future<Map<String, Object?>> _picture(double scale) async {
     await SchedulerBinding.instance.endOfFrame;
     final view = RendererBinding.instance.renderViews.firstOrNull;
     final layer = view?.debugLayer;
     if (view == null || layer is! OffsetLayer) {
       throw StateError('Nothing is painted yet');
     }
-    final image = await layer.toImage(Offset.zero & view.size);
+    final image = await layer.toImage(
+      Offset.zero & view.size,
+      pixelRatio: scale,
+    );
     try {
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
       if (bytes == null) throw StateError('The frame could not be encoded');
