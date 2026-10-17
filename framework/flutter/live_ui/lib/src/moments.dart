@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 
 import 'agent_view.dart';
+import 'host_zoom.dart' if (dart.library.js_interop) 'host_zoom_web.dart';
 import 'moment_restartable.dart';
 import 'rendered_tree.dart';
 import 'moment_gestures.dart';
@@ -208,6 +209,7 @@ final class MomentController extends ChangeNotifier {
       throw ArgumentError('Moments requires loopback HTTP');
     }
     _endpoint = endpoint;
+    relayZoomToHost();
     _headers = {
       'Authorization': 'Bearer $token',
       'Content-Type': 'application/json',
