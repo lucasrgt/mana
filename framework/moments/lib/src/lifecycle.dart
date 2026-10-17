@@ -204,7 +204,14 @@ final class Lifecycle implements ServiceLifecycle {
   void scan() {
     if (_closed || _tracked.isEmpty) return;
     final processes = <int, Map<String, Object?>>{};
-    for (final entry in Directory('/proc').listSync(followLinks: false)) {
+    final List<FileSystemEntity> entries;
+    try {
+      entries = Directory('/proc').listSync(followLinks: false);
+    } on FileSystemException {
+      // A process can exit while /proc is being listed; the next tick rescans.
+      return;
+    }
+    for (final entry in entries) {
       final id = int.tryParse(p.basename(entry.path));
       if (id == null) continue;
       final value = processIdentity(id);

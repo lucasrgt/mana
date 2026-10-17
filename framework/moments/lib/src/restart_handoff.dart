@@ -32,6 +32,14 @@ final class RestartHandoff {
     current
       ..ready = null
       ..phase = 'resume';
+    // A runtime that dies before acknowledging the resume would otherwise hold
+    // every later restart; the lease it was given bounds that wait here too.
+    current.timer = Timer(Duration(milliseconds: leaseMs), () {
+      if (identical(_current, current)) {
+        _current = null;
+        notify();
+      }
+    });
     notify();
   }
 
@@ -74,6 +82,7 @@ final class RestartHandoff {
       return true;
     }
     if (data['phase'] == 'resumed' && current.phase == 'resume') {
+      current.timer?.cancel();
       _current = null;
       return true;
     }
