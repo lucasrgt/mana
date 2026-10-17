@@ -36,6 +36,7 @@ final class MomentsOptions {
     this.fresh = false,
     this.prepare,
     this.afterPreparedOpen,
+    this.remountOnOpen = false,
     this.onRuntimeClaim,
   });
 
@@ -53,6 +54,11 @@ final class MomentsOptions {
   final bool fresh;
   final Future<void> Function(String name)? prepare;
   final Future<void> Function(String name)? afterPreparedOpen;
+
+  /// Whether [afterPreparedOpen] rebuilds the app with [MomentsRuntime.remount].
+  /// The rebuild is then announced together with the move, so the old app
+  /// never renders the new Moment with the previous launch's session.
+  final bool remountOnOpen;
   final void Function(String client)? onRuntimeClaim;
 
   MomentsOptions copyWith({void Function(String client)? onRuntimeClaim}) => MomentsOptions(
@@ -70,6 +76,7 @@ final class MomentsOptions {
     fresh: fresh,
     prepare: prepare,
     afterPreparedOpen: afterPreparedOpen,
+    remountOnOpen: remountOnOpen,
     onRuntimeClaim: onRuntimeClaim ?? this.onRuntimeClaim,
   );
 }
@@ -321,17 +328,22 @@ final class Moments implements WatchedMoments, GestureMoments {
 
   /// Whether the active runtime can rebuild itself for a newly prepared Moment
   /// without reloading its code (an app wrapped in `MomentRestartable`).
+  String _armRemount() {
+    final id = uuidV4();
+    _remount = (id: id, client: _activeClient!);
+    _notifyWaiters();
+    return id;
+  }
+
   bool canRemount() => _supportsRemount && _activeClient != null && _materialization == null;
 
   /// Asks the active runtime to rebuild its app for the current Moment and waits
   /// until a runtime observes it. The rebuilt tree claims as a new client, as a
   /// restarted one would; the caller falls back to a full restart on failure.
   Future<void> remount({Duration timeout = const Duration(seconds: 15)}) async {
-    final old = _activeClient;
-    if (!canRemount() || old == null) throw const MomentsError('The runtime cannot rebuild itself');
-    final id = uuidV4();
-    _remount = (id: id, client: old);
-    _notifyWaiters();
+    final old = _remount?.client ?? _activeClient;
+    if (old == null || (_remount == null && !canRemount())) throw const MomentsError('The runtime cannot rebuild itself');
+    final id = _remount?.id ?? _armRemount();
     final deadline = DateTime.now().add(timeout);
     try {
       while (DateTime.now().isBefore(deadline)) {
@@ -429,8 +441,14 @@ final class Moments implements WatchedMoments, GestureMoments {
         _preparing = false;
       }
     }
-    _move(name, reset: fresh);
-    if (prepare && declared != null) await _options.afterPreparedOpen?.call(name);
+    final rebuilds = prepare && declared != null;
+    final armed = rebuilds && _options.remountOnOpen && canRemount() ? _armRemount() : null;
+    try {
+      _move(name, reset: fresh);
+      if (rebuilds) await _options.afterPreparedOpen?.call(name);
+    } finally {
+      if (armed != null && _remount?.id == armed) _remount = null;
+    }
     return _snapshot();
   }
 

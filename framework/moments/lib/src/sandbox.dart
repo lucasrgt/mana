@@ -508,6 +508,7 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
         fresh: interrupted != null ? false : options.fresh,
         manifestFile: adapter.manifestFile,
         prepare: backendRecipes.prepare,
+        remountOnOpen: adapter.restartOnOpen,
         afterPreparedOpen: adapter.restartOnOpen
             ? (_) async {
                 final live = bridge?.moments;

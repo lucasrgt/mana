@@ -633,6 +633,7 @@ void main() {
       momentsOptions: MomentsOptions(
         manifestFile: p.join(root, 'moments/manifest.json'),
         prepare: (_) async {},
+        remountOnOpen: true,
         afterPreparedOpen: (_) async {
           final live = bridge.moments!;
           if (live.canRemount()) {
@@ -657,10 +658,8 @@ void main() {
 
     final first = await changes('a', remount: true);
     final opened = call(bridge.url, bridge.token, '/moments/open', {'name': 'second'});
-    Answer told = {};
-    for (var i = 0; i < 100 && told['remount'] == null; i++) {
-      told = await changes('a', since: first['revision']! as String, remount: true);
-    }
+    // The old app hears of the rebuild with the move itself, never the move alone.
+    final told = await changes('a', since: first['revision']! as String, remount: true);
     expect(told['remount'], isA<Map>());
     final rebuilt = await changes('b', remount: true);
     expect(
