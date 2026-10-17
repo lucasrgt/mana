@@ -32,6 +32,29 @@ Every run leaves a short receipt of what code ran, what was observed and what pa
 The protocol is written down in
 [framework/moments/protocol-v0.1.md](framework/moments/protocol-v0.1.md).
 
+## Start a project
+
+```sh
+git clone https://github.com/lucasrgt/mana.git
+mana/framework/cli/mana new notes          # writes ./notes and sets it up
+cd notes
+mana/framework/moments/moments suite --headless --project app
+```
+
+`mana new` writes a whole project around Mana: an Ash backend (`backend/`), a
+Flutter app (`app/`) with its generated API client (`packages/api/`), and two
+Moments that prove the stack end to end. Mana itself goes in as a git submodule at
+`mana/`, pinned to the release you ran the command from. It fetches the
+dependencies, writes the first migration, generates the client, syncs the Moments
+and commits, so the suite above passes at once. The project's README lists the
+everyday commands; `mana lab` runs its backend against a Moments sandbox.
+
+The starter is a list of notes, small on purpose: replace `Notes` with your domain
+and keep the wiring.
+
+To move a project to a newer Mana, check the submodule out at the new release and
+commit it: `git -C mana checkout v0.2.0`.
+
 ## Layout
 
 | Path | What it is |
