@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 
+import 'agent_view.dart';
 import 'rendered_tree.dart';
 import 'moment_gestures.dart';
 import 'restart_frames.dart';
@@ -420,6 +421,7 @@ final class _MomentHostState extends State<MomentHost> {
   MomentController? _controller;
   RenderedTreeReporter? _rendered;
   MomentGestureReporter? _gestures;
+  AgentViewReporter? _agent;
   @override
   void initState() {
     super.initState();
@@ -438,6 +440,13 @@ final class _MomentHostState extends State<MomentHost> {
       );
       _rendered = RenderedTreeReporter(_controller!);
       _gestures = MomentGestureReporter(_controller!);
+      _agent = AgentViewReporter(_controller!);
+      unawaited(
+        _agent!.connect(
+          Uri.parse(MomentRuntime.bridgeUrl),
+          MomentRuntime.bridgeToken,
+        ),
+      );
       unawaited(
         _gestures!.connect(
           Uri.parse(MomentRuntime.bridgeUrl),
@@ -457,6 +466,7 @@ final class _MomentHostState extends State<MomentHost> {
   void dispose() {
     _rendered?.dispose();
     _gestures?.dispose();
+    _agent?.dispose();
     _controller?.dispose();
     super.dispose();
   }

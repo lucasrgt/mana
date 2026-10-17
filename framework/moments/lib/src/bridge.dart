@@ -13,6 +13,7 @@ import 'inspect.dart';
 import 'journey_lease.dart';
 import 'json.dart' show nowMs;
 import 'private_store.dart';
+import 'agent_view.dart';
 import 'rendered.dart';
 import 'runtime.dart';
 
@@ -71,6 +72,7 @@ final class Bridge {
         ? PrivateStore(file: p.join(sessionDirectory, 'actor-state.json'), keys: privateStores)
         : null;
     late final RenderedChannel rendered;
+    late final AgentChannel agent;
     late final GestureChannel gestures;
     final moments = momentsEnabled
         ? Moments.create(
@@ -82,11 +84,13 @@ final class Bridge {
                 // they fill the browser's per-origin HTTP connection pool.
                 rendered.retireOthers(client);
                 gestures.retireOthers(client);
+                agent.retireOthers(client);
               },
             ),
           )
         : null;
     rendered = RenderedChannel(moments: moments);
+    agent = AgentChannel(moments: moments);
     bool ready() {
       final status = development?.status();
       return status == null ||
@@ -220,6 +224,7 @@ final class Bridge {
           }
         }
         if (await rendered.handle(request, url, onceBody(request, limit: 262144))) return;
+        if (await agent.handle(request, url, onceBody(request, limit: 16 * 1024 * 1024))) return;
         if (await gestures.handle(request, url, body)) return;
         if (privateStore != null && await privateStore.handle(request, url, body)) return;
         if (method == 'GET' && url.path == '/moments/bootstrap') return reply(response, 200, bootstrap?.call());
@@ -284,6 +289,7 @@ final class Bridge {
       if (closed) return;
       closed = true;
       rendered.close();
+      agent.close();
       gestures.close();
       moments?.close();
       await server.close(force: true);
