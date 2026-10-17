@@ -1,6 +1,8 @@
 import 'package:flutter/widgets.dart';
 
 import 'configuration.dart';
+import 'moments.dart' show MomentHost;
+import 'timing.dart';
 import 'page_reload.dart' if (dart.library.js_interop) 'page_reload_web.dart';
 
 /// The root of an app that can be rebuilt for a newly prepared Moment without
@@ -25,8 +27,24 @@ final class _MomentRestartableState extends State<MomentRestartable> {
   @override
   void initState() {
     super.initState();
-    MomentRemount._handler = _load;
+    MomentRemount._handler = _remount;
     _load();
+  }
+
+  Future<void> _remount() async {
+    final relaunch = MomentRemount._relaunch;
+    if (relaunch != null) {
+      MomentTiming.start();
+      try {
+        if (await relaunch()) {
+          MomentHost.reconnect();
+          return;
+        }
+      } on Object catch (error) {
+        debugPrint('Moments: the app could not take the Moment in place ($error); rebuilding');
+      }
+    }
+    await _load();
   }
 
   Future<void> _load() async {
@@ -36,6 +54,7 @@ final class _MomentRestartableState extends State<MomentRestartable> {
     // queue the rebuilt app's launch and claim behind them.
     final remounting = _child != null;
     if (remounting) {
+      MomentTiming.start();
       setState(() => _child = null);
       await WidgetsBinding.instance.endOfFrame;
     }
@@ -56,7 +75,7 @@ final class _MomentRestartableState extends State<MomentRestartable> {
 
   @override
   void dispose() {
-    if (MomentRemount._handler == _load) MomentRemount._handler = null;
+    if (MomentRemount._handler == _remount) MomentRemount._handler = null;
     super.dispose();
   }
 
@@ -66,6 +85,14 @@ final class _MomentRestartableState extends State<MomentRestartable> {
 
 abstract final class MomentRemount {
   static Future<void> Function()? _handler;
+  static Future<bool> Function()? _relaunch;
+
+  /// Lets the running app take a newly prepared Moment without being rebuilt,
+  /// the way it would take a person signing out and in as someone else:
+  /// [relaunch] applies the new launch and answers whether it could. When it
+  /// cannot, or throws, the app is rebuilt. Pass null to withdraw it.
+  static void relaunchInPlace(Future<bool> Function()? relaunch) =>
+      _relaunch = relaunch;
 
   static bool get available => momentsBuild && _handler != null;
 

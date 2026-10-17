@@ -328,6 +328,12 @@ final class Moments implements WatchedMoments, GestureMoments {
 
   /// Whether the active runtime can rebuild itself for a newly prepared Moment
   /// without reloading its code (an app wrapped in `MomentRestartable`).
+  static List<String> _rebuildSpans(Object? timing) => [
+    if (timing is Map && timing['spans'] is List)
+      for (final span in timing['spans'] as List)
+        if (span is Map) '${span['stage']} ${(span['durationMs'] as num?)?.round()}',
+  ];
+
   String _armRemount() {
     final id = uuidV4();
     _remount = (id: id, client: _activeClient!);
@@ -345,11 +351,18 @@ final class Moments implements WatchedMoments, GestureMoments {
     if (old == null || (_remount == null && !canRemount())) throw const MomentsError('The runtime cannot rebuild itself');
     final id = _remount?.id ?? _armRemount();
     final deadline = DateTime.now().add(timeout);
+    final clock = Stopwatch()..start();
+    int? claimed;
     try {
       while (DateTime.now().isBefore(deadline)) {
-        if (_activeClient != old && _observed?['revision'] == _revision) return;
+        if (_activeClient != old) claimed ??= clock.elapsedMilliseconds;
+        if (_activeClient != old && _observed?['revision'] == _revision) {
+          stderr.writeln('Moments: rebuilt in ${clock.elapsedMilliseconds} ms (claimed at ${claimed} ms) ${jsonEncode(_rebuildSpans(_observed?['timing']))}');
+          return;
+        }
         await Future<void>.delayed(const Duration(milliseconds: 30));
       }
+      stderr.writeln('Moments: rebuild timed out (claimed at ${claimed ?? '-'} ms, observed ${_observed?['revision'] == _revision})');
       throw const MomentsError('The rebuilt app did not report the Moment');
     } finally {
       if (_remount?.id == id) _remount = null;

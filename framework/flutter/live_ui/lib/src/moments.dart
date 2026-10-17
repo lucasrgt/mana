@@ -418,11 +418,21 @@ final class MomentHost extends StatefulWidget {
   /// This callback must be pure; it never prepares data or executes an action.
   final String Function(Map<String, dynamic> projection)? resolveRoute;
   final Widget child;
+
+  /// Gives every live host a new runtime client, which claims the Moment
+  /// afresh: how an app that took a new launch in place reports it.
+  static void reconnect() {
+    for (final host in [..._MomentHostState._live]) {
+      host._reconnect();
+    }
+  }
+
   @override
   State<MomentHost> createState() => _MomentHostState();
 }
 
 final class _MomentHostState extends State<MomentHost> {
+  static final _live = <_MomentHostState>{};
   MomentController? _controller;
   RenderedTreeReporter? _rendered;
   MomentGestureReporter? _gestures;
@@ -430,49 +440,46 @@ final class _MomentHostState extends State<MomentHost> {
   @override
   void initState() {
     super.initState();
-    if (momentsBuild && momentsEnabled) {
-      _controller = MomentController(
-        navigate: (route) => widget.navigate(route),
-        resolveRoute: (projection) =>
-            widget.resolveRoute?.call(projection) ??
-            projection['route'] as String,
-      );
-      unawaited(
-        _controller!.connect(
-          Uri.parse(MomentRuntime.bridgeUrl),
-          MomentRuntime.bridgeToken,
-        ),
-      );
-      _rendered = RenderedTreeReporter(_controller!);
-      _gestures = MomentGestureReporter(_controller!);
-      _agent = AgentViewReporter(_controller!);
-      unawaited(
-        _agent!.connect(
-          Uri.parse(MomentRuntime.bridgeUrl),
-          MomentRuntime.bridgeToken,
-        ),
-      );
-      unawaited(
-        _gestures!.connect(
-          Uri.parse(MomentRuntime.bridgeUrl),
-          MomentRuntime.bridgeToken,
-        ),
-      );
-      unawaited(
-        _rendered!.connect(
-          Uri.parse(MomentRuntime.bridgeUrl),
-          MomentRuntime.bridgeToken,
-        ),
-      );
-    }
+    _live.add(this);
+    _connect();
   }
 
-  @override
-  void dispose() {
+  void _connect() {
+    if (!momentsBuild || !momentsEnabled) return;
+    final endpoint = Uri.parse(MomentRuntime.bridgeUrl);
+    final token = MomentRuntime.bridgeToken;
+    final controller = _controller = MomentController(
+      navigate: (route) => widget.navigate(route),
+      resolveRoute: (projection) =>
+          widget.resolveRoute?.call(projection) ??
+          projection['route'] as String,
+    );
+    unawaited(controller.connect(endpoint, token));
+    _rendered = RenderedTreeReporter(controller);
+    _gestures = MomentGestureReporter(controller);
+    _agent = AgentViewReporter(controller);
+    unawaited(_agent!.connect(endpoint, token));
+    unawaited(_gestures!.connect(endpoint, token));
+    unawaited(_rendered!.connect(endpoint, token));
+  }
+
+  void _disconnect() {
     _rendered?.dispose();
     _gestures?.dispose();
     _agent?.dispose();
     _controller?.dispose();
+  }
+
+  void _reconnect() {
+    if (_controller == null) return;
+    _disconnect();
+    setState(_connect);
+  }
+
+  @override
+  void dispose() {
+    _live.remove(this);
+    _disconnect();
     super.dispose();
   }
 
