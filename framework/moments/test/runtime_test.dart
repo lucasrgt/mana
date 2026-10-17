@@ -602,4 +602,80 @@ void main() {
     fail = true;
     expect(await open(true), 400);
   });
+
+  test('a prepared open rebuilds a runtime that can remount, and restarts one that cannot', () async {
+    final root = temporary('remount-');
+    Directory(p.join(root, 'moments')).createSync();
+    final moment = {
+      'description': 'Session',
+      'projection': {'route': '/sign-in', 'phase': 'anonymous'},
+      'checks': <Object?>[],
+      'backend': {'recipe': 'login'},
+    };
+    json(root, 'moments/manifest.json', {
+      'version': 1,
+      'watch': <Object?>[],
+      'properties': {
+        'route': {
+          'enum': ['/sign-in'],
+        },
+        'phase': {
+          'enum': ['anonymous'],
+        },
+      },
+      'moments': {'first': moment, 'second': moment},
+    });
+    final events = <String>[];
+    late Bridge bridge;
+    bridge = await Bridge.start(
+      project: root,
+      port: 0,
+      momentsOptions: MomentsOptions(
+        manifestFile: p.join(root, 'moments/manifest.json'),
+        prepare: (_) async {},
+        afterPreparedOpen: (_) async {
+          final live = bridge.moments!;
+          if (live.canRemount()) {
+            await live.remount(timeout: const Duration(seconds: 5));
+            events.add('remount');
+          } else {
+            events.add('restart');
+          }
+        },
+      ),
+    );
+    addTearDown(bridge.close);
+    Future<Answer> changes(String client, {String? since, bool remount = false}) async {
+      final query = {'client': client, if (since != null) 'since': since, if (remount) 'remount': '1'};
+      final (:code, :value) = await call(
+        bridge.url,
+        bridge.token,
+        '/moments/changes?${Uri(queryParameters: query).query}',
+      );
+      return {'status': code, ...value};
+    }
+
+    final first = await changes('a', remount: true);
+    final opened = call(bridge.url, bridge.token, '/moments/open', {'name': 'second'});
+    Answer told = {};
+    for (var i = 0; i < 100 && told['remount'] == null; i++) {
+      told = await changes('a', since: first['revision']! as String, remount: true);
+    }
+    expect(told['remount'], isA<Map>());
+    final rebuilt = await changes('b', remount: true);
+    expect(
+      (await call(bridge.url, bridge.token, '/moments/observe', {
+        'revision': rebuilt['revision'],
+        'client': 'b',
+        'projection': {'route': '/sign-in', 'phase': 'anonymous'},
+      })).code,
+      200,
+    );
+    expect((await opened).code, 200);
+    expect(events, ['remount']);
+
+    await changes('c');
+    expect((await call(bridge.url, bridge.token, '/moments/open', {'name': 'first'})).code, 200);
+    expect(events, ['remount', 'restart']);
+  });
 }

@@ -52,6 +52,22 @@ An ask becomes situations a person judges and criteria that freeze before implem
 - **Instead of:** acceptance criteria in chat that drift; "done" decided by the implementer; specs written as prose nobody checks
 - **Docs:** `framework/cli/lib/src/intents.dart`
 
+### Moments agent view (`moments-agent-view`)
+
+What an agent sees of the active Moment's screen (the semantics tree: roles, labels, values, positions) and the semantics actions it can take, plus a picture of the frame; debug builds only.
+
+- **Use:** POST the bridge's /agent/look, /agent/act {node, action, text} or /agent/picture with its Bearer token while a moments up client is connected; actions are tap, longPress, setText, focus, scroll*, increase, decrease, dismiss.
+- **Instead of:** pixel computer use on a Flutter canvas; coordinate clicks; the rendered capture for reading text (it deliberately carries none)
+- **Docs:** `framework/moments/lib/src/agent_view.dart`
+
+### Moment remount (`moment-restartable`)
+
+Switch between prepared Moments by rebuilding the app's tree for the new Moment instead of hot restarting: no recompile, no code reload; falls back to a restart when the rebuilt app does not report.
+
+- **Use:** In main(), runApp(MomentRestartable(build: () async { final launch = await prepare...(); return App(...); })) so everything that depends on the Moment (launch, persona session, start route) runs inside build. Keep app state in the widget tree; globals outside build survive a remount.
+- **Instead of:** a hot restart per Moment switch in restartOnOpen adapters
+- **Docs:** `framework/flutter/live_ui/lib/src/moment_restartable.dart`
+
 ## Core
 
 ### API contract and generated client (`contracts`)

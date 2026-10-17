@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 
 import 'agent_view.dart';
+import 'moment_restartable.dart';
 import 'rendered_tree.dart';
 import 'moment_gestures.dart';
 import 'restart_frames.dart';
@@ -222,6 +223,7 @@ final class MomentController extends ChangeNotifier {
                   'client': clientId,
                   'frame': '1',
                   'captureFrame': '1',
+                  if (MomentRemount.available) 'remount': '1',
                 },
               ),
           headers: _headers,
@@ -242,6 +244,7 @@ final class MomentController extends ChangeNotifier {
           await _restart(control);
           if (_disposed) return;
         }
+        if (data['remount'] is Map && MomentRemount.request()) return;
         restore(
           data['revision'] as String,
           data['state'] as Map<String, dynamic>?,

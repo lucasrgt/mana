@@ -138,7 +138,8 @@ final class Moments implements WatchedMoments, GestureMoments {
   var _observation = 0;
   var _nextObservation = Completer<void>();
   String? _activeClient;
-  bool _supportsFrame = false, _supportsCaptureFrame = false;
+  bool _supportsFrame = false, _supportsCaptureFrame = false, _supportsRemount = false;
+  ({String id, String client})? _remount;
   _Frame? _frame;
   Map<String, Object?>? _blocker;
   int _blockerSequence = 0, _lastCaptureSequence = 0;
@@ -315,7 +316,33 @@ final class Moments implements WatchedMoments, GestureMoments {
     'runtimeBlocker': 1,
     'restart': _restart.control(client),
     'frame': _frameControl(client),
+    'remount': _remount != null && _remount!.client == client ? {'id': _remount!.id} : null,
   };
+
+  /// Whether the active runtime can rebuild itself for a newly prepared Moment
+  /// without reloading its code (an app wrapped in `MomentRestartable`).
+  bool canRemount() => _supportsRemount && _activeClient != null && _materialization == null;
+
+  /// Asks the active runtime to rebuild its app for the current Moment and waits
+  /// until a runtime observes it. The rebuilt tree claims as a new client, as a
+  /// restarted one would; the caller falls back to a full restart on failure.
+  Future<void> remount({Duration timeout = const Duration(seconds: 15)}) async {
+    final old = _activeClient;
+    if (!canRemount() || old == null) throw const MomentsError('The runtime cannot rebuild itself');
+    final id = uuidV4();
+    _remount = (id: id, client: old);
+    _notifyWaiters();
+    final deadline = DateTime.now().add(timeout);
+    try {
+      while (DateTime.now().isBefore(deadline)) {
+        if (_activeClient != old && _observed?['revision'] == _revision) return;
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+      throw const MomentsError('The rebuilt app did not report the Moment');
+    } finally {
+      if (_remount?.id == id) _remount = null;
+    }
+  }
 
   void _persist(Map<String, Object?> next) {
     final projection = (next['projection']! as Map).cast<String, Object?>();
@@ -609,6 +636,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         _blockerSequence = 0;
         _supportsFrame = url.queryParameters['frame'] == '1';
         _supportsCaptureFrame = url.queryParameters['captureFrame'] == '1';
+        _supportsRemount = url.queryParameters['remount'] == '1';
       }
       if (_activeClient != client) {
         reply(response, 409, {'error': 'Another runtime owns the draft session'});
@@ -616,7 +644,8 @@ final class Moments implements WatchedMoments, GestureMoments {
       }
       if (url.queryParameters['since'] != _revision ||
           _restart.control(client) != null ||
-          _frameControl(client) != null) {
+          _frameControl(client) != null ||
+          _remount?.client == client) {
         reply(response, 200, _transportSnapshot(client));
       } else {
         _waiters.add(response);

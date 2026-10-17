@@ -1,4 +1,5 @@
 export 'src/moments.dart';
+export 'src/moment_restartable.dart';
 export 'src/moment_launch.dart';
 export 'src/hand_off.dart';
 export 'src/private_store.dart';

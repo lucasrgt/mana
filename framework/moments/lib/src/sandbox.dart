@@ -510,6 +510,14 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
         prepare: backendRecipes.prepare,
         afterPreparedOpen: adapter.restartOnOpen
             ? (_) async {
+                final live = bridge?.moments;
+                if (live != null && live.canRemount()) {
+                  try {
+                    return await live.remount();
+                  } on MomentsError catch (error) {
+                    stderr.writeln('Moments: rebuild without restart failed (${error.message}); restarting');
+                  }
+                }
                 final active = watcher;
                 if (active == null) throw const MomentsError('Flutter supervisor is not ready');
                 final result = await active.refresh(restart: true);
