@@ -1,6 +1,18 @@
 defmodule Mana.Notifications.Notify do
   @moduledoc false
-  defstruct [:action, :to, :template, :category, :opens, :channels, :when, :fallback, :payload, :__identifier__, :__spark_metadata__]
+  defstruct [
+    :action,
+    :to,
+    :template,
+    :category,
+    :opens,
+    :channels,
+    :when,
+    :fallback,
+    :payload,
+    :__identifier__,
+    :__spark_metadata__
+  ]
 end
 
 defmodule Mana.Notifications.Sender do
@@ -54,18 +66,25 @@ defmodule Mana.Notifications do
       to: [
         type: {:or, [{:tuple, [:atom, :atom]}, :atom, {:list, :atom}]},
         required: true,
-        doc: "User-id attribute(s), `:counterpart`, or `{Module, :fun}`(record) → user id(s) when the recipient is not on the record."
+        doc:
+          "User-id attribute(s), `:counterpart`, or `{Module, :fun}`(record) → user id(s) when the recipient is not on the record."
       ],
       template: [type: :string, required: true],
       category: [type: :atom, default: :general, doc: "What a person turns on or off together."],
       opens: [type: :string, doc: "The deep link it opens; `:id` is the record's id."],
       channels: [type: {:list, :atom}, default: [:inbox]],
-      fallback: [type: :boolean, default: false, doc: "Channels are tried in order until one delivers (push, then email, then SMS) instead of all."],
+      fallback: [
+        type: :boolean,
+        default: false,
+        doc:
+          "Channels are tried in order until one delivers (push, then email, then SMS) instead of all."
+      ],
       when: [type: :any, doc: "An expression over the record; sent only while it holds."],
       payload: [
         type: {:or, [{:tuple, [:atom, :atom]}, {:list, :atom}]},
         default: [],
-        doc: "Attributes of the record copied into the payload for the template's text, or `{Module, :fun}`(record) → map."
+        doc:
+          "Attributes of the record copied into the payload for the template's text, or `{Module, :fun}`(record) → map."
       ]
     ]
   }
@@ -76,18 +95,41 @@ defmodule Mana.Notifications do
     entities: [@notify],
     schema: [
       sender: [type: :atom, required: true, doc: "A `Mana.Notifications.Sender`."],
-      preferences: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :fun}`(user_id, category, channel) → boolean; the inbox is always kept."],
-      quiet_hours: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :fun}`(user_id) → nil, or the DateTime the recipient's quiet hours end."],
-      group_within: [type: :any, doc: "`{amount, unit}`: a notice repeating one already sent to the same person about the same record inside it goes to the inbox only, marked as grouped."],
-      queue: [type: :atom, default: :default, doc: "The Oban queue of notices held for quiet hours."]
+      preferences: [
+        type: {:tuple, [:atom, :atom]},
+        doc: "`{Module, :fun}`(user_id, category, channel) → boolean; the inbox is always kept."
+      ],
+      quiet_hours: [
+        type: {:tuple, [:atom, :atom]},
+        doc: "`{Module, :fun}`(user_id) → nil, or the DateTime the recipient's quiet hours end."
+      ],
+      group_within: [
+        type: :any,
+        doc:
+          "`{amount, unit}`: a notice repeating one already sent to the same person about the same record inside it goes to the inbox only, marked as grouped."
+      ],
+      queue: [
+        type: :atom,
+        default: :default,
+        doc: "The Oban queue of notices held for quiet hours."
+      ]
     ]
   }
 
-  use Spark.Dsl.Extension, sections: [@notifications], transformers: [Mana.Notifications.Transformer]
-  use Mana.Primitive, contract: "x-mana-notifications", catalog: "notifications", moments: [:observe, :fake]
+  use Spark.Dsl.Extension,
+    sections: [@notifications],
+    transformers: [Mana.Notifications.Transformer]
+
+  use Mana.Primitive,
+    contract: "x-mana-notifications",
+    catalog: "notifications",
+    moments: [:observe, :fake]
+
+  @groups Mana.Notifications.Groups
 
   @doc "Moments `observe`: the notices `record` sends after `action` by `actor`, without sending them."
-  def observe(record, action, actor), do: record |> notices(action, actor) |> Enum.map(&Map.delete(&1, :record))
+  def observe(record, action, actor),
+    do: record |> notices(action, actor) |> Enum.map(&Map.delete(&1, :record))
 
   @doc """
   Moments `fake`: runs `fun` with every notice held instead of delivered,
@@ -143,25 +185,43 @@ defmodule Mana.Notifications do
   end
 
   defp payload(%{payload: {module, function}}, record, type),
-    do: record |> then(&apply(module, function, [&1])) |> Map.new(fn {k, v} -> {to_string(k), v} end) |> Map.put("#{type}_id", record.id)
+    do:
+      record
+      |> then(&apply(module, function, [&1]))
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.put("#{type}_id", record.id)
 
   defp payload(notify, record, type) do
-    for field <- notify.payload, value <- [Map.get(record, field)], not is_nil(value), into: %{"#{type}_id" => record.id} do
-      {to_string(field), if(is_atom(value) and not is_boolean(value), do: to_string(value), else: value)}
+    for field <- notify.payload,
+        value <- [Map.get(record, field)],
+        not is_nil(value),
+        into: %{"#{type}_id" => record.id} do
+      {to_string(field),
+       if(is_atom(value) and not is_boolean(value), do: to_string(value), else: value)}
     end
   end
 
   defp holds?(nil, _record), do: true
-  defp holds?(expression, record), do: match?({:ok, true}, Ash.Expr.eval(expression, record: record, resource: record.__struct__))
+
+  defp holds?(expression, record),
+    do:
+      match?({:ok, true}, Ash.Expr.eval(expression, record: record, resource: record.__struct__))
 
   defp recipients(:counterpart, record, actor) do
     me = actor && Map.get(actor, :id)
-    for field <- Mana.Entity.audience(record.__struct__), id = Map.get(record, field), id != me, uniq: true, do: id
+
+    for field <- Mana.Entity.audience(record.__struct__),
+        id = Map.get(record, field),
+        id != me,
+        uniq: true,
+        do: id
   end
 
-  defp recipients({module, function}, record, _actor), do: for(id <- List.wrap(apply(module, function, [record])), id, uniq: true, do: id)
+  defp recipients({module, function}, record, _actor),
+    do: for(id <- List.wrap(apply(module, function, [record])), id, uniq: true, do: id)
 
-  defp recipients(fields, record, _actor), do: for(field <- List.wrap(fields), id = Map.get(record, field), uniq: true, do: id)
+  defp recipients(fields, record, _actor),
+    do: for(field <- List.wrap(fields), id = Map.get(record, field), uniq: true, do: id)
 
   @doc false
   def send_all(record, action, actor) do
@@ -169,14 +229,18 @@ defmodule Mana.Notifications do
 
     case Process.get(:mana_dry_run) do
       held when is_list(held) ->
-        Process.put(:mana_dry_run, Enum.reverse(Enum.map(notices, &Map.delete(&1, :record))) ++ held)
+        Process.put(
+          :mana_dry_run,
+          Enum.reverse(Enum.map(notices, &Map.delete(&1, :record))) ++ held
+        )
 
       nil ->
         Enum.each(notices, &deliver(record.__struct__, &1))
     end
   end
 
-  defp opt(resource, key, default \\ nil), do: Spark.Dsl.Extension.get_opt(resource, [:notifications], key, default)
+  defp opt(resource, key, default \\ nil),
+    do: Spark.Dsl.Extension.get_opt(resource, [:notifications], key, default)
 
   @doc """
   Sends one notice the way the resource declares: channels the recipient
@@ -190,8 +254,14 @@ defmodule Mana.Notifications do
 
     channels =
       case opt(resource, :preferences) do
-        {m, f} -> Enum.filter(notice.channels, &(&1 == :inbox or apply(m, f, [notice.to, notice.category, &1])))
-        nil -> notice.channels
+        {m, f} ->
+          Enum.filter(
+            notice.channels,
+            &(&1 == :inbox or apply(m, f, [notice.to, notice.category, &1]))
+          )
+
+        nil ->
+          notice.channels
       end
 
     {notice, channels} = group(resource, notice, channels)
@@ -211,7 +281,15 @@ defmodule Mana.Notifications do
 
     if held_until, do: hold(resource, notice, later, held_until)
     {sent, failed} = send_channels(sender, notice, now, fallback?(resource, notice.template))
-    record(resource, notice, sent, failed, held_until && %{"channels" => later, "until" => held_until})
+
+    record(
+      resource,
+      notice,
+      sent,
+      failed,
+      held_until && %{"channels" => later, "until" => held_until}
+    )
+
     sent
   end
 
@@ -223,14 +301,27 @@ defmodule Mana.Notifications do
         action: :notify,
         via: "notifications",
         summary: "notified #{notice.template}",
-        after: %{"template" => notice.template, "to" => notice.to, "sent" => sent, "failed" => Keyword.keys(failed), "held" => held},
+        after: %{
+          "template" => notice.template,
+          "to" => notice.to,
+          "sent" => sent,
+          "failed" => Keyword.keys(failed),
+          "held" => held
+        },
         outcome: if(sent == [] and failed != [], do: :failed, else: :done),
-        error: if(failed != [], do: failed |> Enum.map(fn {channel, reason} -> "#{channel}: #{inspect(reason)}" end) |> Enum.join("; "))
+        error:
+          if(failed != [],
+            do:
+              failed
+              |> Enum.map(fn {channel, reason} -> "#{channel}: #{inspect(reason)}" end)
+              |> Enum.join("; ")
+          )
       })
     end
   end
 
-  defp fallback?(resource, template), do: Enum.any?(declared(resource), &(&1.template == template and &1.fallback))
+  defp fallback?(resource, template),
+    do: Enum.any?(declared(resource), &(&1.template == template and &1.fallback))
 
   defp send_channels(_sender, _notice, [], _fallback), do: {[], []}
 
@@ -244,7 +335,9 @@ defmodule Mana.Notifications do
 
   defp send_channels(sender, notice, channels, true) do
     {inbox, outbound} = Enum.split_with(channels, &(&1 == :inbox))
-    {sent, failed} = if inbox != [], do: send_channels(sender, notice, inbox, false), else: {[], []}
+
+    {sent, failed} =
+      if inbox != [], do: send_channels(sender, notice, inbox, false), else: {[], []}
 
     Enum.reduce_while(outbound, {sent, failed}, fn channel, {sent, failed} ->
       case sender.deliver(%{notice | channels: [channel]}) do
@@ -262,18 +355,58 @@ defmodule Mana.Notifications do
         now = System.system_time(:millisecond)
         window = System.convert_time_unit(1, :second, :millisecond) * seconds(amount, unit)
 
-        case :persistent_term.get(key, nil) do
-          {at, count} when now - at < window ->
-            :persistent_term.put(key, {at, count + 1})
+        case :ets.lookup(groups(), key) do
+          [{^key, _, at, count}] when now - at < window ->
+            :ets.insert(@groups, {key, at + window, at, count + 1})
             {Map.put(notice, :group, %{count: count + 1}), Enum.filter(channels, &(&1 == :inbox))}
 
           _ ->
-            :persistent_term.put(key, {now, 1})
+            :ets.insert(@groups, {key, now + window, now, 1})
             {notice, channels}
         end
 
       nil ->
         {notice, channels}
+    end
+  end
+
+  # One row per (recipient, template, payload) while its window is open, as
+  # {key, closes_at, opened_at, count}.
+  defp groups do
+    if :ets.whereis(@groups) == :undefined, do: own_groups(20)
+    @groups
+  end
+
+  # The table outlives the request that groups first: a process of its own
+  # owns it and drops the windows that closed.
+  defp own_groups(0), do: raise("#{inspect(@groups)} did not start")
+
+  defp own_groups(tries) do
+    spawn(fn ->
+      # Two first notices at once: only the one that takes the name owns it.
+      if claim_groups() do
+        :ets.new(@groups, [:named_table, :public, :set, write_concurrency: true])
+        sweep_groups()
+      end
+    end)
+
+    Process.sleep(5)
+    if :ets.whereis(@groups) == :undefined, do: own_groups(tries - 1)
+  end
+
+  defp claim_groups do
+    Process.register(self(), @groups)
+  rescue
+    ArgumentError -> false
+  end
+
+  defp sweep_groups do
+    receive do
+    after
+      60_000 ->
+        now = System.system_time(:millisecond)
+        :ets.select_delete(@groups, [{{:_, :"$1", :_, :_}, [{:<, :"$1", now}], [true]}])
+        sweep_groups()
     end
   end
 
@@ -285,7 +418,12 @@ defmodule Mana.Notifications do
   defp hold(resource, notice, channels, until) do
     args = %{
       "resource" => inspect(resource),
-      "notice" => notice |> Map.delete(:record) |> Map.put(:channels, channels) |> Map.update!(:category, &to_string/1) |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      "notice" =>
+        notice
+        |> Map.delete(:record)
+        |> Map.put(:channels, channels)
+        |> Map.update!(:category, &to_string/1)
+        |> Map.new(fn {k, v} -> {to_string(k), v} end)
     }
 
     inserter = Application.get_env(:mana_core, :deadline_inserter, &insert/1)
@@ -307,7 +445,14 @@ defmodule Mana.Notifications do
       record: nil
     }
 
-    {sent, failed} = send_channels(sender(resource), notice, notice.channels, fallback?(resource, notice.template))
+    {sent, failed} =
+      send_channels(
+        sender(resource),
+        notice,
+        notice.channels,
+        fallback?(resource, notice.template)
+      )
+
     record(resource, notice, sent, failed, nil)
     sent
   end
@@ -320,7 +465,12 @@ if Code.ensure_loaded?(Oban.Worker) do
 
     @impl true
     def perform(%Oban.Job{args: %{"resource" => resource, "notice" => notice}}) do
-      resource |> String.trim_leading("Elixir.") |> String.split(".") |> Module.safe_concat() |> Mana.Notifications.deliver_held(notice)
+      resource
+      |> String.trim_leading("Elixir.")
+      |> String.split(".")
+      |> Module.safe_concat()
+      |> Mana.Notifications.deliver_held(notice)
+
       :ok
     end
   end
@@ -332,7 +482,10 @@ defmodule Mana.Notifications.Send do
 
   @impl true
   def change(changeset, _opts, context) do
-    if Enum.any?(Mana.Notifications.declared(changeset.resource), &(&1.action == changeset.action.name)) do
+    if Enum.any?(
+         Mana.Notifications.declared(changeset.resource),
+         &(&1.action == changeset.action.name)
+       ) do
       Ash.Changeset.after_transaction(changeset, fn
         _changeset, {:ok, record} ->
           Mana.Notifications.send_all(record, changeset.action.name, context.actor)
@@ -360,8 +513,13 @@ defmodule Mana.Notifications.Transformer do
 
   def transform(dsl) do
     case Transformer.get_entities(dsl, [:notifications]) do
-      [] -> {:ok, dsl}
-      _ -> Ash.Resource.Builder.add_change(dsl, Mana.Notifications.Send, on: [:create, :update, :destroy])
+      [] ->
+        {:ok, dsl}
+
+      _ ->
+        Ash.Resource.Builder.add_change(dsl, Mana.Notifications.Send,
+          on: [:create, :update, :destroy]
+        )
     end
   end
 end
