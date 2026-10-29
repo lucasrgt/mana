@@ -242,9 +242,12 @@ defmodule Mana.Entity.Transformer do
     configured? =
       Transformer.get_option(dsl, [:entity], :broadcast) != nil or Transformer.get_entities(dsl, [:entity]) != []
 
-    if configured?,
-      do: Ash.Resource.Builder.add_change(dsl, Mana.Entity.Changed, on: [:create, :update, :destroy]),
-      else: {:ok, dsl}
+    if configured? do
+      with {:ok, dsl} <- Ash.Resource.Builder.add_change(dsl, Mana.Entity.Changed, on: [:create, :update, :destroy]),
+           do: {:ok, Mana.NotAtomic.mark(dsl, fn _ -> true end)}
+    else
+      {:ok, dsl}
+    end
   end
 end
 

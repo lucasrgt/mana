@@ -550,7 +550,10 @@ defmodule Mana.Verbs.Transformer do
             if Enum.any?(verbs, &(&1.when && not &1.collection)) do
               with {:ok, gate} <- Transformer.build_entity(Ash.Resource.Dsl, [:validations], :validate, validation: Mana.Verbs.WhenGate, on: [:update, :destroy]),
                    dsl = Transformer.add_entity(dsl, [:validations], gate, type: :append),
-                   do: Ash.Resource.Builder.add_change(dsl, Mana.Verbs.Recheck, on: [:update, :destroy])
+                   {:ok, dsl} <- Ash.Resource.Builder.add_change(dsl, Mana.Verbs.Recheck, on: [:update, :destroy]) do
+                rechecked = for verb <- verbs, verb.when && not verb.collection, do: Mana.Verbs.action(verb)
+                {:ok, Mana.NotAtomic.mark(dsl, &(&1.name in rechecked))}
+              end
             else
               {:ok, dsl}
             end
