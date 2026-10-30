@@ -90,8 +90,15 @@ final class HeadlessRuntime {
     ];
     final started = nowMs();
     final all = [for (final worker in workers) worker.index];
-    await runtime._spawn(all);
-    await runtime._ready(all, startupTimeout);
+    try {
+      await runtime._spawn(all);
+      await runtime._ready(all, startupTimeout);
+    } on Object {
+      // The suite only closes a runtime that started; an open control server
+      // would keep the process alive after it reported the failure.
+      await runtime.close();
+      rethrow;
+    }
     runtime._log('headless workers ready in ${(nowMs() - started).round()} ms');
     if (releaseCompiler) {
       for (final child in runtime._processes) {
