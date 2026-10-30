@@ -14,6 +14,7 @@ export 'src/flow_builder.dart';
 export 'src/history_view.dart';
 export 'src/verb_form.dart';
 export 'src/notifications.dart';
+export 'src/offset_page.dart';
 export 'src/verb_runner.dart';
 
 export 'package:result_dart/result_dart.dart';

@@ -249,6 +249,14 @@ Stateful commands for view models (Query, RowAction, QuietAfterDispose, CommandB
 - **Instead of:** bool loading / error fields in view models; try/catch per button
 - **Docs:** `framework/flutter/mana_command/lib/mana_command.dart`
 
+### Paged reads (`pagination`)
+
+OffsetPage<T> (mana_command) turns a counted Ash offset page into items, total, hasNext and hasPrevious, refusing a page that does not match the window asked for.
+
+- **Use:** Server: pagination offset?: true, default_limit: 25, max_page_size: 100, countable: :by_default in the read. Flutter: final doc = (await api.listX(page: ListXPageParameter((b) => b..limit = limit..offset = offset..count = true))).data!; OffsetPage.fromAsh(items: doc.data ?? const [], metadata: doc.meta?['page']?.value, requestedOffset: offset, requestedLimit: limit) from package:mana_command (count = true or the total is missing and the page is refused); page.total, page.hasNext, page.hasPrevious drive the list.
+- **Instead of:** parsing meta.page by hand (a pageTotal helper); trusting a short page as the last one
+- **Docs:** `framework/flutter/mana_command/lib/src/offset_page.dart`
+
 ### History (`history`)
 
 Every create, update and destroy of a resource is recorded as it happens — who (user, system deadline or agent), which verb, inputs, before and after, failed attempts with their error code — in a log resource with its own retention; a record's history answers only to whoever may read the record.

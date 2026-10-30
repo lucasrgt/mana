@@ -197,6 +197,17 @@ replaces = ["bool loading / error fields in view models", "try/catch per button"
 docs = "framework/flutter/mana_command/lib/mana_command.dart"
 
 [[capability]]
+id = "pagination"
+name = "Paged reads"
+layer = "primitive"
+status = "available"
+summary = "OffsetPage<T> (mana_command) turns a counted Ash offset page into items, total, hasNext and hasPrevious, refusing a page that does not match the window asked for."
+keywords = ["pagination", "page", "list", "offset", "total", "count", "next page"]
+use = "Server: pagination offset?: true, default_limit: 25, max_page_size: 100, countable: :by_default in the read. Flutter: final doc = (await api.listX(page: ListXPageParameter((b) => b..limit = limit..offset = offset..count = true))).data!; OffsetPage.fromAsh(items: doc.data ?? const [], metadata: doc.meta?['page']?.value, requestedOffset: offset, requestedLimit: limit) from package:mana_command (count = true or the total is missing and the page is refused); page.total, page.hasNext, page.hasPrevious drive the list."
+replaces = ["parsing meta.page by hand (a pageTotal helper)", "trusting a short page as the last one"]
+docs = "framework/flutter/mana_command/lib/src/offset_page.dart"
+
+[[capability]]
 id = "lints"
 name = "Mana lints"
 layer = "verification"
