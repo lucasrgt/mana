@@ -252,6 +252,26 @@ List<Product> productPaths(String root, Config config) => [
     }(),
 ];
 
+/// The frontend of product [app] that declares Moments (`<frontend>/moments`),
+/// where an intent's `moment = "app:name"` runs.
+String momentsFrontend(String root, List<Product> products, String app) {
+  final product = products.where((product) => product.name == app).firstOrNull;
+  if (product == null) {
+    throw ManaFailure('No product $app in mana.toml for moment = "$app:..."');
+  }
+  final declaring = [
+    for (final frontend in product.frontend)
+      if (Directory(projectPath(root, '$frontend/moments')).existsSync())
+        frontend,
+  ];
+  if (declaring.length != 1) {
+    throw ManaFailure(
+      'products.$app needs exactly one frontend with moments/; found ${declaring.length}',
+    );
+  }
+  return declaring.single;
+}
+
 Map<String, String> environment(Object? value) {
   if (value is! Map ||
       value.entries.any(

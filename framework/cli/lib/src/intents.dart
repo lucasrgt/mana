@@ -28,8 +28,9 @@ import 'toolchain.dart';
 ///
 /// `approve` freezes the criteria (their hash goes to
 /// `intents/<id>.approved.json`) and writes the decision to the notebook;
-/// `check` refuses criteria edited after approval and runs each — a Moment
-/// headless or a sensor — into one AVP verdict.
+/// `check` refuses criteria edited after approval and runs each — the
+/// Moments of one app in one headless suite, or a sensor — into one AVP
+/// verdict.
 final class Intents {
   Intents(this.root);
 
@@ -121,12 +122,16 @@ final class Intents {
     return {...intent, 'status': 'approved', 'approved': approval};
   }
 
-  /// Runs [id]'s frozen criteria into an AVP verdict. [moment] runs one
-  /// Moment headless and answers its exit code (0 passed, 1 failed, 2 could
-  /// not decide).
+  /// Runs [id]'s frozen criteria into an AVP verdict. [moments] runs the
+  /// named Moments of one app headless and answers each one's suite status
+  /// (`passed`, `failed`, anything else could not decide).
   Future<Map<String, Object?>> check(
     String id, {
-    required Future<int> Function(String app, String name) moment,
+    required Future<Map<String, String>> Function(
+      String app,
+      List<String> names,
+    )
+    moments,
     void Function(String line)? progress,
   }) async {
     final intent = read(id);
@@ -139,21 +144,34 @@ final class Intents {
         'The criteria of $id changed after approval; propose a new intent instead of editing a frozen one',
       );
     }
+    final criteria = (intent['criterion'] as List).cast<Map>();
+    final byApp = <String, List<String>>{};
+    for (final c in criteria) {
+      if (c['moment'] case final String moment) {
+        final [app, name] = moment.split(':');
+        (byApp[app] ??= []).add(name);
+      }
+    }
+    final ran = <String, String>{};
+    for (final MapEntry(key: app, value: names) in byApp.entries) {
+      progress?.call('… moments $app: ${names.join(' ')}');
+      final statuses = await moments(app, names);
+      for (final name in names) {
+        ran['$app:$name'] = switch (statuses[name]) {
+          'passed' => 'pass',
+          'failed' => 'fail',
+          _ => 'unresolved',
+        };
+      }
+    }
     final results = <Map<String, Object?>>[];
     final sensors = File(p.join(root, Sensors.file)).existsSync()
         ? Sensors.load(root)
         : null;
-    for (final c in (intent['criterion'] as List).cast<Map>()) {
+    for (final c in criteria) {
       String status;
       if (c['moment'] is String) {
-        final [app, name] = (c['moment'] as String).split(':');
-        progress?.call('… moment ${c['moment']}');
-        final code = await moment(app, name);
-        status = code == 0
-            ? 'pass'
-            : code == 1
-            ? 'fail'
-            : 'unresolved';
+        status = ran[c['moment']]!;
       } else {
         if (sensors == null) {
           throw const ManaFailure('A sensor criterion needs sensors.toml');

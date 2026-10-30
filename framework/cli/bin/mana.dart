@@ -204,17 +204,32 @@ Future<void> _intent(List<String> arguments) async {
           text: () => '$id approved by $by; criteria frozen.',
         );
       case ['check', final id]:
-        final moments = p.join(frameworkRoot(), 'moments/moments');
+        final runner = p.join(frameworkRoot(), 'moments/moments');
+        final products = productPaths(root, validate(readManifest(root)));
         final verdict = await intents.check(
           id,
           progress: json ? null : stdout.writeln,
-          moment: (app, name) async => (await Process.run(moments, [
-            'suite',
-            name,
-            '--headless',
-            '--project',
-            'apps/$app',
-          ], workingDirectory: root)).exitCode,
+          moments: (app, names) async {
+            final run = await Process.run(runner, [
+              'suite',
+              ...names,
+              '--headless',
+              '--json',
+              '--project',
+              momentsFrontend(root, products, app),
+            ], workingDirectory: root);
+            final Object? summary;
+            try {
+              summary = jsonDecode(run.stdout as String);
+            } on FormatException {
+              return const {};
+            }
+            return {
+              if (summary case {'results': final List results})
+                for (final r in results.cast<Map>())
+                  r['name'] as String: r['status'] as String,
+            };
+          },
         );
         _print(
           verdict,

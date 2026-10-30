@@ -124,7 +124,7 @@ sensor = "unit"
       final intents = Intents(root);
       expect(intents.list().single['status'], 'proposed');
       await expectLater(
-        intents.check('coupon-cap', moment: (_, _) async => 0),
+        intents.check('coupon-cap', moments: (_, _) async => const {}),
         throwsA(isA<ManaFailure>()),
       );
 
@@ -142,9 +142,9 @@ sensor = "unit"
       final ran = <String>[];
       final verdict = await intents.check(
         'coupon-cap',
-        moment: (app, name) async {
-          ran.add('$app:$name');
-          return 0;
+        moments: (app, names) async {
+          ran.add('$app:${names.join(',')}');
+          return {for (final name in names) name: 'passed'};
         },
       );
       expect(ran, ['shop:checkout-coupon']);
@@ -156,7 +156,9 @@ sensor = "unit"
       expect(
         (await intents.check(
           'coupon-cap',
-          moment: (_, _) async => 1,
+          moments: (_, names) async => {
+            for (final name in names) name: 'failed',
+          },
         ))['outcome'],
         'fail',
       );
@@ -168,7 +170,7 @@ sensor = "unit"
         ),
       );
       await expectLater(
-        intents.check('coupon-cap', moment: (_, _) async => 0),
+        intents.check('coupon-cap', moments: (_, _) async => const {}),
         throwsA(isA<ManaFailure>()),
       );
 
