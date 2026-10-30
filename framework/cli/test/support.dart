@@ -8,32 +8,8 @@ late String cli;
 late String agentBinary;
 
 const _agentSource = r'''
-import 'dart:convert';
-import 'dart:io';
-
-Future<void> main(List<String> args) async {
-  final env = Platform.environment;
-  if (env['AGENT_MODE'] == 'wait') {
-    ProcessSignal.sigterm.watch().listen((_) {
-      File('terminated').writeAsStringSync('yes');
-      exit(143);
-    });
-    stdout.writeln('READY');
-    await Future<void>.delayed(const Duration(minutes: 1));
-    return;
-  }
-  if (args.contains('--version')) {
-    stdout.writeln('fixture 1.0');
-    return;
-  }
-  await Future<void>.delayed(const Duration(milliseconds: 30));
-  File('${env['MANA_PROJECT']}/captured.json').writeAsStringSync(jsonEncode({
-    'argv': args,
-    'cwd': Directory.current.path,
-    'session': env['MANA_SESSION'],
-    'marker': env['MANA_MARKER'],
-  }));
-  exitCode = int.parse(env['AGENT_EXIT'] ?? '0');
+void main(List<String> args) {
+  if (args.contains('--version')) print('fixture 1.0');
 }
 ''';
 
@@ -98,15 +74,6 @@ Fixture fixture() {
   File(p.join(root, 'agents/skills/local/SKILL.md')).writeAsStringSync(
     '---\nname: local\ndescription: Project fixture\n---\nUse this project only.\n',
   );
-  Directory(
-    p.join(root, 'agents/mods/claude/local/.claude-plugin'),
-  ).createSync(recursive: true);
-  File(
-    p.join(root, 'agents/mods/claude/local/.claude-plugin/plugin.json'),
-  ).writeAsStringSync('{"name":"local"}');
-  File(p.join(root, 'agents/mods/claude/local/.mcp.toml')).writeAsStringSync(
-    '[search]\ncommand=["${agentBinary}","\${MANA_PROJECT}/agent","\${MANA_SESSION}/state"]\n',
-  );
   final agent = {
     'command': [agentBinary],
     'skills': ['agents/skills/local'],
@@ -114,24 +81,8 @@ Fixture fixture() {
   final config = <String, Object?>{
     'version': 1,
     'agents': {
-      'claude': {
-        ...agent,
-        'mods': ['agents/mods/claude/local'],
-        'env': {'MANA_MARKER': root},
-      },
-      'codex': {
-        ...agent,
-        'mcp': ['search'],
-      },
-    },
-    'mcp': {
-      'search': {
-        'command': [
-          agentBinary,
-          r'${MANA_PROJECT}/agent',
-          r'${MANA_SESSION}/state',
-        ],
-      },
+      'claude': {...agent},
+      'codex': {...agent},
     },
   };
   save(root, config);

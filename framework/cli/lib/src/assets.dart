@@ -83,16 +83,24 @@ Map<String, String> skillPlan(String root, List<String> paths) {
   return result;
 }
 
-void syncCodexSkills(
+/// Links [skills] where [agent] discovers project skills (Codex
+/// `.agents/skills/`, Claude `.claude/skills/`), so a plain `codex` or
+/// `claude` in the project loads them. A ledger in `.mana/` records the links
+/// Mana owns; anything else there is the user's and is never replaced.
+void syncSkills(
   String root,
+  String agent,
   Map<String, String> skills, {
   bool check = false,
 }) {
-  final ledger = File(projectPath(root, '.mana/codex-skills.json'));
+  final ledger = File(projectPath(root, '.mana/$agent-skills.json'));
   final previous = ledger.existsSync()
       ? (jsonDecode(ledger.readAsStringSync()) as Map).cast<String, Object?>()
       : <String, Object?>{};
-  final base = projectPath(root, '.agents/skills');
+  final base = projectPath(
+    root,
+    agent == 'codex' ? '.agents/skills' : '.claude/skills',
+  );
   final desired = {
     for (final MapEntry(:key, :value) in skills.entries)
       key: p.relative(value, from: base),

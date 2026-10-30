@@ -9,7 +9,6 @@ import 'failure.dart';
 import 'features.dart';
 import 'manifest.dart';
 import 'notebook.dart';
-import 'plugins.dart';
 import 'primitives.dart';
 import 'process.dart';
 import 'toolchain.dart';
@@ -23,9 +22,12 @@ List<String> _strings(Object? value) =>
 void inspectAgents(String root, Config config, List<String> names) {
   for (final name in names) {
     final agent = _agent(config, name);
-    final skills = skillPlan(root, _strings(agent['skills']));
-    if (name == 'codex') syncCodexSkills(root, skills, check: true);
-    if (name == 'claude') pluginPlan(root, _strings(agent['mods']));
+    syncSkills(
+      root,
+      name,
+      skillPlan(root, _strings(agent['skills'])),
+      check: true,
+    );
   }
   for (final task in list(table(config, 'setup')['tasks'])) {
     projectPath(root, (task! as Map)['cwd'] ?? '.', allowRoot: true);
@@ -70,11 +72,14 @@ Future<void> setup(
       }
     }
   }
-  if (!runtimeOnly && names.contains('codex')) {
-    syncCodexSkills(
-      root,
-      skillPlan(root, _strings(_agent(config, 'codex')['skills'])),
-    );
+  if (!runtimeOnly) {
+    for (final name in names) {
+      syncSkills(
+        root,
+        name,
+        skillPlan(root, _strings(_agent(config, name)['skills'])),
+      );
+    }
   }
   stdout.writeln(
     runtimeOnly
@@ -157,109 +162,4 @@ Future<void> doctor(String root, Config config, List<String> names) async {
   stdout.writeln(
     'Mana configuration and artifacts verified; no model request made.',
   );
-}
-
-String _toml(Object? value) => switch (value) {
-  final String text => jsonEncode(text),
-  final List items => '[${items.map(_toml).join(',')}]',
-  final Map map =>
-    '{${map.entries.map((e) => '${jsonEncode(e.key)}=${_toml(e.value)}').join(',')}}',
-  _ => throw ManaFailure('Unsupported TOML value: $value'),
-};
-
-Future<int> launch(
-  String root,
-  Config config,
-  String name,
-  List<String> forwarded, {
-  bool print = false,
-}) async {
-  if (table(config, 'agents')[name] == null) {
-    throw ManaFailure('Agent not configured: $name');
-  }
-  final agent = _agent(config, name);
-  artifactPlan(root, config);
-  final skills = skillPlan(root, _strings(agent['skills']));
-  final plugins = name == 'claude'
-      ? pluginPlan(root, _strings(agent['mods']))
-      : <Plugin>[];
-  if (name == 'claude' &&
-      plugins.any((plugin) => plugin.servers != null) &&
-      forwarded.any(
-        (v) =>
-            v == '--strict-mcp-config' || v.startsWith('--strict-mcp-config='),
-      )) {
-    throw const ManaFailure(
-      '--strict-mcp-config disables plugin MCP; incompatible with the selected mods',
-    );
-  }
-  if (name == 'codex') {
-    await locked(root, () async => syncCodexSkills(root, skills));
-  }
-  final sessions = Directory(projectPath(root, '.mana/sessions'))
-    ..createSync(recursive: true);
-  final session = sessions.createTempSync('$name-').path;
-  final variables = {
-    ...Platform.environment,
-    'MANA_PROJECT': root,
-    'MANA_SESSION': session,
-  };
-  final env = {
-    ...variables,
-    for (final MapEntry(:key, :value) in environment(
-      agent['env'] ?? const {},
-    ).entries)
-      key: expand(value, variables),
-  };
-  final command = agentCommand(root, config, name, variables);
-  final mcp = table(config, 'mcp');
-  final servers = {
-    for (final key in _strings(agent['mcp']))
-      key: serverConfig(mcp[key], variables),
-  };
-  if (name == 'claude') {
-    for (final path in copyPlugins(plugins, skills, session, variables)) {
-      command.addAll(['--plugin-dir', path]);
-    }
-    final tools = _strings(agent['tools']),
-        disallowed = _strings(agent['disallowed_tools']);
-    if (tools.isNotEmpty) command.addAll(['--tools', tools.join(',')]);
-    if (disallowed.isNotEmpty) {
-      command.addAll(['--disallowedTools', disallowed.join(',')]);
-    }
-    if (servers.isNotEmpty) {
-      final path = p.join(session, 'mcp.json');
-      File(path).writeAsStringSync(
-        const JsonEncoder.withIndent('  ').convert({
-          'mcpServers': {
-            for (final MapEntry(:key, :value) in servers.entries)
-              key: serverJson(value),
-          },
-        }),
-      );
-      command.addAll(['--mcp-config', path]);
-    }
-  } else {
-    for (final MapEntry(:key, :value) in servers.entries) {
-      command.addAll([
-        '-c',
-        'mcp_servers.mana_$key=${_toml({...serverJson(value), 'cwd': root})}',
-      ]);
-    }
-  }
-  final plan = {
-    'project': root,
-    'agent': name,
-    'session': session,
-    'command': [...command, ...forwarded],
-  };
-  if (print) {
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(plan));
-    return 0;
-  }
-  return (await run(
-    plan['command']! as List<String>,
-    cwd: root,
-    environment: env,
-  )).code;
 }

@@ -112,7 +112,6 @@ Config validate(Config config) {
     'products',
     'setup',
     'agents',
-    'mcp',
   ], 'manifest');
   if (config['version'] != 1) {
     throw const ManaFailure('Unsupported mana.toml version');
@@ -187,46 +186,14 @@ Config validate(Config config) {
       throw const ManaFailure('Duplicate artifact destination');
     }
   }
-  final mcp = table(config, 'mcp');
   for (final MapEntry(key: name, value: agent) in _table(
     config['agents'] ?? const {},
     const ['claude', 'codex'],
     'agents',
   ).entries) {
-    final fields = _table(
-      agent,
-      name == 'claude'
-          ? const [
-              'command',
-              'mods',
-              'skills',
-              'mcp',
-              'tools',
-              'disallowed_tools',
-              'env',
-            ]
-          : const ['command', 'skills', 'mcp', 'env'],
-      'agents.$name',
-    );
+    final fields = _table(agent, const ['command', 'skills'], 'agents.$name');
     argv(fields['command'] ?? [name], 'agent.command');
-    for (final key in ['mods', 'skills', 'mcp', 'tools', 'disallowed_tools']) {
-      _strings(fields[key] ?? const [], key);
-    }
-    final env = environment(fields['env'] ?? const {});
-    if (env.containsKey('MANA_PROJECT') || env.containsKey('MANA_SESSION')) {
-      throw const ManaFailure(
-        'Agent environment cannot override Mana project/session paths',
-      );
-    }
-    for (final server in list(fields['mcp'])) {
-      if (mcp[server] == null) throw ManaFailure('Unknown MCP server: $server');
-    }
-  }
-  for (final MapEntry(key: name, value: server) in mcp.entries) {
-    if (!RegExp(r'^[a-z][a-z0-9_-]*$').hasMatch(name)) {
-      throw ManaFailure('Invalid MCP name: $name');
-    }
-    validateServer(server);
+    _strings(fields['skills'] ?? const [], 'skills');
   }
   return config;
 }
@@ -270,26 +237,6 @@ String momentsFrontend(String root, List<Product> products, String app) {
     );
   }
   return declaring.single;
-}
-
-Map<String, String> environment(Object? value) {
-  if (value is! Map ||
-      value.entries.any(
-        (e) =>
-            e.key is! String ||
-            !RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$').hasMatch(e.key as String) ||
-            e.value is! String ||
-            (e.value as String).contains('\x00'),
-      )) {
-    throw const ManaFailure('Invalid environment map');
-  }
-  return value.cast<String, String>();
-}
-
-void validateServer(Object? server) {
-  final fields = _table(server, const ['command', 'env'], 'mcp server');
-  argv(fields['command'], 'mcp.command');
-  environment(fields['env'] ?? const {});
 }
 
 String expand(String value, Map<String, String> variables) =>

@@ -1,4 +1,7 @@
 .mana/
+# The skill links mana setup manages (authored in agents/skills).
+/.agents/skills/
+/.claude/skills/
 .proofs/
 .backend/
 .dart_tool/

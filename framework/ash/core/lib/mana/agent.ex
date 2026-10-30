@@ -8,7 +8,7 @@ defmodule Mana.Agent do
   offer cannot be followed, so an agent never does what the interface would
   not let the person do. Follows run with `mana_agent:` in the action
   context, so `Mana.History` records them as the agent's. `Mana.Agent.Plug`
-  serves both over HTTP; `mana agent mcp` bridges them to MCP.
+  serves both over HTTP; `mana mcp` bridges them to MCP.
   """
 
   @page 20

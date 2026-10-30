@@ -44,10 +44,12 @@ void main() {
           r'$(touch unwanted)',
         );
         expect(File(p.join(root, 'unwanted')).existsSync(), isFalse);
-        expect(
-          Link(p.join(root, '.agents/skills/local')).targetSync(),
-          '../../agents/skills/local',
-        );
+        for (final base in ['.agents', '.claude']) {
+          expect(
+            Link(p.join(root, '$base/skills/local')).targetSync(),
+            '../../agents/skills/local',
+          );
+        }
       }
       expect(
         File(p.join(root, '.mana/bin/search')).readAsStringSync(),
@@ -142,10 +144,10 @@ void main() {
     'path traversal, dangling links, conflicting manifests and invalid TOML are rejected',
     () {
       final (:root, :config) = fixture();
-      agents(config, 'claude')['mods'] = ['../outside'];
+      agents(config, 'claude')['skills'] = ['../outside'];
       save(root, config);
       expect(invoke(root, ['setup']).stderr, contains('escapes project'));
-      agents(config, 'claude')['mods'] = ['agents/missing'];
+      agents(config, 'claude')['skills'] = ['agents/missing'];
       save(root, config);
       Link(p.join(root, 'agents/missing')).createSync('/nonexistent/mana');
       expect(invoke(root, ['setup']).stderr, contains('Symlink'));
@@ -177,7 +179,7 @@ void main() {
       contains('differs from pinned checksum'),
     );
     expect(
-      invoke(root, ['agent', 'claude', '--print']).stderr,
+      invoke(root, ['doctor']).stderr,
       contains('differs from pinned checksum'),
     );
     expect(File(p.join(root, '.mana/bin/search')).readAsStringSync(), 'edited');
@@ -210,7 +212,9 @@ void main() {
       for (final path in [
         '.mana/bin',
         '.agents',
+        '.claude',
         '.mana/codex-skills.json',
+        '.mana/claude-skills.json',
         '.mana/setup.lock',
       ]) {
         expect(
@@ -223,7 +227,6 @@ void main() {
         ['setup', '--runtime-only', '--agents', 'codex'],
         ['setup', '--runtime-only', '--skip-tasks'],
         ['doctor', '--runtime-only'],
-        ['agent', 'codex', '--runtime-only'],
       ]) {
         expect(
           invoke(root, args).stderr,

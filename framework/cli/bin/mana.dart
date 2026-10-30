@@ -8,7 +8,6 @@ import 'package:path/path.dart' as p;
 const _usage = '''
 mana setup [--agents claude,codex] [--skip-tasks] | mana setup --runtime-only
 mana doctor [--agents claude,codex]
-mana agent claude|codex [--print] [-- native arguments]
 All commands accept --project directory; otherwise discover nearest mana.toml.
 
 mana contracts install
@@ -354,21 +353,15 @@ Future<void> main(List<String> arguments) async {
       return _intent(arguments.skip(1).toList());
   }
   try {
-    final boundary = arguments.indexOf('--');
-    final own = boundary < 0 ? arguments : arguments.sublist(0, boundary);
-    final forwarded = boundary < 0
-        ? const <String>[]
-        : arguments.sublist(boundary + 1);
     final parser = ArgParser()
       ..addOption('project')
       ..addOption('agents')
       ..addFlag('skip-tasks', negatable: false)
       ..addFlag('runtime-only', negatable: false)
-      ..addFlag('print', negatable: false)
       ..addFlag('help', negatable: false);
     final ArgResults values;
     try {
-      values = parser.parse(own);
+      values = parser.parse(arguments);
     } on FormatException catch (error) {
       throw ManaFailure(error.message);
     }
@@ -378,15 +371,12 @@ Future<void> main(List<String> arguments) async {
     }
     final positionals = values.rest;
     final command = positionals.firstOrNull;
-    if (!const ['setup', 'doctor', 'agent'].contains(command) ||
-        positionals.length != (command == 'agent' ? 2 : 1)) {
+    if (!const ['setup', 'doctor'].contains(command) ||
+        positionals.length != 1) {
       throw const ManaFailure('Invalid command; use mana --help');
     }
     final agents = values.option('agents');
-    if ((values.flag('print') && command != 'agent') ||
-        (values.flag('skip-tasks') && command != 'setup') ||
-        (agents != null && !const ['setup', 'doctor'].contains(command)) ||
-        (forwarded.isNotEmpty && command != 'agent')) {
+    if (values.flag('skip-tasks') && command != 'setup') {
       throw const ManaFailure('Option not supported for this command');
     }
     final runtimeOnly = values.flag('runtime-only');
@@ -412,14 +402,6 @@ Future<void> main(List<String> arguments) async {
         );
       case 'doctor':
         await doctor(root, config, selected(config, agents));
-      case 'agent':
-        exitCode = await launch(
-          root,
-          config,
-          positionals[1],
-          forwarded,
-          print: values.flag('print'),
-        );
     }
   } on ManaFailure catch (error) {
     stderr.writeln('mana: ${error.message}');

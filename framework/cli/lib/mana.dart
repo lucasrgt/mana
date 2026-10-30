@@ -4,7 +4,6 @@ export 'src/capabilities.dart';
 export 'src/failure.dart';
 export 'src/features.dart';
 export 'src/manifest.dart';
-export 'src/plugins.dart';
 export 'src/process.dart';
 export 'src/client.dart';
 export 'src/evals.dart';

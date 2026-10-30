@@ -1,32 +1,25 @@
 # Mana CLI: setup and agents per project
 
 `mana.toml` is the authoring source. `mana setup` installs local artifacts with a
-verified SHA-256 and runs the declared tasks, in order, with no implicit shell.
-`mana agent claude|codex` loads only the extensions Mana declares for that project.
-It installs nothing into the global profile. Personal settings, authentication and
-native policies stay the clients' responsibility; this is not a sandbox against
-global plugins.
-
-Each launch gets an exclusive directory in `.mana/sessions/`. Claude mods are
-copied there, with MCP configured for the session. Claude skills live in a
-temporary plugin. Codex skills are exposed through managed links in
-`.agents/skills/`; authoring stays in `agents/skills/`. No `.claude/` is needed.
-The launcher copies no credentials and disables no permissions.
+verified SHA-256, runs the declared tasks, in order, with no implicit shell, and
+links each agent's declared skills where that agent finds project skills: Codex in
+`.agents/skills/`, Claude in `.claude/skills/`. A plain `codex` or `claude` in the
+project then loads them; authoring stays in `agents/skills/`. Mana owns only the
+links its ledger (`.mana/<agent>-skills.json`) records and never replaces anything
+else there. It installs nothing into the global profile.
 
 `[products.<name>]` declares the topology: each product's `backend` and `frontend`
 (a path or a list). `mana doctor` lists the products and fails if a declared
 directory does not exist.
 
-`mana doctor` checks configuration, artifacts and executables without inference.
-It does not replace the app's own gate. `mana agent --print` shows the plan without
-starting the agent. `--` separates the native arguments. `--project` selects a
-root; without it, Mana looks for the nearest `mana.toml` among the ancestors.
+`mana doctor` checks configuration, artifacts, skill links and executables without
+inference. It does not replace the app's own gate. `--project` selects a root;
+without it, Mana looks for the nearest `mana.toml` among the ancestors.
 
 Invariants: invalid TOML fails before running dependencies; corrupted artifacts are
 not published; repeated setup keeps the user's files; links Mana does not own are
-never overwritten; concurrent projects do not share mods or MCP state; the child
-process's errors and signals are propagated. Dependency tasks can have partial
-effects and must be idempotent. Mana promises no rollback of external commands.
+never overwritten. Dependency tasks can have partial effects and must be
+idempotent. Mana promises no rollback of external commands.
 
 Running the CLI itself, from the repository root:
 
@@ -53,10 +46,9 @@ The same CLI gathers the tools the other framework pieces use:
 | `mana features list\|show\|which\|check\|changed` | the `feature:<name>` address from `features.toml`: each feature's files and Moments |
 | `mana sense --changed\|list\|run` | the sensors in `sensors.toml`: picks those covering the change and runs them cheapest first; the result is an AVP verdict |
 
-A project can include a small `./mana` script as a local entry point. When `command` is
-just the agent's name, the launcher tries `mise which` to use the version already installed,
-without installing or changing global versions. `MANA_CLAUDE_BIN` and
-`MANA_CODEX_BIN` override the executable. Explicit commands with arguments are kept.
+`mana doctor` runs each agent's `command` with `--version`. When `command` is just
+the agent's name, it tries `mise which` to use the version already installed;
+`MANA_CLAUDE_BIN` and `MANA_CODEX_BIN` override the executable.
 
 ```toml
 version = 1
@@ -67,55 +59,23 @@ cwd = "app"
 command = ["flutter", "pub", "get", "--enforce-lockfile"]
 timeout_seconds = 600
 
-[[setup.artifacts]]
-source = "${FFF_MCP_SOURCE}"
-path = ".mana/bin/fff-mcp"
-sha256 = "BINARY_SHA256"
-
 [agents.claude]
-command = ["claude"]
-mods = ["agents/mods/claude/fff-search", "agents/mods/claude/pi-efficiency"]
-skills = ["agents/skills/mana-project"]
-disallowed_tools = ["Grep", "Glob"]
+skills = ["mana/framework/agents/skills/mana", "agents/skills/project"]
 
 [agents.codex]
-command = ["codex"]
-skills = ["agents/skills/mana-project"]
-mcp = ["fff"]
-
-[mcp.fff]
-command = ["${MANA_PROJECT}/.mana/bin/fff-mcp", "--no-update-check",
-  "--frecency-db", "${MANA_SESSION}/frecency", "--log-file", "${MANA_SESSION}/fff.log"]
+skills = ["mana/framework/agents/skills/mana", "agents/skills/project"]
 ```
 
-A Claude mod can declare `.mcp.toml`, whose tables are server names with `command`
-(argv) and optional `env`. Mana turns it into `.mcp.json` in the session copy. Do
-not declare both. `${MANA_PROJECT}` and `${MANA_SESSION}` are resolved by the
-launcher; other variables must exist in the environment. Secrets should be
-inherited by the server, not interpolated into the manifest or the printed plan.
-
-`setup --agents claude,codex` selects the adapters. `--skip-tasks` prepares only
-artifacts and agents. `setup --runtime-only` runs only the tasks in `setup.tasks`,
-without requiring `setup.artifacts`, loading mods or installing skills. That mode is
-exclusive: it accepts neither `--agents` nor `--skip-tasks`, and does not apply to
-`doctor`/`agent`. Use it to prepare the app without an AI client or a local search
-binary. Tasks/artifacts are never run implicitly when the agent opens: run setup
-first. Settings and skills are refreshed on every launch. Restart a session to apply
-changes to mods.
-
-Codex uses MCP through CLI overrides and does not run Claude's TypeScript hooks. FFF
-and Pi are experimental: the launcher working does not prove gains in quality, time,
-tokens or subscription duration. That requires a real benchmark.
+`setup --agents claude,codex` selects the agents. `--skip-tasks` prepares only
+artifacts and skill links. `setup --runtime-only` runs only the tasks in
+`setup.tasks`, without requiring `setup.artifacts` or linking skills; it accepts
+neither `--agents` nor `--skip-tasks`. Tasks and artifacts never run implicitly: run
+setup first, and again after a skill is added or renamed.
 
 Reproducible validation:
 
 ```sh
 (cd framework/cli && dart test)
-MANA_TEST_CLAUDE="$(mise which claude)" \
-MANA_TEST_CODEX="$(command -v codex)" \
-MANA_TEST_FFF="$PWD/.mana/bin/fff-mcp" \
-MANA_TEST_PROJECT="$PWD/<project-with-agents>" \
-  (cd framework/cli && dart test test/native_test.dart)
 ```
 
 The native suite uses a simulated loopback HTTP provider, disposable test settings
