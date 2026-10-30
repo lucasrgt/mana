@@ -632,8 +632,7 @@ final class _TemporaryBackend {
       project,
     ]);
     final sink = file.openWrite(mode: FileMode.append);
-    unawaited(child.stdout.forEach(sink.add));
-    unawaited(child.stderr.forEach(sink.add));
+    final drained = Future.wait([child.stdout.forEach(sink.add), child.stderr.forEach(sink.add)]);
     var exited = false;
     final exit = child.exitCode.then((code) {
       exited = true;
@@ -644,7 +643,15 @@ final class _TemporaryBackend {
     while (!(File(p.join(directory, 'running.json')).existsSync() &&
         File(p.join(directory, '.runtime.json')).existsSync() &&
         file.readAsStringSync().contains('backend only'))) {
-      if (exited) throw MomentsError('The temporary backend exited; inspect ${file.path}');
+      if (exited) {
+        // Its own refusal is the cause (a stuck preparation, a busy port);
+        // name it here instead of leaving it in the log.
+        await drained;
+        await sink.close();
+        final last = file.readAsLinesSync().lastWhere((line) => line.trim().isNotEmpty, orElse: () => '');
+        final reason = last.replaceFirst(RegExp(r'^[A-Z]+ · '), '');
+        throw MomentsError('The temporary backend exited${reason.isEmpty ? '' : ': $reason'} (log: ${file.path})');
+      }
       if (DateTime.now().isAfter(deadline)) {
         await backend.stop();
         throw MomentsError('The temporary backend did not start; inspect ${file.path}');
