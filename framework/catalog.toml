@@ -64,17 +64,6 @@ replaces = ["maxLength and regexes copied into widgets", "hand-written CPF/CEP m
 docs = "framework/ash/core/lib/mana/verbs.ex"
 
 [[capability]]
-id = "forms"
-name = "Presentation forms"
-layer = "primitive"
-status = "available"
-summary = "Forms declared in the Ash resource (Mana.Presentation.Extension) compiled to typed Flutter forms with presence, length and integer-range validation."
-keywords = ["form", "validation", "field", "input"]
-use = "forms do form :name ... end in the resource; mana forms generate --server --resource --output."
-replaces = ["hand-written create/update forms that duplicate Ash constraints"]
-docs = "framework/ash/presentation/README.md"
-
-[[capability]]
 id = "mana-br"
 name = "Brazilian identifiers"
 layer = "primitive"
@@ -195,17 +184,6 @@ keywords = ["session", "login", "token", "refresh", "bearer", "authentication"]
 use = "Server: framework/ash/session. Flutter: AshSession over the generated client's transport, ManaSecureStorage for persistence."
 replaces = ["hand-written token storage and refresh", "Authorization headers set per request"]
 docs = "framework/flutter/ash_session/README.md"
-
-[[capability]]
-id = "pagination"
-name = "Paged reads"
-layer = "primitive"
-status = "available"
-summary = "OffsetPage<T> reads Ash offset pagination metadata (meta.page) with counts."
-keywords = ["pagination", "page", "list", "offset"]
-use = "Flutter: OffsetPage from framework/flutter/ash_query."
-replaces = ["parsing pagination metadata by hand"]
-docs = "framework/flutter/ash_query/README.md"
 
 [[capability]]
 id = "commands"
@@ -483,17 +461,6 @@ keywords = ["new project", "start", "template", "scaffold", "bootstrap", "submod
 use = "mana new <folder> [--mana-ref <release>] then moments suite --headless --project app; MANA_MOMENTS_INSTANCE=app/moments/.backend/instance.json mana lab prepare|serve|test|mix. Replace the starter Notes domain with yours and keep the wiring (OpenApi module, recipes, MomentHost/MomentViewBinding in the app)."
 replaces = ["copying an existing app to start a new one", "hand-wiring Moments, contracts and the client in a fresh project", "per-project scripts that point a backend at the sandbox database"]
 docs = "framework/cli/README.md"
-
-[[capability]]
-id = "moments-agent-view"
-name = "Moments agent view"
-layer = "coordinate"
-status = "available"
-summary = "What an agent sees of the active Moment's screen (the semantics tree: roles, labels, values, positions) and the semantics actions it can take, plus a picture of the frame; debug builds only."
-keywords = ["agent", "semantics", "look", "tap", "type", "screenshot", "accessibility"]
-use = "POST the bridge's /agent/look, /agent/act {node, action, text} or /agent/picture with its Bearer token while a moments up client is connected; actions are tap, longPress, setText, focus, scroll*, increase, decrease, dismiss."
-replaces = ["pixel computer use on a Flutter canvas", "coordinate clicks", "the rendered capture for reading text (it deliberately carries none)"]
-docs = "framework/moments/lib/src/agent_view.dart"
 
 [[capability]]
 id = "moment-restartable"

@@ -19,7 +19,6 @@ export 'src/contracts.dart';
 export 'src/toolchain.dart';
 export 'src/web.dart';
 export 'src/elixir.dart';
-export 'src/forms.dart';
 export 'src/sandbox.dart';
 export 'src/sensors.dart';
 export 'src/artifact.dart';

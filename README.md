@@ -61,8 +61,8 @@ commit it: `git -C mana checkout v0.2.0`.
 | --- | --- |
 | [`framework/cli`](framework/cli/README.md) | the `mana` CLI: setup, doctor, contracts, client and form generation, catalog, features, sensors, agents |
 | [`framework/moments`](framework/moments/README.md) | the Moments runner (`moments`) |
-| [`framework/ash`](framework/README.md) | Elixir packages: core primitives, Moments DSL, session, runtime, presentation, contracts |
-| [`framework/flutter`](framework/README.md) | Dart packages: session, queries, commands, live entities, primitives, storage, lints, the Moments bridge |
+| [`framework/ash`](framework/README.md) | Elixir packages: core primitives, Moments DSL, session, runtime, contracts |
+| [`framework/flutter`](framework/README.md) | Dart packages: session, commands, live entities, primitives, storage, lints, the Moments bridge |
 | [`framework/AGENTS.md`](framework/AGENTS.md) | the architecture contract for agents working in a Mana app |
 | [`framework/catalog.toml`](framework/catalog.toml) | every piece of the framework, how to use it and what it replaces |
 

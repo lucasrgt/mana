@@ -52,14 +52,6 @@ An ask becomes situations a person judges and criteria that freeze before implem
 - **Instead of:** acceptance criteria in chat that drift; "done" decided by the implementer; specs written as prose nobody checks
 - **Docs:** `framework/cli/lib/src/intents.dart`
 
-### Moments agent view (`moments-agent-view`)
-
-What an agent sees of the active Moment's screen (the semantics tree: roles, labels, values, positions) and the semantics actions it can take, plus a picture of the frame; debug builds only.
-
-- **Use:** POST the bridge's /agent/look, /agent/act {node, action, text} or /agent/picture with its Bearer token while a moments up client is connected; actions are tap, longPress, setText, focus, scroll*, increase, decrease, dismiss.
-- **Instead of:** pixel computer use on a Flutter canvas; coordinate clicks; the rendered capture for reading text (it deliberately carries none)
-- **Docs:** `framework/moments/lib/src/agent_view.dart`
-
 ### Moment remount (`moment-restartable`)
 
 Switch between prepared Moments by rebuilding the app's tree for the new Moment instead of hot restarting: no recompile, no code reload; falls back to a restart when the rebuilt app does not report.
@@ -160,14 +152,6 @@ Every verb's inputs reach the client with the rules its Ash action enforces (req
 - **Instead of:** maxLength and regexes copied into widgets; hand-written CPF/CEP masks and validators; a server error shown in a banner instead of on its field
 - **Docs:** `framework/ash/core/lib/mana/verbs.ex`
 
-### Presentation forms (`forms`)
-
-Forms declared in the Ash resource (Mana.Presentation.Extension) compiled to typed Flutter forms with presence, length and integer-range validation.
-
-- **Use:** forms do form :name ... end in the resource; mana forms generate --server --resource --output.
-- **Instead of:** hand-written create/update forms that duplicate Ash constraints
-- **Docs:** `framework/ash/presentation/README.md`
-
 ### Brazilian identifiers (`mana-br`)
 
 CPF, CNPJ, CEP, phone and plate: validated, canonical and masked the same on server and client. The schema carries format br-cpf | br-cnpj | br-cep | br-phone | br-plate.
@@ -256,14 +240,6 @@ Short sessions with rotating refresh over AshAuthentication (server) and AshSess
 - **Use:** Server: framework/ash/session. Flutter: AshSession over the generated client's transport, ManaSecureStorage for persistence.
 - **Instead of:** hand-written token storage and refresh; Authorization headers set per request
 - **Docs:** `framework/flutter/ash_session/README.md`
-
-### Paged reads (`pagination`)
-
-OffsetPage<T> reads Ash offset pagination metadata (meta.page) with counts.
-
-- **Use:** Flutter: OffsetPage from framework/flutter/ash_query.
-- **Instead of:** parsing pagination metadata by hand
-- **Docs:** `framework/flutter/ash_query/README.md`
 
 ### Commands (`commands`)
 

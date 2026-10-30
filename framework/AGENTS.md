@@ -125,8 +125,10 @@ it also changes a backend contract or effect.
   contract/idempotency mechanism, not from the prompt or an HTTP status alone.
   Also inspect retries below application code: a browser proof observed
   two POSTs after one gesture when the connection closed before response headers.
-  A missing retry loop in Dart is not an at-most-once guarantee; use the
-  creation identity of `ash/presentation` (`create_identity`).
+  A missing retry loop in Dart is not an at-most-once guarantee. A create that
+  must land once takes an identity the client chooses and the server refuses
+  to repeat (a client-sent UUID primary key or an Ash identity on a client
+  key); only then may its verb declare `idempotent` and `retry`.
   The Moments lease retains failed/interrupted journeys for attention; explicit
   recovery releases ownership, not database effects or late server work.
 - Process/realtime changes: inspect supervision, mailbox/backpressure, shared

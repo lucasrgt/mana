@@ -17,8 +17,6 @@ mana client generate --input <json> --output <dir> --name <package>
   [--jar <file>] [--consumer <app>] [--report <json>] [--accept-breaking] [--establish-baseline]
 mana web version <build/web>
 mana mix <mix project> [mix arguments]
-mana forms generate --server <mix project> --resource <Module> --output <file.dart>
-  [--api-client <package>] [--check]
 
 mana capabilities [topic] [--all] [--json]
   What the framework already does, how to use it and what it replaces.
@@ -323,8 +321,6 @@ Future<void> main(List<String> arguments) async {
       return _lab(arguments.skip(1).toList());
     case 'new':
       return _new(arguments.skip(1).toList());
-    case 'forms':
-      return _forms(arguments.skip(1).toList());
     case 'features':
       return _features(arguments.skip(1).toList());
     case 'capabilities':
@@ -579,41 +575,6 @@ Future<void> _lab(List<String> arguments) async {
     );
   } on ManaFailure catch (error) {
     stderr.writeln(error.message);
-    exitCode = 1;
-  }
-}
-
-Future<void> _forms(List<String> arguments) async {
-  try {
-    final parser = ArgParser()
-      ..addOption('server')
-      ..addOption('resource')
-      ..addOption('output')
-      ..addOption('api-client')
-      ..addFlag('check', negatable: false);
-    final values = parser.parse(arguments);
-    final server = values.option('server'),
-        resource = values.option('resource'),
-        output = values.option('output');
-    if (values.rest.length != 1 ||
-        values.rest.single != 'generate' ||
-        server == null ||
-        resource == null ||
-        output == null) {
-      throw const ManaFailure(
-        'Usage: mana forms generate --server <mix-project> --resource <Module> --output <file.dart> [--check]',
-      );
-    }
-    final result = await generateForms(
-      server: server,
-      resource: resource,
-      output: output,
-      check: values.flag('check'),
-      apiClient: values.option('api-client'),
-    );
-    stdout.writeln(jsonEncode(result));
-  } on Object catch (error) {
-    stderr.writeln(error is ManaFailure ? error.message : '$error');
     exitCode = 1;
   }
 }

@@ -7,8 +7,6 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 
-import 'agent_view.dart';
-import 'host_zoom.dart' if (dart.library.js_interop) 'host_zoom_web.dart';
 import 'moment_restartable.dart';
 import 'rendered_tree.dart';
 import 'moment_gestures.dart';
@@ -209,7 +207,6 @@ final class MomentController extends ChangeNotifier {
       throw ArgumentError('Moments requires loopback HTTP');
     }
     _endpoint = endpoint;
-    relayZoomToHost();
     _headers = {
       'Authorization': 'Bearer $token',
       'Content-Type': 'application/json',
@@ -436,7 +433,6 @@ final class _MomentHostState extends State<MomentHost> {
   MomentController? _controller;
   RenderedTreeReporter? _rendered;
   MomentGestureReporter? _gestures;
-  AgentViewReporter? _agent;
   @override
   void initState() {
     super.initState();
@@ -457,8 +453,6 @@ final class _MomentHostState extends State<MomentHost> {
     unawaited(controller.connect(endpoint, token));
     _rendered = RenderedTreeReporter(controller);
     _gestures = MomentGestureReporter(controller);
-    _agent = AgentViewReporter(controller);
-    unawaited(_agent!.connect(endpoint, token));
     unawaited(_gestures!.connect(endpoint, token));
     unawaited(_rendered!.connect(endpoint, token));
   }
@@ -466,7 +460,6 @@ final class _MomentHostState extends State<MomentHost> {
   void _disconnect() {
     _rendered?.dispose();
     _gestures?.dispose();
-    _agent?.dispose();
     _controller?.dispose();
   }
 

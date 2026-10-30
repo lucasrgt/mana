@@ -1,5 +1,5 @@
 name: live_ui
-description: Private development bridge for persistent visual edits in a running Flutter app.
+description: The app's bridge to Moments, for development builds.
 publish_to: none
 version: 0.1.0
 environment:

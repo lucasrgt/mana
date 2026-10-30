@@ -17,11 +17,9 @@ limits and the Moments that prove each journey. The contract for agents is in
 | [`ash/moments`](ash/moments/README.md) | the `moment` DSL and backend recipes |
 | [`ash/session`](ash/session/README.md) | short sessions and rotating refresh for Flutter clients |
 | [`ash/runtime`](ash/runtime/README.md) | release configuration, edge, metrics and readiness |
-| [`ash/presentation`](ash/presentation/README.md) | forms declared in Elixir, compiled to Flutter |
 | `ash/br` | Brazilian validations (CPF, CNPJ, license plate) |
 | **Flutter** (`flutter/`) | |
 | [`flutter/ash_session`](flutter/ash_session/README.md) | session, recovery and Bearer over the generated client |
-| [`flutter/ash_query`](flutter/ash_query/README.md) | Ash read pages (`OffsetPage`) |
 | `flutter/mana_command` | stateful commands (`Query`, `RowAction`, `QuietAfterDispose`) and verb gates |
 | `flutter/mana_live` | live entities over Phoenix channels |
 | `flutter/mana_primitives` | Dart types for the Mana primitives |

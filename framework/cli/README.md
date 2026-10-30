@@ -47,7 +47,6 @@ The same CLI gathers the tools the other framework pieces use:
 | `mana contracts install` | downloads oasdiff and OpenAPI Generator pinned by SHA-256 in `contracts/toolchain.json` |
 | `mana contracts compare --base --candidate` | compares OpenAPI contracts ([contracts](../contracts/README.md)) |
 | `mana client generate --input --output --name` | generates and analyses the Dart client, with recorded provenance |
-| `mana forms generate --server --resource --output` | compiles the Ash presentation forms |
 | `mana mix <project> [args]` | `mix` in the pinned Elixir image (Docker), with the Moments ownership labels |
 | `mana web version <build/web>` | gives a Flutter web build's entrypoints content-specific names |
 | `mana capabilities [topic]` | the framework catalog (`framework/catalog.toml`): what exists, how to use it, what it replaces; `skill` generates the agents' skill |
