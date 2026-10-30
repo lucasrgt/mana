@@ -2,8 +2,7 @@
 
 Moments is the runner of named, navigable situations for Mana apps (Ash backend +
 Flutter client). It opens a situation by name, keeps it alive while you edit,
-verifies its declared criteria, forks it into independent copies and selects
-the Moments a change affects. The protocol it implements is in
+verifies its declared criteria and selects the Moments a change affects. The protocol it implements is in
 [protocol-v0.1.md](protocol-v0.1.md); the Markdown map parser
 (`lib/src/format.dart`) and the runtime adapter (`lib/src/runtime.dart`) follow it.
 
@@ -19,10 +18,8 @@ in `lib/src/protocol.dart`. Changing that text requires reconciling the
 declared capabilities; this identity check does not certify conformance.
 `moments capabilities --json` works outside a project and exposes the engine's
 capabilities and limits. It reads no private data and proves no journey.
-Discovery distinguishes `executionProfiles.launcher` from
-`executionProfiles.materialized`: parents and forks are supported by
-`open --isolated`/`fork` with an adapter and captured roots; the plain commands
-never flatten children into roots.
+Discovery declares `executionProfiles.launcher`; no command flattens a child
+into a root.
 
 The Ash DSL accepts `from(:parent_name)` on a Moment. The exporter resolves
 ancestry after collecting every domain and refuses missing parents and cycles.
@@ -39,30 +36,8 @@ ancestry from routes, step order, shared recipes or test results.
 `graphFromMap` accepts an authored `MOMENTS.md` and produces the same
 representation. There is no second dependency file.
 
-The materializer walks `from`, runs each ancestor once and captures its layers
-before opening independent copies. The public path is `open --isolated` or
-`fork`, with an explicit local adapter and a browser host. Plain opening and
-journeys keep refusing children: they cannot treat them as
-independent roots.
-
-Capturing the database also captures durable queues. The adapter must control
-producers before starting a copy; blocking only the external transport does not
-stop attempts from being consumed or state from changing. Booting Oban in manual mode
-in the copy, a parent Moment can queue a job and a child can run the AshOban
-worker explicitly, keeping the attempt when restored; further children can add
-real loopback SMTP with private capture. Restoring a mailbox does not send email
-again. Criteria are observed by the same `check --session`, without repeating
-the transition. The engine does not intercept arbitrary effects or guarantee
-network isolation.
-
-The `private-json` layer captures opaque JSON objects of up to 1 MiB in private
-files outside the Flutter bridge. It requires the adapter to confirm writers
-are stopped, verifies the snapshot's identity and digest before copying, and
-refuses symlinks, public files and unknown content during cleanup. Writes above
-the limit are refused before replacing the state. `recover --run` and
-`recover --session` recognise this layer without importing the app's adapter.
-Restoring locally captured messages does not undo sends to an external provider
-and does not promise exactly-once delivery.
+A child is never opened, prepared or run: `from` records lineage for the map.
+Share setup between Moments through a backend `base` recipe instead.
 
 `open --fresh` resets presentation; `up --fresh` runs the app's preparation;
 `reset --discard-data` discards the stopped database. None of them is the
@@ -136,152 +111,27 @@ There is no transaction between the manifest, local files and the database: a
 declaration changed during a recipe already started may be detected after
 effects happened. That failure needs inspection; it is not proof of rollback.
 
-### Interfaces with shared storage
+### Suite workers sharing one web build
 
-The internal `WebActor.start` host optionally accepts `surfaces`, a map of 2–8
-IDs allocated by `allocateBrowserBoundary` to `{bridgeUrl, bridgeToken}`. All
-use the same bundle, web origin and API; each keeps its own bridge, runtime
+With several workers, the suite serves one compiled bundle through
+`WebActor.start(surfaces: ...)`, a map of worker IDs to `{bridgeUrl,
+bridgeToken}`. All use the same bundle, web origin and API; each keeps its own bridge, runtime
 claim, observations and gesture channel. Bootstrap version 2 selects only the
 interface named by `momentsActor` and confirms the same ID in Dart. A missing,
 duplicate or unknown selector is refused, with no default bridge.
 
 This is a routing boundary, not security isolation between interfaces on the
 same origin: they share storage and run trusted local code. The IDs are not
-credentials. It is not `fork`, does not copy the database and does not change
+credentials. It does not copy the database and does not change
 the Moments' `from` ancestry. The dynamic path is debug/loopback only; regular
 and release builds never fetch the bootstrap.
-
-The host provider has an optional `reveal(id)`. The preview host uses it to
-bring its existing iframe into view before gestures/observations, avoiding
-off-screen frame throttling. It neither navigates nor recreates the interface.
-Revealing does not prove rendering: the journey still needs receipts and
-observations.
-
-### Composing steps and checkpoints without redeclaring the domain
-
-The engine in `lib/src/composition.dart`, used by `moments compose`, takes a
-version 1 plan with `stages`. Each stage names `id`, `surface`, `moment` and
-`kind`:
-
-```json
-{
-  "version": 1,
-  "stages": [
-    {"id": "sign-in", "surface": "a", "moment": "tasks-login", "kind": "steps", "steps": ["email", "password", "sign_in"]},
-    {"id": "check", "surface": "a", "moment": "tasks-login", "kind": "checkpoint"}
-  ]
-}
-```
-
-`steps` selects names in declaration order and keeps their `until`.
-`checkpoint` observes all of the Moment's final criteria or an explicit
-selection in `checks`. It runs no recipe or gesture. Restore criteria are
-refused here: they need the runner that holds the restore receipt. The plan
-accepts no alternative targets, values, predicates or ancestry; `from` stays in
-the catalog.
-
-`compileComposition(plan, manifest)` validates the whole plan before connecting
-interfaces. `executeComposition({plan, manifest, connect, report, beforeStage,
-afterStage})` uses the existing gesture executor and evaluator. The adapter's
-`connect({surface, moment})` supplies `request` and may supply
-`validateInspection`. Preparation, ownership/leases, private inputs and closing
-belong to the adapter. Hooks receive only the stage ID and allow explicit local
-coordination, such as arming a failure; they are not declarative criteria and
-do not allow re-execution after an uncertain result.
-
-Receipts distinguish `declared-step-postconditions`, `all-final-criteria` and
-`selected-final-criteria`, with time, duration and runtime identity. `passed`
-approves the run of the selection, historically, without claiming every
-referenced Moment is still valid at the end. The engine pins client/revision
-per interface, refuses aliases for the same client, stops after a failure and
-never repeats gestures.
-
-Within this API, selection without redefinition and interruption without replay
-are `guaranteed` by the compiler/executor and the protocol's negative tests.
-Using the existing executor and evaluator is `default-safe`; custom adapters
-still control transport and inspection. Ownership, freshness of backend
-observations and hook semantics require adapter review (`reviewed`).
-
-### Running a composition from the CLI
-
-```sh
-moments compose --plan moments/compositions/shared-session-late-401.json \
-  --profile session-tabs-0c724e40 \
-  --browser-socket /private/path/browser.sock \
-  --browser-provider <host-id> --json
-```
-
-The browser host must be connected and explicitly authorise the profile's web
-origin. The CLI validates the whole plan before running the local program
-`moments/adapters.dart`, which calls `runCli(args, adapters: ProjectAdapters(...))`.
-The `composition` adapter receives the context, is synchronous and creates no
-resources; the returned `CompositionProfile` supplies `recovery`,
-`prepare(signal:)`, `connect`, `cleanup(passed:)` and, optionally,
-`beforeStage`, `afterStage` and `verify`. `verify` may add profile-specific
-observations; it does not replace or change checkpoint approval.
-`cleanup({passed})` must confirm closing even after partial preparation.
-Adapter exceptions are not copied to the public output because they may contain
-private inputs.
-
-The session uses the same lock/marker and ownership format as
-`open --isolated`/`fork`. `recovery` declares supported processes, containers
-and roots up front, and may declare up to eight `browsers` directories with
-records created by `allocateBrowserBoundary`. The adapter may not create
-resources before returning their handles/cleanup.
-
-`plan.json`, `session.json` and `composition-report.json` under
-`moments/.proofs/materializations/<uuid>/` keep the selection, ownership and
-results. SIGINT/SIGTERM interrupt the sequence and wait for cleanup; effects
-already sent are not reverted. An unconfirmed shutdown keeps the marker and
-returns 2. After the supervisor stops, use `moments recover --session <dir>`
-with the matching browser host if interfaces are still open. Recovery does not
-import the adapter, relaunch services or repeat recipes/gestures.
-
-Exits: 0 selection passed and resources closed; 1 a criterion failed and
-resources closed; 2 execution or shutdown unavailable/uncertain.
-
-### Public preparation and recovery without replay
-
-```sh
-moments prepare --profile session-tabs-<new-id> --json
-moments recover --preparation moments/.proofs/release/session-tabs-<id> --json
-```
-
-`prepare` runs the `preparation` adapter from `moments/adapters.dart`, a
-function `({project, profile, onProgress})`. The adapter controls build,
-migrations, provisioning and confirmations; the CLI forwards progress and the
-result. There is no implicit resumption of sign-up or migration. Preparing a
-profile does not verify its journeys nor approve a production release.
-
-The default preparer records a private journal **before any effect** through
-`await registerPreparation(...)`: processes and containers owned by the
-attempt, plus receipts of the services to stop or keep. Paths are relative to
-the proof directory; symlinks and external paths are refused. Recovery lives in
-`lib/src/managed.dart` and never runs the app's adapter, SQL, migrations or
-recipes.
-
-`recover --preparation` requires the original supervisor to be dead. It first
-stops the recorded creator processes and build containers, then checks the
-services' name, owner label and Docker ID. The ID is persisted before a service
-is stopped; a replacement after recovery starts prevents another stop.
-Databases declared as kept are neither stopped nor removed. A failed inspection
-does not prove absence.
-
-The journal becomes `attention` when shutdown stays uncertain and `closed` on
-success; later calls touch nothing. The registration holds the consumer's
-`flock` until `await ownership.close()` or `await ownership.attention()`. A
-second preparation and the managed lifecycle operations are refused while the
-lock is held. This property is `guaranteed` within the managed paths that use
-this registration/lock; manual commands and adapters that ignore it are outside
-that boundary.
 
 ### Latency profile of the same journey
 
 `moments profile <name> --json` runs the declared journey once, with the same
 preparation, gestures and criteria as the suite. Writes that are part of the
 journey happen normally; there is no automatic repetition to collect samples.
-It uses the local launcher, without `--session`, materialized branches or
-concurrent load.
+It uses the local launcher, without concurrent load.
 
 The normal report in `.proofs/` gains `profile`: separate times for
 declaration, ownership, preparation/restore, steps, verification and closing.
@@ -294,104 +144,6 @@ Missing, legacy or truncated diagnostics produce a `partial` profile and exit 2
 when the journey passed; `journeyStatus` keeps the functional result. No SQL
 event observed means unknown, not zero queries. Detached jobs, CPU, heap, load,
 multi-run percentiles and production cost are not covered.
-
-### Managed opening and forking
-
-```sh
-moments open task-edit --isolated --browser-socket /private/path/browser.sock --browser-provider 2
-moments fork task-edit --copies 2 --browser-socket /private/path/browser.sock --browser-provider 2 --json
-```
-
-The project supplies `moments/adapters.dart`, trusted local code whose
-`materialization` adapter is synchronous. The returned `MaterializationProfile`
-has `prepare`, `cleanup`, `codeIdentity` and the `engine` (`layers`, `runtime`,
-`recipes`, `scope`). It also records `recovery`: local `processes`/`containers`
-directories and `roots` with name/type (`postgres` or `flutter-actor`), plus
-the cluster identity when needed. Registration happens before `prepare` and may
-not contain credentials, external paths or callbacks.
-
-`fork` accepts 1 to 8 copies, two by default. The session keeps the actors
-alive until SIGINT/SIGTERM; `--json` emits progress JSONL, `ready` with
-URLs/IDs and `closed` after cleanup. These receipts are not approval of
-business criteria. Declared transitions may write to the copies. Roots are
-discarded only after actor shutdown is confirmed. Failures keep an `attention`
-record in `.proofs/materializations/<id>/session.json`.
-
-To verify **the copy that is already open**, use another terminal:
-
-```sh
-moments check session-expired --session /path/to/app/moments/.proofs/materializations/<id> --project /path/to/app --json
-moments check session-authenticated --session /path/to/session --actor <uuid-from-ready> --project /path/to/app --json
-```
-
-`--actor` is required when more than one copy is ready. The command returns 0
-when criteria pass, 1 on failure and 2 when unavailable; it keeps the session
-open in all cases. A Moment without final criteria is still useful for editing,
-but its check returns 2.
-
-The managed check validates project, live session, ownership marker, run,
-catalog, actor and bridge before calling `checkMoment({materialized: true})`.
-It imports no adapter, compiles nothing and reapplies no recipe or gesture. The
-transport only allows state, inspection and status GETs; it refuses redirects,
-non-loopback addresses and responses identifying another actor.
-`guaranteed` boundary: on this public entry point and the supported local
-runtime, verification cannot dispatch mutations, preparation or gestures
-through the transport. Custom consumer observation code is still trusted and
-under review.
-
-To recover the whole set after the supervisor dies:
-
-```sh
-moments recover --session /path/to/project/moments/.proofs/materializations/<id> --browser-socket /private/path/browser.sock --browser-provider 2 --json
-```
-
-The session path validates workspace, dead supervisor and inventory before
-recovering build processes, containers, runs and, last, roots. It does not
-import the current adapter or repeat recipes. A kernel lock and a durable
-marker prevent another materialization and the default `up`, `down` and `reset`
-paths in the same consumer. After a crash, the marker requires explicit
-recovery before the project is reused.
-
-An opening without an answer keeps its resources until it is reconciled. An
-empty inventory alone does not prove absence. The provider's optional `find`
-contract may return `{matches: [], settled: true}` **only** when every opening
-for that nonce has finished and no late call can open a tab afterwards.
-
-With a dev launcher, it must be stopped first. Preparation compiles a
-current Ash release and Flutter debug artifact, copies the database and
-authenticates inside the copy. Actors use the same fixed artifact: there is no
-hot reload in this mode; code editing stays on the `up`/`refresh` launcher.
-
-#### Postgres credentials per branch
-
-The driver accepts `opts.runtimeAccess: {schemas: ['public'], connectionLimit: 12}`.
-When declared, materialization produces a v3 handle and a private `access.json`
-with a random, exclusive login/password. Without the option, the v2 contract
-keeps a NOLOGIN owner for existing coordinators; that does not allow using it as
-an application credential. `postgres.runtimeAccess({handle, dir, opts})`
-requires v3, a valid cluster/database/role identity and the matching private
-file. The adapter builds its own `DATABASE_URL` and should refuse missing
-credentials, with no administrative fallback.
-
-The v3 role is not a superuser, does not create databases/roles, does not
-replicate, does not bypass RLS and has no explicit membership. Public CONNECT is
-revoked on copies. DML and sequence privileges in the declared schemas are
-granted to `pg_database_owner`, so copied grants do not depend on the parent's
-ephemeral role (see
-[PostgreSQL 16 predefined roles](https://www.postgresql.org/docs/16/predefined-roles.html)).
-Snapshots stay sealed and their owners cannot log in.
-
-- `guaranteed` in the driver: refuses a divergent credential/owner identity and
-  never accepts a v2 handle as v3 runtime access.
-- `default-safe`: own roles, native privileges and the normal Ash/Ecto pool. A
-  custom adapter with coordinator access can deliberately leave this path; it is
-  not a sandbox against hostile local code.
-- `reviewed`: public ACLs, SECURITY DEFINER functions of the origin and external
-  integrations need review in the consumer.
-
-`dart run tool/prove_postgres_access.dart <instance.json> <database>` exercises
-real credentials, local writes, access/escalation refusals, inheritance after
-the parent is discarded and recovery of a lost response while enabling login.
 
 ### Selecting Moments from Dart code
 
@@ -821,14 +573,8 @@ data preparation or a pending edit invalidate the run. There is no automatic
 retry; the follow-up deadline is 80 s and reaching it does not cancel the
 supervisor.
 
-### Verify without compiling
+### Criteria and proofs
 
-```sh
-moments check review-draft
-```
-
-The command resumes the saved situation, waits for a new Flutter confirmation
-and queries the isolated backend. It neither compiles nor prepares data.
 Criteria live inside the Moment in the Ash DSL, next to the situation they
 describe:
 
@@ -1164,35 +910,6 @@ rejected by its revision. Resumed projections are validated against the current
 contract, and names removed from the catalog cannot be opened just because they
 are still stored.
 
-### Renewing data without rebuilding the instance
-
-When a time-limited situation expired, or you want a fresh initial record:
-
-```sh
-moments renew checkout-confirmed
-moments renew                       # check the last operation, without creating another record
-moments inspect checkout-confirmed
-```
-
-`renew <name>` requires the backend launcher running and Flutter ready. The
-recipe reuses the existing accounts and records and, through the normal local
-APIs, creates the next record the situation needs. It does not change the clock
-or revive the expired record; earlier records stay in the database. The
-supervisor keeps the Postgres, API and Flutter processes, atomically saves the
-new reference, reapplies the requested name's UI recipe and asks Flutter for a
-hot restart. The command waits up to 90 s for the screen to confirm. There is no
-automatic retry; a failure before the new reference is saved keeps the previous
-one. The APIs do not form a single transaction, so an interruption may leave
-partial records in the local database.
-
-| Command | Effect |
-|---|---|
-| `open <name>` | Resumes the saved UI projection. |
-| `open <name> --fresh` | Reapplies only the UI recipe. |
-| `refresh` | Refreshes the app and waits for its resume in the supervisor. |
-| `renew <name>` | Adds a new record for the situation and opens the UI recipe. |
-| `reset --discard-data` with the launcher stopped | Removes the instance's database and projections; the next `up` rebuilds everything. |
-
 ## Web restart frame pause
 
 Before `app.restart`, the supervisor asks for a pause through the authenticated
@@ -1255,228 +972,6 @@ SIGINT/SIGTERM reuse the same shutdown instead of killing the cleanup. After an
 abrupt death, old locks still require an ownership/process inspection before
 removal; there is no automatic takeover because a file looks old.
 
-### Additive evolution of the saved presentation
-
-When reopening with a changed declaration, the engine may fill in missing
-restorable properties from the current recipe's defaults, as long as the route
-is the same. Saved values win and stay validated. Unknown/removed properties,
-invalid enums, incompatible types and route changes are still refused. The
-engine infers no renames or domain migrations; `--fresh` is the explicit
-intention to use the initial recipe.
-
-## Isolated copies: layers and materialization
-
-### Postgres layer
-
-`postgres_layer.dart` implements capture/materialize/dispose for a Docker
-cluster with proven Moments ownership.
-
-- `sourceHandle` adopts an existing database for reading/capture only; `dispose`
-  refuses that handle. New copies (v2) get random names, an OID, a comment and an
-  owner of their own without login, checked against the exact container on every
-  operation. The owner and its mark are created atomically before the database;
-  the database is born sealed and only a complete branch enables connections.
-- `capture` uses `CREATE DATABASE ... TEMPLATE ...` with no active connections.
-  The snapshot has connections disabled. It never runs `pg_terminate_backend`,
-  forces sessions closed or calls `DROP ... FORCE`.
-- `materialize` creates an independent database from the sealed snapshot. The
-  destination has an exclusive intent persisted before the effect; a second
-  process cannot replace the first creation.
-- `dispose`/`forget` remove only identified copies; active connections, a
-  changed OID, owner or comment stop the operation. `recover({dir, opts})`
-  reconciles an interrupted v2 intent without recreating the database or
-  repeating recipes. A lost DROP response allows another cleanup without
-  repeating CREATE.
-
-```sh
-dart run framework/moments/tool/prove_postgres_fork.dart \
-  <app>/moments/.backend/instance.json <database> \
-  <app>/moments/.proofs/postgres-forks
-```
-
-The proof copies the app's real tables, including tokens and Oban, adds a
-row to one copy only and creates two branches of the same snapshot, comparing
-fingerprints of every public table before/after. Run it with the app and its
-workers stopped. Databases share a cluster and an administrator: data
-independence is not a security boundary against a client with superuser
-credentials.
-
-### Layered materialization coordinator
-
-`materializer.dart` consumes the catalog exported by Ash; `from` is the only
-ancestry relation. `build(name)` materializes the parent's snapshot, starts the
-runtime, runs the transition registered in `backend.recipe`, stops the runtime
-and captures the layers. The parent's snapshot is reused by other continuations
-in the same run; the recipe is not redone for each branch. `open` hands over a
-copy with a live runtime, and `fork` several copies of the same point.
-
-Each integration supplies layers, explicitly captured roots, allocate/start/stop
-callbacks, transition recipes, code identity and scope. The whole catalog is
-validated; code or declaration changes during the transition prevent publishing
-the snapshot as current. A failed transition is never repeated automatically.
-Flutter gesture journeys require `runtime.executeJourney`; without that executor
-they are refused rather than silently ignored.
-
-`runtime.allocate(world)` returns a synchronous handle without starting
-processes. The coordinator records the handle before calling
-`runtime.start(handle, world)`. Every started resource must belong to the
-handle, even when start fails partially. `runtime.stop(handle)` must be
-idempotent and only finish after every component stopped.
-
-`runtime.executeJourney(world, {navigation: true, ...})` uses
-`checkMoment({materialized: true, manifestFile, navigation: true, ...})` to walk
-the gestures without reapplying recipes. Final criteria are optional and not
-evaluated in that operation. The coordinator requires a `captured`
-`materialized-navigation` receipt tied to the right instance, parent,
-destination and manifest, with the lease released. The receipt lives in
-`instance/journey.json` with `verification: not-performed` or
-`step-criteria-only`; capturing a navigable state does not approve business
-criteria.
-
-Durable events in `events.jsonl` carry run/instance/snapshot/transition,
-sequence, instant and scope. `run.started` pins the protocol, manifest hash and
-code identity. `snapshot.ready` means the declared layers were captured, not that
-criteria were verified. Adapter exceptions never go into events.
-
-### Projecting a run onto the map
-
-`moments graph --events <events.jsonl> --json --project <app>` combines the
-declared map with a materialization's events. It is an offline read: it loads no
-adapters, touches no database, runs no recipe and defines no new dependency.
-Each edge references the transitions actually started/completed/failed.
-Captured snapshots and the last recorded instance state stay separate from
-criteria (`verification: not-recorded`). The reader rejects broken sequences,
-mixed runs, relations incompatible with `from`, events without their
-predecessors and an incomplete last record. The read limit is 16 MiB.
-
-### Flutter actor layer
-
-`flutter_actor.dart` captures only `ui-session.json` (route and declared
-restorable properties) and `actor-state.json` (explicit private slots). Each copy
-has its own directory and identity. Snapshots have content hashes; changes are
-refused before the next instance is created. The driver refuses symlinks,
-existing destinations, disposing the origin and handles of another copy.
-Private files are written with mode 0600.
-
-The integration must supply `assertStopped`: capture/dispose cannot happen with
-the actor alive. On the web, stopping `flutter run` does not stop the tab's
-JavaScript; the actor's owner must also close the tab before stopping
-bridge/API and capturing.
-
-`Bridge.start(privateStores: ['session'], ...)` enables a local authenticated
-channel for the slot; it is absent by default. `MomentPrivateStore` in Dart only
-connects in a development launch, and `SessionStore.callbacks` adapts
-read/write to the normal Ash session. The saved value is still validated by the
-API; the bridge issues no tokens, ignores no revocation and never logs in again
-to hide a rejected session. The channel has one active client **per declared
-slot**. Private slots never enter the visual projection or execution events.
-
-### Owned containers and processes
-
-`allocateOwnedContainer` (in the `mana` package) records ownership in `container.json` before any Docker
-call. Allocation is exclusive. `create` creates a stopped container; `start`
-starts only the captured ID after checking its name and ownership label. A
-creation or start failure never allows repeating the operation. `stop` checks the
-identity, stops by ID, observes the stop and only then removes the container. If
-the `create` response is lost, recovery finds the container by name and label and
-pins its ID to disk before removing it. Recovery refuses a live supervisor (PID,
-process start and boot). Divergent labels/IDs are refused before stop/remove.
-This is not isolation against hostile code with access to the same Docker daemon.
-
-`owned_process.dart` provides allocation, start, inspection, stop and recovery
-for an actor process. On Linux, the run belongs to a transient **user systemd**
-unit with `KillMode=control-group` and no automatic restart. Ownership includes
-a random name, description and InvocationID, checked before asking for a stop.
-The cgroup covers detached children that a periodic PPID scan could miss. The
-`process.json` record exists before the launcher; a worker inside the unit waits
-for the coordinator to confirm and persist the InvocationID before starting the
-command. Requires Linux, cgroup v2 and a user systemd; there is no equivalent
-adapter for macOS/Windows yet.
-
-### Coordinated recovery of an interrupted run
-
-`recoverMaterialization({directory, layers, runtime})`: creating a run saves
-`run.json` with the coordinator identity, manifest/code, adapter types and scope
-before allocating layers. Recovery refuses a live coordinator, validates the
-whole inventory and requires adapters passed explicitly by the caller,
-compatible with those types. It never imports the manifest or loads recipes to
-clean up.
-
-The runtime implements `recover({dir, instanceId})`, stops its resources and
-returns `{status: 'stopped', instanceId}`. Every runtime must confirm the stop
-before any layer is discarded. Each driver implements `recover({dir, opts,
-pending})` and confirms `{status: 'disposed'}`. A failure keeps `recovery.json`
-in `attention`; the next call resumes through idempotent inspection. Roots given
-to the run are not part of its disposable inventory.
-
-**Guarantee limit:** the coordinator guarantees reference validation and callback
-order; adapters must verify the real stop and ownership of each resource. A
-custom callback that invents a receipt is not proof of a stop.
-
-### Browser boundary of the local actor
-
-`browser.dart` records the intent to open a tab before exposing its URL. Each URL
-gets an ownership identifier; the host associates provider and tab ID with the
-opening. Closing requires a current inspection of the tab, a URL match (allowing a
-route fragment change) and confirmation of absence after closing. A divergent
-tab, a missing provider or an opening without identity keep cleanup pending.
-There is no search by title and no closing of all browser tabs.
-
-The `ash-flutter-local` recovery adapter confirms the browser boundary, stops the
-Flutter process and removes the API container. The provider is an explicit host
-dependency with `id`, `inspect(tabId)` and `close(tabId)`; inspection returns
-`{id, status: 'present', url}` or `{id, status: 'absent'}`.
-
-```sh
-framework/moments/moments recover --run /path/app/moments/.../runs/UUID \
-  --project /path/app --browser-socket /tmp/private-host/browser.sock \
-  --browser-provider 2 --json
-```
-
-`recover` without `--run` keeps its meaning: release the development instance's
-journey after inspecting its effects. With `--run`, it stops and discards the
-interrupted run's copies; the origin, external roots and the original journal
-are kept. The CLI supports the `ash-flutter-local` profile, with `postgres` and
-`flutter-actor` layers, and refuses runs from another project, directories
-outside `moments/` and symlinked paths.
-
-The CLI connects to a private Unix socket of the same user. The host serves
-`inspect`/`close` for bound tabs plus `open` and `resolve`. Opening requires one
-of the explicit `openOrigins` (`http://127.0.0.1:<port>`) and the `momentsActor`
-nonce. The host persists the intent before calling the browser, records the
-returned ID and reuses that record after a restart. A lost response is reconciled
-by an exact search for the bound URL; zero or several matches keep the situation
-uncertain. Another tab is never opened to resolve that uncertainty. An origin
-that is not authorised gets a terminal cancellation per nonce.
-
-In restricted hosts, `moments host browser <dir>` keeps the socket in the CLI and
-forwards requests through private files to the editor's browser API. The
-directory belongs to the user with mode 0700; `bindings.json` declares
-`provider` and `tabs: [{id, url}]`. Each answer is correlated by UUID; a missing
-answer keeps the data held. This boundary assumes trusted local adapters and
-processes; it is not isolation against malicious code running as the same user.
-
-### One Flutter debug bundle for several actors
-
-`MomentRuntime.initialize()` loads per-instance configuration only in Flutter web
-debug with `MANA_MOMENTS=true` and `MANA_RUNTIME_BOOTSTRAP=true`. The app resolves
-its API with `MomentRuntime.apiUrl(declaredValue)` before creating clients.
-`web_actor.dart` serves a compiled Flutter artifact and the local
-`/__moments_runtime` endpoint. Each origin supplies its own endpoints/token,
-with no cache and no CORS for other origins; only loopback is accepted. The token
-never goes into the URL or the shared bundle. Actors keep their own HTTP
-processes, bridge, session and database; only the compiled files are shared.
-It is a fixed artifact for navigation/testing/auditing: it has no hot reload.
-
-`FlutterActorServices` brings the API, bridge and Flutter/web process up and
-down for an actor. It takes a backend adapter (`allocate/start/stop`), a frontend
-(`flutter-run` or `shared-debug-artifact`) and `assertBrowserClosed`. The handle
-is registered before start; a failed start is never repeated. Stopping waits for
-a pending start and only stops services after the host confirmed the tab is
-closed. `FlutterActorRuntime` composes the services, the browser boundary
-and the journey executor; the host opens the tab and the runtime waits for the
-Moment's first observation.
-
 ### Android transport and lifecycle
 
 `android_transport.dart` sets up native `adb reverse` forwards for an explicit
@@ -1506,47 +1001,11 @@ before allocation**; web/Linux stay on version 2, and older readers refuse the
 new version instead of stopping a run while ignoring resources. `moments down`
 closes the transport on normal shutdown and recovers it after the launcher dies.
 
-### Materialized Android actors
+### Additive evolution of the saved presentation
 
-`FlutterActorRuntime` accepts `frontend.mode: 'flutter-android'` with an
-explicit `device: 'android:<serial>'` and `applicationId`. The runtime identity is
-`ash-flutter-android`, with no fake browser provider. The same executor walks the
-declared steps and criteria; the Flutter daemon confirms the connected device.
-The CLI offers `open <moment> --isolated --device android:<serial>` and
-`check <moment> --session <dir>`. One device holds one open actor at a time.
-
-With `frontend.runtimeBootstrap: true`, the debug defines are constants; API,
-bridge and actor capability travel in Flutter's native `--route`, inside a
-reserved `__mana_moments` envelope. `MomentRuntime.initialize()` consumes and
-validates it before the HTTP clients, refusing services outside
-`http://127.0.0.1:<port>`, credentials in URLs, invalid tokens and repeated or
-extra query parameters. In go_router, declare
-`overridePlatformDefaultLocation: MomentRuntime.nativeBootstrap` together with the
-restored `initialLocation`.
-
-For immutable materialized scenarios, the adapter can also supply
-`frontend.applicationBinary: '/private/path/app-debug.apk'`, which requires
-`runtimeBootstrap: true`. The launcher uses Flutter's
-`--no-hot --no-pub --use-application-binary`. `apkanalyzer` must be on the PATH:
-before any effect, the runtime checks package and debug flag, pins the SHA-256 on
-the first open and refuses changes between actors.
-
-Before launching Flutter, `AndroidActor` takes ownership of the transport and
-records the intent to open the package. It refuses an app already running and
-devices with more than one Android user. Before capturing state, the launcher's
-contained process must be gone, `am force-stop --user 0` stops the explicit
-package and `ps` confirms the main and `package:*` processes are absent. Only then
-is the transport released. It neither clears data nor uninstalls the APK.
-Boundary: **default-safe** with a dedicated device, user 0 and coordination
-between Mana runs.
-
-### Artifact fingerprints
-
-The artifact fingerprint keeps the `sha256-tree-v1` format.
-`artifactFingerprint(directory)` always reads every byte. For repeated queries in
-the same run, `ArtifactFingerprint(directory).snapshot()` walks the whole
-tree and reuses file hashes only while device/inode, size, permissions and
-ctime/mtime in nanoseconds match. Additions, removals, inode swaps and changes
-with a restored mtime invalidate the identity. Use `snapshot({fresh: true})` to
-reread every byte explicitly. This is **default-safe** on a local filesystem with
-trusted metadata; it is not an integrity attestation against a hostile host.
+When reopening with a changed declaration, the engine may fill in missing
+restorable properties from the current recipe's defaults, as long as the route
+is the same. Saved values win and stay validated. Unknown/removed properties,
+invalid enums, incompatible types and route changes are still refused. The
+engine infers no renames or domain migrations; `--fresh` is the explicit
+intention to use the initial recipe.

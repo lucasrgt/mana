@@ -67,35 +67,6 @@ direct Repo access and actor/tenant propagation. No property becomes
 The command is explicit and local; it is not part of the build, the launcher or
 any global gate. Reports can live in `.proofs/` and be discarded.
 
-## Associating journeys with the review plan
-
-After producing the Ash plan, the CLI can associate existing reports without
-compiling, connecting to the app, preparing data or repeating gestures:
-
-```sh
-framework/moments/moments review \
-  --plan <app>/moments/.proofs/architecture/task-complete.json \
-  --evidence <app>/moments/.proofs/<journey>.json --json
-```
-
-`--evidence` can be repeated up to 32 times. The result references the plan and
-each report by SHA-256 and lists only the spans of the chosen resource/action,
-with Moment, step, execution kind and span result. The report's criteria and
-business values are not copied. Input files are left untouched. The CLI reads
-regular JSON files, no symlinks, up to 8 MiB each.
-
-This association is **historical**: it does not compare the current checkout
-with the run's sources nor certify where an editable local report came from. A
-failed journey may also have run the action; `span-finished` does not prove a
-commit or success. Duplicate or inconsistent receipts are refused; identical
-inputs count once. Missing or truncated capture stays explicit.
-
-Every candidate in the plan is kept with `unverified` coverage; an observation
-outside the domain also shows up, without inventing a static relation. No
-review question is resolved and no Moment is excluded for not appearing in the
-receipts. Use the observations to find and prioritise journeys to inspect or run
-again.
-
 ## Actions observed during a journey
 
 `Moments.ActionTrace` implements Ash's native tracer for `action`,

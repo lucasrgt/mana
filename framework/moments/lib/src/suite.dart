@@ -40,8 +40,6 @@ final class _SupervisorDevelopment implements Development {
   @override
   Future<void> Function()? get stop => null;
   @override
-  Renewal? get renewal => null;
-  @override
   Map<String, Object?> status() => _status();
 }
 

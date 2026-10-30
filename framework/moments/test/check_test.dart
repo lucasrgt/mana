@@ -196,9 +196,7 @@ final class Fixture {
     int timeout = 5,
     int poll = 1,
     bool? journey,
-    bool navigation = false,
     bool profile = false,
-    bool materialized = false,
   }) => checkMoment(
     project: project,
     name: 'review',
@@ -206,9 +204,7 @@ final class Fixture {
     timeout: timeout,
     poll: poll,
     journey: journey ?? this.journey,
-    navigation: navigation,
     profile: profile,
-    materialized: materialized,
   );
 
   Map<String, Object?> manifest() => (readJson(manifestFile)! as Map).cast();
@@ -345,80 +341,6 @@ void main() {
       expect(jsonEncode(profile).contains('PRIVATE'), isFalse);
     }
   });
-
-  test('materialized child journey reuses inherited state without open, reset or backend preparation', () async {
-    final calls = <Call>[];
-    final fixture = Fixture(journey: true, onRequest: (path, data) => calls.add((path: path, data: data)));
-    fixture.edit((review, manifest) {
-      review['from'] = 'parent';
-      (manifest['moments']! as Map)['parent'] = {...review, 'from': null, 'steps': <Object?>[]};
-    });
-    final context = {
-      'instanceId': '00000000-0000-4000-8000-000000000001',
-      'moment': 'review',
-      'from': 'parent',
-      'manifest': sha256.convert(File(fixture.manifestFile).readAsBytesSync()).toString(),
-    };
-    final result = await fixture.check(
-      materialized: true,
-      via: (path, [data]) async {
-        expect(
-          ['/moments/open', '/moments/reset'].contains(path),
-          isFalse,
-          reason: 'A materialized journey must not move or prepare the instance',
-        );
-        final value = await fixture.request(path, data);
-        return path == '/moments/look'
-            ? {
-                ...value,
-                'materialization': {...context},
-              }
-            : value;
-      },
-    );
-    expect(result['status'], 'passed');
-    expect(ownership(result)['phase'], 'idle');
-    expect(count(calls, '/journey/tap'), 1);
-    expect(report(result)['materialization'], context);
-    expect(report(result)['operation'], 'materialized-journey');
-  });
-
-  test(
-    'materialized checker rejects an unbound actor before gestures and detects replacement after dispatch',
-    () async {
-      for (final mode in ['unbound', 'replaced']) {
-        final calls = <Call>[];
-        final fixture = Fixture(journey: true, onRequest: (path, data) => calls.add((path: path, data: data)));
-        final context = {
-          'instanceId': '00000000-0000-4000-8000-000000000001',
-          'moment': 'review',
-          'from': null,
-          'manifest': sha256.convert(File(fixture.manifestFile).readAsBytesSync()).toString(),
-        };
-        var dispatched = false;
-        final result = await fixture.check(
-          materialized: true,
-          via: (path, [data]) async {
-            final value = await fixture.request(path, data);
-            if (path == '/journey/tap') dispatched = true;
-            return path == '/moments/look' && mode != 'unbound'
-                ? {
-                    ...value,
-                    'materialization': {
-                      ...context,
-                      'instanceId': dispatched ? '00000000-0000-4000-8000-000000000002' : context['instanceId'],
-                    },
-                  }
-                : value;
-          },
-        );
-        expect(result['status'], 'unavailable');
-        expect(count(calls, '/journey/tap'), mode == 'unbound' ? 0 : 1);
-        expect(count(calls, '/moments/open'), 0);
-        if (mode == 'replaced') expect(ownership(result)['phase'], 'attention');
-      }
-    },
-  );
 
   test('final projections settle after fill without until and without replaying preparation or input', () async {
     final (:fixture, :calls) = filling();
@@ -866,64 +788,6 @@ void main() {
       }
     },
   );
-
-  test(
-    'navigation accepts a Moment without criteria, captures every step and never reports business success',
-    () async {
-      final fixture = Fixture(journey: true, noChecks: true);
-      fixture.edit((review, _) => ((review['steps']! as List).first as Map)['until'] = <Object?>[]);
-      var sequence = 0, captures = 0;
-      Future<Map<String, Object?>> via(String path, [Map<String, Object?>? data]) async {
-        if (path == '/moments/settle') {
-          captures++;
-          sequence++;
-          final look = await fixture.request('/moments/look');
-          return {
-            'status': 'captured',
-            'id': '00000000-0000-4000-8000-000000000010',
-            'name': 'review',
-            'revision': data!['revision'],
-            'client': data['client'],
-            'sequence': sequence,
-            'reportedAt': (look['observed']! as Map)['reportedAt'],
-          };
-        }
-        final value = await fixture.request(path, data);
-        if (path == '/moments/look') {
-          return {
-            ...value,
-            'observed': {...(value['observed']! as Map).cast<String, Object?>(), 'captureSequence': sequence},
-          };
-        }
-        return value;
-      }
-
-      final result = await fixture.check(navigation: true, via: via);
-      expect(result['status'], 'captured');
-      expect(result['exitCode'], 0);
-      expect(result['checks'], <Object?>[]);
-      expect(result['verification'], 'not-performed');
-      expect(ownership(result)['phase'], 'idle');
-      expect(captures, 2);
-      expect(report(result)['operation'], 'navigation');
-      final check = await fixture.check(journey: false, via: via);
-      expect(check['status'], 'unavailable', reason: 'Verification still requires criteria');
-    },
-  );
-
-  test('navigation without a fresh capture keeps attention and never retries a gesture', () async {
-    final calls = <String>[];
-    final fixture = Fixture(journey: true, noChecks: true, onRequest: (path, _) => calls.add(path));
-    fixture.edit((review, _) => ((review['steps']! as List).first as Map)['until'] = <Object?>[]);
-    final result = await fixture.check(
-      navigation: true,
-      via: (path, [data]) async => path == '/moments/settle' ? {'status': 'observed'} : fixture.request(path, data),
-    );
-    expect(result['status'], 'unavailable');
-    expect(ownership(result)['phase'], 'attention');
-    expect(calls.where((path) => path == '/journey/tap').length, 1);
-    expect(result['checks'], <Object?>[]);
-  });
 
   test('Android proof requires the exact daemon serial, not the CLI transport prefix', () async {
     final target = {'requested': 'android:emulator-5554', 'connected': 'emulator-5554'};

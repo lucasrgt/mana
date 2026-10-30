@@ -21,7 +21,6 @@ import 'lifecycle.dart';
 import 'manifest.dart';
 import 'preparation_retry.dart';
 import 'protocol.dart';
-import 'renewal.dart';
 import 'reset.dart';
 import 'runtime.dart';
 import 'services.dart';
@@ -101,27 +100,12 @@ final class _BackendWatch {
   void close() => _timer.cancel();
 }
 
-/// The renewal exists once Flutter is supervised; the bridge starts earlier.
-final class _LateRenewal implements Renewal {
-  _LateRenewal(this._renewal, this._moments);
-  final RenewalCoordinator? Function() _renewal;
-  final List<String> _moments;
-  @override
-  bool canRenew(String name) => _moments.contains(name);
-  @override
-  Map<String, Object?> status() => _renewal()?.status() ?? {'phase': 'starting'};
-  @override
-  Map<String, Object?> start(Object? name) =>
-      (_renewal() ?? (throw const MomentsError('Renewal is not ready'))).start(name);
-}
-
 final class _Development implements Development {
   _Development({
     required this.statusFn,
     required this.inspect,
     required this.refresh,
     required this.stop,
-    required this.renewal,
   });
   final Map<String, Object?> Function() statusFn;
   @override
@@ -130,8 +114,6 @@ final class _Development implements Development {
   final Map<String, Object?> Function(Map<String, Object?> input)? refresh;
   @override
   final Future<void> Function()? stop;
-  @override
-  final Renewal? renewal;
   @override
   Map<String, Object?> status() => statusFn();
 }
@@ -239,7 +221,6 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
     );
   }
   final lifecycle = await withInstanceLock(directory, () async {
-    assertNoManagedSession(directory);
     final latest = File(manifest).existsSync() ? _read(manifest) : null;
     if (!jsonEqual(latest, instance)) throw const MomentsError('Instance changed during startup; run up again');
     return Lifecycle.create(
@@ -260,7 +241,6 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
   Bridge? bridge;
   FlutterMachine? machine;
   MomentWatcher? watcher;
-  RenewalCoordinator? renewal;
   AndroidTransport? android;
   _BackendWatch? backendWatch;
   Future<void>? stopping;
@@ -330,7 +310,6 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
   }
 
   Future<void> stop() => stopping ??= () async {
-    renewal?.close();
     watcher?.close();
     machine?.close();
     backendWatch?.close();
@@ -530,7 +509,6 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
       bootstrap: () => {...(current!['launch']! as Map).cast<String, Object?>(), 'apiUrl': current!['apiUrl']},
       resolveInput: resolve == null ? null : (reference) => resolve(current!, reference),
       development: _Development(
-        renewal: adapter.renewable == null ? null : _LateRenewal(() => renewal, adapter.renewable!),
         statusFn: () {
           final state = backendOnly
               ? backendWatch?.status() ?? {'phase': 'starting'}
@@ -622,25 +600,6 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
       backend: services,
       automaticAllowed: () => bridge!.journeyStatus()['phase'] == 'idle',
     );
-    if (adapter.renewable != null) {
-      renewal = RenewalCoordinator(
-        acquire: (target) {
-          if (stopping != null) throw const MomentsError('This launcher cannot renew its recipe');
-          bridge!.moments!.validateName(target);
-          if (!adapter.renewable!.contains(target)) throw const MomentsError('This moment has no renewal recipe');
-          if ((assertOwned(current!)['State'] as Map?)?['Running'] != true) {
-            throw const MomentsError('Owned backend is not running');
-          }
-          return watcher!.pause();
-        },
-        prepare: (_, signal) => adapter.renew(current!, signal),
-        commit: (launch) => persist({...current!, 'launch': launch}),
-        refresh: (target) async {
-          bridge!.moments!.open(target, fresh: true);
-          return watcher!.refresh(restart: true);
-        },
-      );
-    }
     stdout.writeln(
       'Moments: automatic refresh ${options.watch ? 'enabled' : 'disabled'} for ${bridge.moments!.watchPaths.length} declared files plus resolved local Dart libraries. Use moment refresh for a manual update, or refresh --restart for initialization changes.',
     );

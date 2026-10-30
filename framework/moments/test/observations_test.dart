@@ -251,61 +251,6 @@ void main() {
     expect(() => moments.requestFrame(checkpoint), throwsA(predicate((e) => '$e'.contains('runtime changed'))));
   });
 
-  test('owned capture requires a fresh sequenced frame and persists only restorable fields', () async {
-    final f = Fixture('moment-capture-', withChecks: false);
-    File(p.join(f.root, 'lib/view.dart')).writeAsStringSync('// original');
-    await f.start(initialName: 'inbox');
-    final revision = (await f.raw('/moments/changes?client=owner&frame=1&captureFrame=1')).data['revision'];
-    final value = {
-      'revision': revision,
-      'client': 'owner',
-      'projection': {...projection, 'ids': 'new-id', 'read': 'yes', 'filter': 'all'},
-    };
-    await f.raw('/moments/observe', value);
-    expect((await f.raw('/moments/settle', {'revision': revision, 'client': 'owner'})).status, isNot(200));
-    final lease = (await f.raw('/journey/lease', {'operation': 'acquire', 'name': 'inbox'})).data;
-    final pending = f.raw('/moments/settle', {'revision': revision, 'client': 'owner', 'journeyId': lease['id']});
-    final control = ((await f.raw('/moments/changes?client=owner&since=$revision')).data['frame']! as Map)
-        .cast<String, Object?>();
-    expect(control['capture'], true);
-    for (final extra in <Map<String, Object?>>[
-      {},
-      {'capture': true, 'sequence': 0},
-      {'capture': true, 'sequence': 1, 'client': 'old'},
-    ]) {
-      expect(
-        (await f.raw('/moments/frame-ack', {...value, 'id': control['id'], ...extra})).status,
-        isNot(200),
-        reason: '$extra',
-      );
-    }
-    expect(
-      (await f.raw('/moments/frame-ack', {...value, 'id': control['id'], 'capture': true, 'sequence': 2})).status,
-      200,
-    );
-    final captured = (await pending).data;
-    expect(captured['status'], 'captured');
-    expect(captured['sequence'], 2);
-    final look = (await f.raw('/moments/look')).data;
-    final saved = ((look['state']! as Map)['projection']! as Map).cast<String, Object?>();
-    expect(saved['filter'], 'all');
-    expect(saved.containsKey('ids'), isFalse);
-    expect(((look['observed']! as Map)['projection']! as Map)['ids'], 'new-id');
-    expect((look['observed']! as Map)['captureSequence'], 2);
-    expect(
-      (await f.raw('/moments/capture', {
-        ...value,
-        'sequence': 1,
-        'projection': {...(value['projection']! as Map).cast<String, Object?>(), 'filter': 'reservation'},
-      })).status,
-      409,
-    );
-    expect(
-      (await f.raw('/journey/lease', {'operation': 'finish', 'journeyId': lease['id'], 'passed': true})).data['phase'],
-      'idle',
-    );
-  });
-
   test('runtime blockers retain drafts, reject stale clients and cannot certify restoration', () async {
     final f = Fixture('moment-blocker-');
     final bridge = await f.start(initialName: 'inbox');

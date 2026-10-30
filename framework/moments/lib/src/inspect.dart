@@ -8,13 +8,6 @@ abstract interface class Development {
   Future<Map<String, Object?>> Function()? get inspect;
   Map<String, Object?> Function(Map<String, Object?> input)? get refresh;
   Future<void> Function()? get stop;
-  Renewal? get renewal;
-}
-
-abstract interface class Renewal {
-  Map<String, Object?> status();
-  Map<String, Object?> start(Object? name);
-  bool canRenew(String name);
 }
 
 /// The command a person runs to drive this runtime by hand.
@@ -42,7 +35,6 @@ Future<Map<String, Object?>> inspectMoment({
     }
   }
   final name = state?['name'] as String?;
-  final renewal = development?.renewal;
   final commands = {
     'list': ['list'],
     'open': ['open', '<name>'],
@@ -53,7 +45,6 @@ Future<Map<String, Object?>> inspectMoment({
       'refresh': ['refresh'],
       'supervisor': ['status'],
     },
-    if (renewal != null && name != null && renewal.canRenew(name)) 'renew': ['renew', name],
   };
   final observed = context['observed'] as Map?;
   return {
@@ -94,7 +85,7 @@ Future<Map<String, Object?>> inspectMoment({
     'backend': backend,
     'sources': {'declaration': context['declaration'], 'watched': context['watch']},
     'catalog': context['catalog'],
-    if (development != null) ...{'supervisor': development.status(), 'renewal': renewal?.status()},
+    if (development != null) ...{'supervisor': development.status()},
     'cli': momentsCommand(project),
     'commands': commands,
   };

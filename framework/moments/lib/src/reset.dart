@@ -19,7 +19,6 @@ Future<Map<String, Object?>> resetInstance(String project, {bool discardData = f
   final directory = p.join(project, 'moments', '.backend');
   if (!Directory(directory).existsSync()) throw const MomentsError('No local instance to reset');
   return withInstanceLock(directory, () async {
-    assertNoManagedSession(directory);
     if (File(p.join(directory, 'running.json')).existsSync()) {
       throw const MomentsError('Stop or recover this execution with moments down before reset');
     }

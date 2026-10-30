@@ -203,31 +203,3 @@ final class WebActor {
     return WebActor._(origin, server);
   }
 }
-
-/// Serves one actor's compiled artifact from a private configuration until
-/// SIGINT or SIGTERM.
-Future<int> runWebActorWorker(String file) async {
-  if (FileSystemEntity.typeSync(file, followLinks: false) != FileSystemEntityType.file ||
-      File(file).lengthSync() > 16384 ||
-      FileStat.statSync(file).mode & 0x3f != 0) {
-    throw const MomentsError('Private web actor configuration required');
-  }
-  final config = (jsonDecode(File(file).readAsStringSync()) as Map).cast<String, Object?>();
-  final server = await WebActor.start(
-    artifact: config['artifact']! as String,
-    port: config['port']! as int,
-    apiUrl: config['apiUrl']! as String,
-    bridgeUrl: config['bridgeUrl'] as String?,
-    bridgeToken: config['bridgeToken'] as String?,
-    surfaces: (config['surfaces'] as Map?)?.map(
-      (key, value) => MapEntry(key as String, (value as Map).cast<String, Object?>()),
-    ),
-    immutable: config['immutable'] == true,
-    crossOriginIsolated: config['crossOriginIsolated'] == true,
-  );
-  final stopped = Future.any([ProcessSignal.sigint.watch().first, ProcessSignal.sigterm.watch().first]);
-  stdout.writeln('Compiled Flutter is being served at ${server.url}');
-  await stopped;
-  await server.close();
-  return 0;
-}

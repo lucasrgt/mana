@@ -4,26 +4,18 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-import 'action_review_evidence.dart';
 import 'adapter.dart';
 import 'affected.dart';
 import 'check.dart';
 import 'down.dart';
 import 'errors.dart';
-import 'execution_graph.dart';
 import 'flutter_target.dart';
 import 'format.dart';
 import 'graph.dart';
 import 'inspect_compact.dart';
 import 'instance_state.dart';
 import 'journey.dart';
-import 'hosts.dart';
 import 'impact.dart' show buildImportsTool;
-import 'flutter_actor.dart' show webActorWorker;
-import 'managed.dart';
-import 'owned_process.dart';
-import 'private_fs.dart' show entityType;
-import 'web_actor.dart' show runWebActorWorker;
 import 'manifest.dart';
 import 'protocol.dart';
 import 'reset.dart';
@@ -34,24 +26,13 @@ const help = '''Moments — edit, resume and verify Flutter
 
   moments capabilities --json      Protocol and capabilities declared by the engine
   moments graph --json             Declared parent map, without running the app
-  moments graph --events <file>    Projects materialization events onto the map
   moments refresh --check          Refreshes, resumes and verifies the active Moment
   moments refresh --restart --check Restarts to apply main/initState/initializers
-  moments check <name>             Verifies without compiling
-  moments check <name> --session <dir> [--actor <id>]  Verifies a copy that is already open
-  moments prepare --profile <name> Prepares a new profile through the project adapter
-  moments recover --preparation <dir> Closes an interrupted preparation, without replay
-  moments compose --plan <file> --profile <name>  Prepares interfaces and runs the selected checkpoints
   moments profile <name>           Runs the same journey with a latency/actions/queries profile
   moments recover                  Releases an interrupted journey after inspecting its effects
-  moments recover --run <dir>      Discards copies of an interrupted run; keeps the origin and external roots
-  moments recover --session <dir>  Recovers build, actors and roots of an interrupted session
   moments list                    Lists declared situations
-  moments open <name>              Resumes a saved situation
-  moments renew <name>             Prepares the recipe data again and restores the screen (adapter with renew)
+  moments open <name>              Switches the running instance to a saved situation
   moments open <name> --fresh      Recreates this Moment's initial UI situation
-  moments open <name> --isolated   Materializes and opens a copy; stop with Ctrl+C
-  moments fork <name> --copies 2   Opens independent copies; stop with Ctrl+C
   moments down                    Stops or recovers the instance, keeping data
   moments reset --discard-data     Removes the stopped isolated database and its resume states
   moments status                  Shows the refresh in progress
@@ -62,38 +43,22 @@ const help = '''Moments — edit, resume and verify Flutter
   moments up <name> --fresh       Prepares data and UI state again, explicitly
   moments up <name> --device linux  Opens the native Linux app with the same journey
   moments up <name> --device android:<serial>  Uses an explicit Android device over ADB
-  moments open <name> --isolated --device android:<serial>  Materializes an Android actor
   moments up <name> --retry-preparation  Resumes an interrupted idempotent service preparation
   moments up <name> --backend-only  Only Postgres + backend + bridge, without the dev Flutter
   moments suite [name...] [--workers N] [--debug-build]  Runs Moments in parallel (compiled profile artifact, isolated context per Moment)
   moments suite [name...] --headless  Same suite on the widget runtime (flutter_tester), without a browser
   moments suite --affected [--base REV]  Only the Moments affected since REV (default HEAD)
   moments sync                    Exports the Ash DSL
-  moments review --plan <file> --evidence <journey>  Associates observations with the Ash plan
   moments affected [--base HEAD]   Plans the affected Moments; runs no actions
-  moments host browser <dir> | host preview <dir> <port> <origin>  Browser hosts for isolated sessions
   moments tools                   Compiles the Dart import parser used by affected
 
 Options: --json for structured output; --project <dir> to choose the app.
-In recover --run, --browser-socket <socket> and --browser-provider <id> connect an
-explicit browser host. Without it, bound tabs prevent the discard.
-On the web, open --isolated and fork require that host and the project's materialization adapter.
-Isolated Android uses a dedicated device and the same adapter, without a browser host.
-Compose requires the host and the project's composition adapter; it closes its resources when done.
-Its plan selects existing declarations; it does not redefine parents or criteria.
-The CLI keeps the session alive; Ctrl+C closes the tabs and discards only its copies.
-Check --session observes a copy of the live session; with several copies, --actor is required.
-It prepares no data and runs no gestures. Exits with 0/1/2 and keeps the session open.
-These commands emit one JSON event per line with --json. They may run the
-declared transitions on the copied databases to reach the requested Moment.
 In open, --fresh replaces the saved UI state of the chosen Moment only. In up,
 a prepared instance resumes by default; --fresh runs the preparation again.
 Profile also runs preparation and gestures, including declared writes; it does not repeat the journey.
 A partial profile exits with 2 even when the criteria passed; do not infer zero queries
-from missing events. CPU/heap, load and parent materialization are not measured by this command.
-Navigate runs the declared preparation and gestures, including writes if any; open resumes
-the saved UI. The navigate capture is not a snapshot of the whole system. The preparation recipe
-may change its isolated data; check and refresh do not rerun recipes or gestures.
+from missing events. CPU/heap and load are not measured by this command.
+The preparation recipe may change its isolated data; refresh does not rerun recipes or gestures.
 Without --project, uses the current app or the nearest .moments.json in parent directories.
 Exits: 0 success, 1 failure, 2 unavailable/invalid usage. Refresh without --check
 only starts the refresh. Up/sync stream logs and do not accept --json.
@@ -101,18 +66,12 @@ only starts the refresh. Up/sync stream logs and do not accept --json.
 
 const _commands = {
   'suite',
-  'renew',
-  'prepare',
-  'compose',
   'profile',
-  'fork',
-  'review',
   'capabilities',
   'graph',
   'reset',
   'down',
   'refresh',
-  'check',
   'recover',
   'list',
   'open',
@@ -124,19 +83,16 @@ const _commands = {
 };
 
 final _momentName = RegExp(r'^[a-z][a-z0-9-]*$');
-final _profileName = RegExp(r'^[a-z][a-z0-9-]{0,63}$');
 
 /// Parsed command line. Absent flags stay null so validation mirrors which
 /// options the user actually wrote.
 final class CliOptions {
   bool json = false, help = false, check = false;
   bool restart = false, full = false, local = false, discardData = false, retryPreparation = false;
-  bool fresh = false, isolated = false, backendOnly = false, debugBuild = false, headless = false;
+  bool fresh = false, backendOnly = false, debugBuild = false, headless = false;
   bool affected = false, wasm = false;
-  int? workers, copies;
-  String? preparationDirectory, compositionProfile, runDirectory, sessionDirectory, actorId;
-  String? browserSocket, browserProvider, plan, events, base, device, project;
-  List<String>? evidence;
+  int? workers;
+  String? base, device, project;
   String? command, name;
   List<String> names = const [];
 }
@@ -169,8 +125,6 @@ CliOptions parseArgs(List<String> args) {
         result.retryPreparation = true;
       case '--fresh':
         result.fresh = true;
-      case '--isolated':
-        result.isolated = true;
       case '--backend-only':
         result.backendOnly = true;
       case '--debug-build':
@@ -186,56 +140,6 @@ CliOptions parseArgs(List<String> args) {
           _usage('--workers needs a single number from 1 to 8.');
         }
         result.workers = int.parse(args[++i]);
-      case '--copies':
-        if (!RegExp(r'^[1-8]$').hasMatch(next(i) ?? '') || result.copies != null) {
-          _usage('--copies needs a single number from 1 to 8.');
-        }
-        result.copies = int.parse(args[++i]);
-      case '--run' ||
-          '--session' ||
-          '--actor' ||
-          '--browser-socket' ||
-          '--browser-provider' ||
-          '--profile' ||
-          '--preparation':
-        final current = switch (value) {
-          '--preparation' => result.preparationDirectory,
-          '--profile' => result.compositionProfile,
-          '--run' => result.runDirectory,
-          '--session' => result.sessionDirectory,
-          '--actor' => result.actorId,
-          '--browser-socket' => result.browserSocket,
-          _ => result.browserProvider,
-        };
-        if (missing(i) || current != null) _usage('$value needs a single value.');
-        final given = args[++i];
-        switch (value) {
-          case '--preparation':
-            result.preparationDirectory = given;
-          case '--profile':
-            result.compositionProfile = given;
-          case '--run':
-            result.runDirectory = given;
-          case '--session':
-            result.sessionDirectory = given;
-          case '--actor':
-            result.actorId = given;
-          case '--browser-socket':
-            result.browserSocket = given;
-          default:
-            result.browserProvider = given;
-        }
-      case '--plan':
-        if (missing(i)) _usage('$value needs a file.');
-        if (result.plan != null) _usage('--plan must be given once.');
-        result.plan = args[++i];
-      case '--evidence':
-        if (missing(i)) _usage('$value needs a file.');
-        (result.evidence ??= []).add(args[++i]);
-        if (result.evidence!.length > 32) _usage('At most 32 reports per association.');
-      case '--events':
-        if (missing(i) || result.events != null) _usage('--events needs a single materialization journal.');
-        result.events = args[++i];
       case '--base':
         if (missing(i) || result.base != null) _usage('--base needs a single Git revision.');
         result.base = args[++i];
@@ -267,41 +171,17 @@ CliOptions parseArgs(List<String> args) {
     if (result.base != null && !result.affected) _usage('--base requires suite --affected.');
     return result..names = names;
   }
-  final named = const ['profile', 'check', 'open', 'up', 'fork', 'renew'].contains(command);
+  final named = const ['profile', 'open', 'up'].contains(command);
   if (words.length != (named ? 2 : 1) || (named && !_momentName.hasMatch(name!))) {
     _usage('Usage: moments $command${named ? ' <name>' : ''}');
   }
   result.name = name;
-  if (command == 'review' && (result.plan == null || (result.evidence?.isEmpty ?? true))) {
-    _usage('Usage: moments review --plan <file> --evidence <journey> [--evidence <another>]');
-  }
-  if ((!const ['review', 'compose'].contains(command) && result.plan != null) ||
-      (command != 'review' && result.evidence != null)) {
-    _usage('--plan requires review/compose; --evidence requires review.');
-  }
-  if (command == 'compose' && (result.plan == null || !_profileName.hasMatch(result.compositionProfile ?? ''))) {
-    _usage('Compose requires --plan <file> and --profile <name>.');
-  }
-  if (command == 'prepare' && !_profileName.hasMatch(result.compositionProfile ?? '')) {
-    _usage('Prepare requires --profile <name>.');
-  }
-  if (result.compositionProfile != null && !const ['compose', 'prepare'].contains(command)) {
-    _usage('--profile only applies to compose/prepare.');
-  }
-  if (result.preparationDirectory != null &&
-      (command != 'recover' || result.runDirectory != null || result.sessionDirectory != null)) {
-    _usage('--preparation requires recover, without --run/--session.');
-  }
   if (command == 'reset' && !result.discardData) {
     _usage('Reset removes local data; use moments reset --discard-data.');
   }
   if (result.discardData && command != 'reset') _usage('--discard-data only applies to reset.');
   if (result.retryPreparation && command != 'up') _usage('--retry-preparation only applies to up.');
-  if (result.device != null &&
-      command != 'up' &&
-      !(command == 'open' && result.isolated && flutterTarget(result.device!).android)) {
-    _usage('--device requires up or open --isolated with an explicit Android device.');
-  }
+  if (result.device != null && command != 'up') _usage('--device only applies to up.');
   if (result.restart && command != 'refresh') _usage('--restart only applies to refresh.');
   if (result.check && command != 'refresh') _usage('--check only applies to refresh.');
   if (result.fresh && !const ['open', 'up'].contains(command)) _usage('--fresh only applies to open/up <name>.');
@@ -310,35 +190,6 @@ CliOptions parseArgs(List<String> args) {
   if (result.local && command != 'status') _usage('--local only applies to status.');
   if (result.base != null && command != 'affected') _usage('--base only applies to affected and suite --affected.');
   if (result.affected) _usage('--affected only applies to suite.');
-  if (result.events != null && command != 'graph') _usage('--events only applies to graph.');
-  if (result.runDirectory != null && command != 'recover') _usage('--run only applies to recover.');
-  if (result.sessionDirectory != null &&
-      (!const ['recover', 'check'].contains(command) || result.runDirectory != null)) {
-    _usage('--session requires recover or check and cannot be combined with --run.');
-  }
-  if (result.actorId != null &&
-      (command != 'check' ||
-          result.sessionDirectory == null ||
-          !RegExp(r'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$').hasMatch(result.actorId!))) {
-    _usage('--actor requires check --session and an actor UUID.');
-  }
-  final managed = command == 'fork' || (command == 'open' && result.isolated);
-  final nativeManaged = managed && result.device != null;
-  if (nativeManaged && (result.browserSocket != null || result.browserProvider != null)) {
-    _usage('Isolated Android does not use a browser socket/provider.');
-  }
-  if (result.isolated && command != 'open') _usage('--isolated only applies to open.');
-  if (result.copies != null && command != 'fork') _usage('--copies only applies to fork.');
-  if (managed && result.fresh) _usage('--fresh does not apply to isolated materialization.');
-  final browser = result.browserSocket != null || result.browserProvider != null;
-  if (((managed && !nativeManaged) || command == 'compose' || browser) &&
-      (!(managed ||
-              command == 'compose' ||
-              (command == 'recover' && (result.runDirectory != null || result.sessionDirectory != null))) ||
-          result.browserSocket == null ||
-          result.browserProvider == null)) {
-    _usage('An isolated session or recover --run/--session requires browser socket and provider together.');
-  }
   if (result.json && const ['up', 'sync'].contains(command)) {
     _usage('$command streams logs; use status/inspect --json to observe the session.');
   }
@@ -387,28 +238,6 @@ String formatResult(Object? raw, CliOptions options) {
   }
   final value = (raw! as Map).cast<String, Object?>();
   String lines(List<Object?> items) => items.whereType<String>().where((line) => line.isNotEmpty).join('\n');
-  if (command == 'compose') {
-    return lines([
-      'Composition: ${_status(value['status'])} · ${((value['composition'] as Map?)?['stages'] as List?)?.length ?? 0} stages observed',
-      'Evidence per checkpoint; does not approve the final state of every referenced Moment.',
-      value['resourcesClosed'] == true ? 'Own resources closed.' : 'Shutdown not confirmed; recovery required.',
-      value['reason'],
-      'Report: ${value['report']}',
-    ]);
-  }
-  if (command == 'recover' && options.runDirectory != null) {
-    return 'Run ${value['runId']}: copies discarded. Origin and external roots kept; recipes and criteria not run.';
-  }
-  if (command == 'review') {
-    final target = value['target']! as Map;
-    return [
-      'HISTORICAL ASSOCIATION · ${target['resource']}.${target['action']}',
-      '${(value['observations']! as List).length} spans observed · ${(value['inputs']! as List).length} journeys given',
-      for (final item in (value['inputs']! as List).cast<Map>())
-        '  ${item['moment']}: ${item['matchingSpans']} spans · journey ${item['journeyStatus']} · capture ${item['capture']}${item['truncated'] == true ? ' (partial)' : ''}',
-      'Current sources and coverage not verified; candidates kept, review pending. No execution started.',
-    ].join('\n');
-  }
   if (command == 'capabilities') {
     final protocol = value['protocol']! as Map;
     return [
@@ -419,15 +248,10 @@ String formatResult(Object? raw, CliOptions options) {
     ].join('\n');
   }
   if (command == 'graph') {
-    final execution = value['execution'] as Map?;
     return [
-      execution != null ? 'Map with recorded events · ${execution['scope']}' : 'Declared map · no path run',
+      'Declared map · no path run',
       for (final node in (value['nodes']! as List).cast<Map>())
         '  ${node['name']}${node['from'] != null ? ' ← ${node['from']}' : ' (root)'}',
-      if (execution != null) ...[
-        'Completed transitions: ${(execution['transitions']! as List).where((t) => (t as Map)['status'] == 'completed').length} · cleanup: ${execution['phaseAtLastEvent']}',
-        'Historical record; current availability and criteria not verified.',
-      ],
     ].join('\n');
   }
   if (command == 'status' && options.local) {
@@ -520,7 +344,6 @@ String formatResult(Object? raw, CliOptions options) {
     if (ownership != null && ownership['phase'] != 'idle') {
       out.add('Instance held (${ownership['phase']}). Inspect the effects before moments recover.');
     }
-    if (value['actorId'] != null) out.add('Actor: ${value['actorId']} · session: ${value['session']}');
     if (value['report'] != null) out.add('Report: ${value['report']}');
     return out.join('\n');
   }
@@ -550,9 +373,6 @@ String formatResult(Object? raw, CliOptions options) {
       value['error'] as String?,
       if (command == 'refresh') 'Refresh requested; criteria not run. Follow it with moments status.',
     ]);
-  }
-  if (command == 'renew') {
-    return 'Moment ${value['name']} renewed: data prepared and screen restored (${_duration(value['totalMs']) ?? 'time unavailable'}).';
   }
   if (command == 'open') {
     return 'Moment: ${(value['state'] as Map?)?['name'] ?? options.name}\n'
@@ -647,8 +467,8 @@ Future<Object?> _live(String project, CliOptions options) async {
   final request = bridgeRequest(project);
   final runtime = File(p.join(project, 'moments/.backend/.runtime.json'));
   switch (options.command) {
-    case 'check' || 'profile':
-      return checkMoment(project: project, name: options.name, request: request, profile: options.command == 'profile');
+    case 'profile':
+      return checkMoment(project: project, name: options.name, request: request, profile: true);
     case 'recover':
       final current = await request('/journey/lease');
       return request('/journey/lease', {'operation': 'recover', 'journeyId': current['id'], 'acknowledge': true});
@@ -663,22 +483,6 @@ Future<Object?> _live(String project, CliOptions options) async {
       return request('/dev/refresh', {'restart': options.restart});
     case 'list':
       return _catalog(project);
-    case 'renew':
-      final started = await request('/dev/renew', {'name': options.name});
-      final deadline = DateTime.now().add(const Duration(seconds: 90));
-      var result = started;
-      while (DateTime.now().isBefore(deadline) &&
-          result['id'] == started['id'] &&
-          const ['preparing', 'restoring'].contains(result['phase'])) {
-        await _sleep(150);
-        result = await request('/dev/renew');
-      }
-      if (result['id'] != started['id'] || result['phase'] != 'ready') {
-        throw MomentsError(
-          '${result['error'] ?? 'Renewal has not confirmed completion; inspect it before starting another.'}',
-        );
-      }
-      return result;
     case 'open':
       final adapter = _adapter(project);
       if (adapter != null && adapter.catalog().any((entry) => entry['name'] == options.name) && !runtime.existsSync()) {
@@ -730,43 +534,8 @@ Future<Object?> _live(String project, CliOptions options) async {
 
 int _exit(Object? result) => result is Map && result['exitCode'] is int ? result['exitCode']! as int : 0;
 
-/// The hidden worker subcommands this program runs inside owned processes.
-Future<int>? _worker(List<String> args) => switch (args) {
-  [ownedProcessWorker, final dir] => runOwnedProcessWorker(dir),
-  [webActorWorker, final config] => runWebActorWorker(config),
-  _ => null,
-};
-
-/// Commands that run project code: a project registers it in its own
-/// `moments/adapters.dart` program, which calls [runCli] with its adapters.
-bool _needsAdapters(CliOptions options) =>
-    const ['prepare', 'compose', 'fork'].contains(options.command) || (options.command == 'open' && options.isolated);
-
-Future<int?> _delegate(String project, List<String> args, String cwd) async {
-  final program = p.join(project, 'moments/adapters.dart');
-  if (entityType(program) != FileSystemEntityType.file) return null;
-  final child = await Process.start(
-    'dart',
-    [program, ...args],
-    workingDirectory: cwd,
-    mode: ProcessStartMode.inheritStdio,
-  );
-  final forwards = [
-    for (final signal in [ProcessSignal.sigint, ProcessSignal.sigterm]) signal.watch().listen((s) => child.kill(s)),
-  ];
-  try {
-    return await child.exitCode;
-  } finally {
-    for (final forward in forwards) {
-      await forward.cancel();
-    }
-  }
-}
-
-Future<int> runCli(List<String> args, {String? cwd, ProjectAdapters? adapters}) async {
-  if (_worker(args) case final worker?) return worker;
+Future<int> runCli(List<String> args, {String? cwd}) async {
   cwd ??= Directory.current.path;
-  if (args.firstOrNull == 'host') return runHost(args.skip(1).toList());
   if (args case ['tools']) {
     try {
       await buildImportsTool();
@@ -785,118 +554,15 @@ Future<int> runCli(List<String> args, {String? cwd, ProjectAdapters? adapters}) 
       print(options.json ? jsonEncode({'help': help}) : help);
       return 0;
     }
-    String at(String path) => p.normalize(p.join(cwd!, path));
-    String? atOptional(String? path) => path == null ? null : at(path);
     if (options.command == 'capabilities') {
       emit(capabilities());
       return 0;
     }
-    if (options.command == 'review') {
-      emit(readReviewEvidence(at(options.plan!), options.evidence!.map(at).toList()));
-      return 0;
-    }
     final project = findProject(cwd, options.project);
-    if (adapters == null && _needsAdapters(options)) {
-      if (await _delegate(project, args, cwd) case final code?) return code;
-    }
-    final registered = adapters ?? const ProjectAdapters();
-    if (options.command == 'recover' && options.preparationDirectory != null) {
-      final result = await recoverPreparation(project, directory: at(options.preparationDirectory!));
-      print(
-        options.json
-            ? jsonEncode(result)
-            : 'Preparation closed: ${result['directory']}. Recipes not repeated; resources kept as recorded.',
-      );
-      return 0;
-    }
-    if (options.command == 'prepare') {
-      final result = await prepareProfile(
-        project,
-        profile: options.compositionProfile!,
-        adapters: registered,
-        onProgress: (event) =>
-            print(options.json ? jsonEncode(event) : 'Preparation: ${event['phase']} · ${event['directory']}'),
-      );
-      print(options.json ? jsonEncode(result) : 'Preparation: ${result['status']} · ${result['directory']}');
-      return result['status'] == 'prepared' && result['servicesClosed'] == true ? 0 : 2;
-    }
-    if (options.command == 'compose') {
-      final result = await serveManagedComposition(
-        project: project,
-        planFile: at(options.plan!),
-        profile: options.compositionProfile!,
-        browserSocket: at(options.browserSocket!),
-        browserProvider: options.browserProvider!,
-        adapters: registered,
-        emit: (value) =>
-            print(options.json ? jsonEncode(value) : 'Composition: ${value['phase']} · ${value['directory']}'),
-      );
-      print(options.json ? jsonEncode(result) : formatResult(result, options));
-      return _exit(result);
-    }
-    if (options.command == 'check' && options.sessionDirectory != null) {
-      final result = await checkManagedActor(
-        project,
-        directory: at(options.sessionDirectory!),
-        name: options.name!,
-        actorId: options.actorId,
-      );
-      emit(result);
-      return _exit(result);
-    }
-    if (options.command == 'recover' && options.sessionDirectory != null) {
-      final result = await recoverManagedSession(
-        project,
-        directory: at(options.sessionDirectory!),
-        browserSocket: atOptional(options.browserSocket),
-        browserProvider: options.browserProvider,
-      );
-      print(options.json ? _pretty.convert(result) : 'Session recovered: ${result['directory']}');
-      return 0;
-    }
-    if (options.command == 'fork' || (options.command == 'open' && options.isolated)) {
-      return await serveManagedSession(
-        project: project,
-        name: options.name!,
-        copies: options.command == 'fork' ? (options.copies ?? 2) : 1,
-        adapters: registered,
-        device: options.device,
-        browserSocket: atOptional(options.browserSocket),
-        browserProvider: options.browserProvider,
-        emit: (value) {
-          print(
-            options.json
-                ? jsonEncode(value)
-                : value['status'] == 'ready'
-                ? 'Session ${value['directory']} open.\n'
-                      '${(value['actors']! as List).cast<Map>().map((actor) => '${actor['id']}: ${actor['url']}').join('\n')}\n'
-                      'Ctrl+C stops the actors and discards the copies.'
-                : value['status'] == 'closed'
-                ? 'Session closed; copies discarded.'
-                : 'Materialization: ${value['phase']} · ${value['directory']}',
-          );
-        },
-      );
-    }
-    if (options.command == 'recover' && options.runDirectory != null) {
-      emit(
-        await recoverRun(
-          project,
-          directory: at(options.runDirectory!),
-          browserSocket: atOptional(options.browserSocket),
-          browserProvider: options.browserProvider,
-        ),
-      );
-      return 0;
-    }
     if (options.command == 'suite') return await _suite(project, options);
     if (options.command == 'graph') {
       final manifest = readManifest(p.join(project, 'moments/manifest.json'));
-      emit(
-        options.events != null
-            ? readExecutionGraph(manifest, at(options.events!))
-            : momentGraph((manifest['moments']! as Map).cast()),
-      );
+      emit(momentGraph((manifest['moments']! as Map).cast()));
       return 0;
     }
     if (options.command == 'status' && options.local) {

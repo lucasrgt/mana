@@ -1,22 +1,12 @@
 import 'dart:io';
 
 import 'package:moments/src/bridge.dart';
-import 'package:moments/src/errors.dart';
 import 'package:moments/src/inspect.dart';
 import 'package:moments/src/runtime.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'support.dart';
-
-final class Idle implements Renewal {
-  @override
-  Map<String, Object?> status() => {'phase': 'idle'};
-  @override
-  Map<String, Object?> start(Object? name) => throw const MomentsError('Not in this test');
-  @override
-  bool canRenew(String name) => true;
-}
 
 final class Dev implements Development {
   Dev(this._inspect);
@@ -29,8 +19,6 @@ final class Dev implements Development {
   Map<String, Object?> Function(Map<String, Object?> input)? get refresh => null;
   @override
   Future<void> Function()? get stop => null;
-  @override
-  Renewal? get renewal => Idle();
 }
 
 Future<int> status(Bridge bridge, String path, Map<String, String> headers) async {
@@ -124,7 +112,6 @@ void main() {
       expect(at(screen, 'lastReported')['matchesRevision'], true);
       expect(at(screen, 'lastReported')['ageMs'] as num, greaterThanOrEqualTo(0));
       expect(context.containsKey('editing'), isFalse);
-      expect(at(context, 'commands')['renew'], ['renew', 'checkout']);
       expect(
         at(context, 'commands').keys.where((key) => const ['patch', 'resetUi', 'incorporate'].contains(key)),
         isEmpty,

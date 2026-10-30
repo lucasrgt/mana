@@ -149,7 +149,6 @@ Future<Map<String, Object?>> downInstance(String project, {Duration timeout = co
   final directory = p.join(project, 'moments', '.backend');
   Directory(directory).createSync(recursive: true);
   return withInstanceLock(directory, () async {
-    assertNoManagedSession(directory);
     final lock = p.join(directory, 'running.json'), manifest = p.join(directory, 'instance.json');
     if (!File(lock).existsSync()) {
       if (File(manifest).existsSync()) {

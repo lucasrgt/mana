@@ -25,8 +25,8 @@ you can:
 - **audit**: hand an agent the situation, the files of that screen and the exact Ash
   declaration behind it, instead of the whole codebase;
 - **profile**: measure a journey, request by request and query by query;
-- **fork**: open several isolated copies of the same situation, each with its own
-  database, to try things in parallel.
+- **gate**: run the Moments a change touches on parallel workers, headless or in a
+  browser, before it ships.
 
 Every run leaves a short receipt of what code ran, what was observed and what passed.
 The protocol is written down in

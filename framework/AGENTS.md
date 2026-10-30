@@ -143,11 +143,8 @@ journeys. Do not add a global architectural reviewer, mandatory exhaustive
 suite or approval ritual. `mix moments.review Resource action output.json`
 can plan a review from compiled Ash metadata for an explicitly selected action;
 see `ash/moments/README.md`. Its pending questions are not findings or approvals,
-and its domain candidates are not proven action coverage. `moments review --plan
-<plan.json> --evidence <journey.json>` associates historical positive observations
-with that target without changing review status or excluding other candidates.
-Never treat these editable local reports as current-source or deployment
-attestations. Automatic selection
+and its domain candidates are not proven action coverage. Never treat this
+editable local report as a current-source or deployment attestation. Automatic selection
 from a diff and complete effect/caller analysis remain future capabilities.
 
 Moments follow the common protocol (`moments/protocol-v0.1.md`): `from` is the source of ancestry;

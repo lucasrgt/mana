@@ -26,7 +26,6 @@ final class MomentsOptions {
     this.manifestFile,
     this.directory,
     this.sessionFile,
-    this.materialization,
     this.resumeOnOpen = true,
     this.restartTimeout,
     this.executor,
@@ -44,7 +43,6 @@ final class MomentsOptions {
   final String? manifestFile;
   final String? directory;
   final String? sessionFile;
-  final Map<String, Object?>? materialization;
   final bool resumeOnOpen;
   final Duration? restartTimeout;
   final String? executor;
@@ -66,7 +64,6 @@ final class MomentsOptions {
     manifestFile: manifestFile,
     directory: directory,
     sessionFile: sessionFile,
-    materialization: materialization,
     resumeOnOpen: resumeOnOpen,
     restartTimeout: restartTimeout,
     executor: executor,
@@ -134,7 +131,6 @@ final class Moments implements WatchedMoments, GestureMoments {
   final String _file;
   final DartSources _sources;
   late final String _mapFile, _directory;
-  Map<String, Object?>? _materialization;
   late final String _launchResolution;
   late String _appliedCodeHash;
   final _waiters = <HttpResponse>{};
@@ -155,23 +151,6 @@ final class Moments implements WatchedMoments, GestureMoments {
   late final RestartHandoff _restart;
 
   void _init() {
-    final materialization = _options.materialization;
-    if (materialization != null) {
-      final scene = (_contract['moments'] as Map?)?[materialization['moment']] as Map?;
-      if (materialization.keys.any((key) => !const ['instanceId', 'moment', 'from', 'manifest'].contains(key)) ||
-          _options.manifestFile == null ||
-          scene == null ||
-          materialization['manifest'] != _contract['recipeHash'] ||
-          !RegExp(
-            r'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$',
-          ).hasMatch('${materialization['instanceId'] ?? ''}') ||
-          ![scene['from'], materialization['moment']].contains(materialization['from']) ||
-          _options.openName != null ||
-          _options.initialName != null) {
-        throw const MomentsError('Invalid materialized actor context');
-      }
-      _materialization = {...materialization};
-    }
     final launch = _sources.snapshot();
     _launchResolution = launch['resolutionDigest']! as String;
     _appliedCodeHash = launch['digest']! as String;
@@ -187,20 +166,6 @@ final class Moments implements WatchedMoments, GestureMoments {
         _waiters.clear();
       },
     );
-    if (_materialization != null) {
-      final from = _materialization!['from'];
-      if (_state == null || (from != null && _state!['name'] != from)) {
-        throw const MomentsError('Materialized actor checkpoint does not match its source Moment');
-      }
-      // Name the intended transition, retaining the parent projection. This is
-      // not a claim that the target transition or its criteria have completed.
-      _persist({
-        ..._state!,
-        'name': _materialization!['moment'],
-        'recipeHash': _materialization!['manifest'],
-        'projection': _validate(_state!['projection'], restoring: true),
-      });
-    }
     if (_options.openName != null) {
       _move(_options.openName!, reset: _options.fresh);
     } else if (_state == null && _options.initialName != null) {
@@ -220,9 +185,6 @@ final class Moments implements WatchedMoments, GestureMoments {
   ({Manifest? manifest, MomentMap? map, Map<String, Object?>? recipes, String recipeHash}) _catalog() {
     if (_options.manifestFile != null) {
       final manifest = readManifest(_options.manifestFile!);
-      if (_materialization != null && manifest['recipeHash'] != _materialization!['manifest']) {
-        throw const MomentsError('Materialized declaration changed; use a new instance');
-      }
       if (!jsonEqual(manifest['screens'], _contract['screens']) ||
           !jsonEqual(manifest['properties'], _contract['properties']) ||
           !jsonEqual(manifest['watch'], _contract['watch'])) {
@@ -247,13 +209,7 @@ final class Moments implements WatchedMoments, GestureMoments {
     if (manifest != null) {
       final moments = (manifest['moments']! as Map).cast<String, Object?>();
       if (!moments.containsKey(name)) throw MomentsError('Unknown moment: $name');
-      if (_materialization != null) {
-        if (name != _materialization!['moment']) {
-          throw const MomentsError('Moment does not belong to this materialized actor');
-        }
-      } else {
-        assertMaterializable((moments[name]! as Map).cast());
-      }
+      assertMaterializable((moments[name]! as Map).cast());
       return {
         'name': name,
         'recipeHash': recipeHash,
@@ -309,7 +265,6 @@ final class Moments implements WatchedMoments, GestureMoments {
   Map<String, Object?> _snapshot() => {
     'revision': _revision,
     'state': _state,
-    if (_materialization != null) 'materialization': {..._materialization!},
   };
 
   Map<String, Object?>? _frameControl(String? client) {
@@ -341,7 +296,7 @@ final class Moments implements WatchedMoments, GestureMoments {
     return id;
   }
 
-  bool canRemount() => _supportsRemount && _activeClient != null && _materialization == null;
+  bool canRemount() => _supportsRemount && _activeClient != null;
 
   /// Asks the active runtime to rebuild its app for the current Moment and waits
   /// until a runtime observes it. The rebuilt tree claims as a new client, as a
@@ -393,9 +348,6 @@ final class Moments implements WatchedMoments, GestureMoments {
   }
 
   Map<String, Object?> _move(String name, {bool reset = false}) {
-    if (_materialization != null) {
-      throw const MomentsError('Materialized actors must be opened or reset through their coordinator');
-    }
     if (_preparing) throw const MomentsError('Backend preparation is in progress');
     final recipe = _evaluate(name); // Removed/unknown catalog names cannot be revived from disk.
     final remembered = !reset && _options.resumeOnOpen ? _states[name] : null;
@@ -428,9 +380,6 @@ final class Moments implements WatchedMoments, GestureMoments {
   }
 
   Future<Map<String, Object?>> _prepareAndMove(String name, {bool fresh = false, bool prepare = true}) async {
-    if (_materialization != null) {
-      throw const MomentsError('Materialized actors cannot prepare or open independent recipes');
-    }
     if (_preparing) throw const MomentsError('Backend preparation is in progress');
     final recipe = _evaluate(name);
     // Check the destination's retained draft before any backend effect. It may

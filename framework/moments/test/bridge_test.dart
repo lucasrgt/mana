@@ -41,8 +41,6 @@ final class Stop implements Development {
   @override
   Future<void> Function()? get stop =>
       () async => onStop();
-  @override
-  Renewal? get renewal => null;
 }
 
 void main() {

@@ -6,7 +6,6 @@ import 'package:mana/mana.dart' show mix;
 import 'package:path/path.dart' as p;
 
 import 'backend_recipes.dart';
-import 'composition.dart' show Interruption;
 import 'elixir_recipes.dart';
 import 'errors.dart';
 import 'json.dart';
@@ -42,7 +41,6 @@ final class Adapter {
       'entrypoint',
       'device',
       'watch',
-      'renew',
     ];
     for (final key in json.keys) {
       if (!allowed.contains(key)) throw MomentsError('Unknown moments/backend.json field: $key');
@@ -96,48 +94,6 @@ final class Adapter {
       directory = parent;
     }
     return directory;
-  }
-
-  /// Moments whose recipe can be renewed in place; null when the adapter
-  /// declares no `renew` command.
-  List<String>? get renewable {
-    final renew = _json['renew'] as Map?;
-    if (renew == null) return null;
-    return ((renew['moments'] as List?) ?? const []).cast<String>();
-  }
-
-  /// Runs the `renew` command with the instance on stdin and returns the new
-  /// launch it prints. Interrupting kills the command; its output is discarded.
-  Future<Map<String, Object?>> renew(Map<String, Object?> instance, Interruption signal) async {
-    final renew = (_json['renew'] as Map?)?.cast<String, Object?>();
-    final command = (renew?['command'] as List?)?.cast<String>().map(expand).toList();
-    if (command == null || command.isEmpty) throw const MomentsError('This launcher cannot renew its recipe');
-    final child = await Process.start(command.first, command.skip(1).toList(), workingDirectory: project);
-    void kill() => child.kill(ProcessSignal.sigterm);
-    signal.onAbort(kill);
-    try {
-      child.stdin.add(
-        utf8.encode(
-          jsonEncode({
-            'apiUrl': instance['apiUrl'],
-            'container': instance['container'],
-            'password': instance['password'],
-            'launch': instance['launch'],
-          }),
-        ),
-      );
-      await child.stdin.close();
-      final output = child.stdout.transform(utf8.decoder).join();
-      unawaited(child.stderr.drain<void>());
-      final code = await child.exitCode;
-      if (signal.aborted) throw const MomentsError('Renewal interrupted');
-      if (code != 0) throw const MomentsError('Renewal recipe failed; the previous launch is kept');
-      final value = jsonDecode(await output);
-      if (value is! Map) throw const MomentsError('Renewal recipe returned no launch');
-      return value.cast();
-    } finally {
-      signal.off(kill);
-    }
   }
 
   Future<void> sync() async {

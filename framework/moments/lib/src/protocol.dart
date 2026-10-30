@@ -25,54 +25,21 @@ Map<String, Object?> capabilities() {
       'uiResume': true,
       'appOwnedPreparation': true,
       'linearVerifiedJourney': true,
-      'linearNavigationWithoutCriteria': true,
-      'declaredCheckpointComposition': true,
-      'recordedPreparationRecovery': true,
-      'parentMaterialization': true,
-      'independentFork': true,
+      'linearNavigationWithoutCriteria': false,
+      'declaredCheckpointComposition': false,
+      'recordedPreparationRecovery': false,
+      'parentMaterialization': false,
+      'independentFork': false,
       'wholeSituationSnapshot': false,
       'normalizedVersionComparison': false,
       'saveExplorationAsMoment': false,
       'traceFromRoot': false,
     },
     'executionProfiles': {
-      'preparation': {
-        'commands': ['prepare'],
-        'requires': ['project preparation adapter', 'new named profile'],
-        'recovery': 'recover --preparation for registered infrastructure journals; no adapter imports or recipe replay',
-        'limits':
-            'Adapter owns build and provisioning. Recovery preserves declared data services and does not turn interrupted preparation into a prepared profile',
-      },
-      'composition': {
-        'commands': ['compose'],
-        'parentMaterialization': false,
-        'independentFork': false,
-        'requires': ['project composition adapter', 'named prepared profile', 'explicit browser host'],
-        'verification':
-            'Historical selected steps and checkpoints per surface; no final-state approval of every referenced Moment',
-        'recovery': 'recover --session closes recorded resources without importing the adapter or replaying gestures',
-        'limits':
-            'Sequential composition; adapter owns preparation, leases and fault policy. No automatic branch enumeration or universal fresh build',
-      },
       'launcher': {
         'commands': ['up', 'open', 'suite', 'profile'],
         'parentMaterialization': false,
         'independentFork': false,
-      },
-      'materialized': {
-        'commands': ['open --isolated', 'fork'],
-        'parentMaterialization': true,
-        'independentFork': true,
-        'requires': [
-          'project materialization adapter',
-          'captured roots for every declared layer',
-          'browser host for ash-flutter-local',
-        ],
-        'builtInLayers': ['postgres', 'flutter-actor', 'private-json'],
-        'verification': 'Explicit check <name> --session <directory>; --actor required for ambiguous selection',
-        'recovery': 'Cleanup only; no recipe replay or automatic reopening',
-        'limits':
-            'Supported scenarios belong to the adapter; no universal external-effect rollback, network jail or hot reload in fixed-artifact forks',
       },
     },
     'gestures': {
@@ -185,17 +152,9 @@ Map<String, Object?> capabilities() {
       'up --fresh': 'Run app-owned preparation; not snapshot restoration',
       'reset --discard-data': 'Discard the stopped local database; not protocol reset-to-origin',
       'suite': 'Prepare and verify each linear journey; not exploration of all branches',
-      'compose':
-          'Select existing steps and criteria across prepared surfaces; preserve checkpoint scope and declared ancestry',
-      'prepare':
-          'Run the project preparation adapter for a new profile; no implicit overwrite or production readiness claim',
       'profile':
           'Execute one root journey once and observe engine phase latency plus bounded request-context Ash/Ecto telemetry; not CPU, heap, load or parent materialization',
       'graph': 'Declared ancestry only; no materialization, traversal or verification evidence',
-      'open --isolated':
-          'Traverse declared ancestors and restore captured layers through the project adapter; final checks remain explicit',
-      'fork':
-          'Open independent copies of captured declared layers through the project adapter; does not clone arbitrary external services',
     },
   };
 }
@@ -206,7 +165,7 @@ Map<String, Object?> capabilities() {
 void assertMaterializable(Map<String, Object?>? scene) {
   if (scene?['from'] != null) {
     throw const MomentsError(
-      'Parent materialization requires open --isolated or fork with a supporting project adapter; the single-runtime launcher cannot flatten this Moment into a root',
+      'A Moment with from: cannot open: the launcher does not flatten a child into a root. Share setup through a backend base recipe instead (backend :recipe, base: :base)',
     );
   }
 }

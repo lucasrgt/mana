@@ -83,19 +83,6 @@ Future<T> withInstanceLock<T>(String directory, Future<T> Function() operation) 
   }
 }
 
-void assertNoManagedSession(String directory) {
-  if (File(p.join(directory, 'preparation.json')).existsSync()) {
-    throw const MomentsError(
-      'A preparation owns this consumer; finish it or use moments recover --preparation before another lifecycle operation',
-    );
-  }
-  if (File(p.join(directory, 'materialization.json')).existsSync()) {
-    throw const MomentsError(
-      'A materialization session owns this consumer; close it or use moments recover --session before another lifecycle operation',
-    );
-  }
-}
-
 bool _validProcess(Object? record) =>
     record is Map &&
     record['pid'] is int &&

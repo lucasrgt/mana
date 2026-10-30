@@ -135,18 +135,6 @@ final class AndroidTransport {
   List<Map<String, Object?>> _ports(Map<String, Object?> state) =>
       (state['ports']! as List).cast<Map<String, Object?>>();
 
-  Map<String, Object?> inspectOwnership() {
-    final state = _validate(_read(_file), directory);
-    if (state['owner'] != owner ||
-        state['device'] != device ||
-        !jsonEqual([for (final x in _ports(state)) x['port']], ports) ||
-        !const ['claimed', 'ready'].contains(state['phase']) ||
-        !_ownClaim(state)) {
-      throw const MomentsError('Android transport ownership is not active');
-    }
-    return {...state, 'currentBoot': _identity(adb, device)['boot']};
-  }
-
   Future<Map<String, Object?>> start() => withInstanceLock(directory, () async {
     if (File(_file).existsSync()) {
       throw const MomentsError('Android transport already has a journal; recover it before allocating another run');

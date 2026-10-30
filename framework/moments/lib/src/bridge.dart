@@ -146,13 +146,7 @@ final class Bridge {
         final body = onceBody(request);
         final method = request.method;
         if (method == 'POST' &&
-            const [
-              '/moments/open',
-              '/moments/reset',
-              '/dev/refresh',
-              '/dev/renew',
-              '/journey/tap',
-            ].contains(url.path)) {
+            const ['/moments/open', '/moments/reset', '/dev/refresh', '/journey/tap'].contains(url.path)) {
           final input = await body();
           lease.assertAccess(input['journeyId']);
           if (url.path == '/moments/open' && input['prepare'] != false)
@@ -175,59 +169,10 @@ final class Bridge {
           }
           throw const MomentsError('Unknown journey lease operation');
         }
-        if (url.path == '/moments/settle' && method == 'POST') {
-          final input = await body();
-          void guard() {
-            final owner = lease.status();
-            if (owner['phase'] != 'active' || owner['id'] != input['journeyId']) {
-              throw const MomentsError('Active journey ownership required for capture');
-            }
-            lease.assertAccess(input['journeyId']);
-            final context = moments?.inspect();
-            final observed = context?['observed'] as Map?;
-            if (!ready() ||
-                gestures.pending() ||
-                observed == null ||
-                context!['opening'] == true ||
-                context['preparing'] == true ||
-                context['codeChanged'] == true ||
-                context['recipeChanged'] == true ||
-                context['revision'] != input['revision'] ||
-                observed['client'] != input['client'] ||
-                observed['revision'] != input['revision']) {
-              throw const MomentsError('Current settled runtime required for capture');
-            }
-          }
-
-          guard();
-          final checkpoint = moments!.checkpoint();
-          if (checkpoint['client'] != input['client']) throw const MomentsError('Capture runtime changed');
-          final id = moments.requestFrame(checkpoint, capture: true, guard: guard);
-          try {
-            final deadline = DateTime.now().add(const Duration(seconds: 10));
-            while (true) {
-              guard();
-              if (moments.checkpoint()['codeHash'] != checkpoint['codeHash'])
-                throw const MomentsError('Source changed while capturing UI');
-              final captured = moments.capturedFrameAfter(id);
-              if (captured != null) return reply(response, 200, {'status': 'captured', ...captured});
-              if (answered(response) || DateTime.now().isAfter(deadline))
-                throw const MomentsError('Fresh ready UI frame was not captured');
-              await Future<void>.delayed(const Duration(milliseconds: 25));
-            }
-          } finally {
-            moments.cancelFrame(id);
-          }
-        }
         if (await rendered.handle(request, url, onceBody(request, limit: 262144))) return;
         if (await gestures.handle(request, url, body)) return;
         if (privateStore != null && await privateStore.handle(request, url, body)) return;
         if (method == 'GET' && url.path == '/moments/bootstrap') return reply(response, 200, bootstrap?.call());
-        final renewal = development?.renewal;
-        if (renewal != null && url.path == '/dev/renew' && method == 'GET')
-          return reply(response, 200, renewal.status());
-        if (renewal != null && url.path == '/dev/renew' && method == 'POST')
-          return reply(response, 202, renewal.start((await body())['name']));
         if (development != null && url.path == '/dev/status' && method == 'GET') {
           return reply(response, 200, {...development.status(), 'journey': lease.status()});
         }
@@ -256,11 +201,7 @@ final class Bridge {
           return reply(
             response,
             200,
-            await inspectMoment(
-              project: project,
-              moments: moments,
-              development: development,
-            ),
+            await inspectMoment(project: project, moments: moments, development: development),
           );
         }
         if (moments != null && await moments.handle(request, url, body)) return;

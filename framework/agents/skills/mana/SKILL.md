@@ -331,9 +331,17 @@ An agent's plan of verb steps runs first as a dry run inside a transaction that 
 - **Instead of:** trying a data change for real to see what happens; asking a person to confirm every agent action; manual cleanup after an agent experiment
 - **Docs:** `framework/ash/core/lib/mana/checkpoint.ex`
 
+### Action review plan (`action-review`)
+
+Before changing an Ash action, what the compiled resource says it touches: data layer, authorizers and policies, transaction, hooks, notifiers and AshOban triggers, with the review questions they raise and the Moments of its domain as candidates.
+
+- **Use:** framework/cli/mana mix <backend folder> moments.review MyApp.Resource action ../<app folder>/moments/.proofs/architecture/<resource>-<action>.json (the output path is relative to the backend) before changing an action that moves money, authorizes, writes in a transaction or enqueues jobs; answer its pending questions in the change and run the Moments it lists. Its questions are not findings, and its candidate Moments are not proof the action is covered.
+- **Instead of:** guessing an action's effects from its name; reading every hook and notifier by hand before a risky change
+- **Docs:** `framework/ash/moments/README.md`
+
 ### Causal trace (`trace`)
 
-Every Moments journey (browser or headless suite) links each gesture to the requests it made, the Ash actions they ran, the database time they took and — through Mana.History — which records changed and which fields, by name only; moments check prints the changes.
+Every Moments journey (browser or headless suite) links each gesture to the requests it made, the Ash actions they ran, the database time they took and — through Mana.History — which records changed and which fields, by name only; moments refresh --check prints the changes.
 
 - **Use:** Already on in Moments runs: the app calls MomentActionTrace.attach(dio, Uri.parse(baseUrl)) (do it in the app's account package), the backend mounts Moments.ActionTrace.Plug in dev with config :ash, :tracer, [Moments.ActionTrace] and Moments.ActionTrace.Telemetry, and moments/backend.json defines MANA_ACTION_TRACE. Read it: framework/moments/moments suite <moment> --headless, then the report's actions.receipts[].changes.
 - **Instead of:** guessing which endpoint a button hits; print debugging across client and server; grepping logs for a request id

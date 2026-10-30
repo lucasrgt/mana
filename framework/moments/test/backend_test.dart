@@ -29,24 +29,7 @@ Future<({int status, String text})> send(
   }
 }
 
-final class Renewing implements Renewal {
-  var calls = 0;
-  @override
-  Map<String, Object?> status() => {'phase': 'idle'};
-  @override
-  Map<String, Object?> start(Object? name) {
-    calls++;
-    return {'phase': 'preparing', 'name': name};
-  }
-
-  @override
-  bool canRenew(String name) => true;
-}
-
 final class Dev implements Development {
-  Dev(this.renewal);
-  @override
-  final Renewal renewal;
   @override
   Map<String, Object?> status() => const {};
   @override
@@ -100,40 +83,33 @@ void main() {
     );
   });
 
-  test('renewal transport is authenticated and the bootstrap follows only committed launch data', () async {
-    final directory = temporary('moment-renew-');
+  test('the bootstrap answers only an authenticated loopback caller and follows committed launch data', () async {
+    final directory = temporary('moment-bootstrap-');
     File(p.join(directory, 'schema.json')).writeAsStringSync('{}');
     File(p.join(directory, 'overrides.json')).writeAsStringSync('{"version":1,"values":{}}');
     var launch = <String, Object?>{
       'account': {'password': 'local-only'},
       'projection': {'transactionId': 'old'},
     };
-    final renewal = Renewing();
     final bridge = await Bridge.start(
       project: directory,
       port: 0,
       momentsEnabled: false,
       bootstrap: () => launch,
-      development: Dev(renewal),
+      development: Dev(),
     );
     addTearDown(bridge.close);
-    expect((await send(bridge, 'POST', '/dev/renew', body: '{"name":"checkout"}')).status, 401);
+    expect((await send(bridge, 'GET', '/moments/bootstrap')).status, 401);
     final headers = {'Authorization': 'Bearer ${bridge.token}', 'Content-Type': 'application/json'};
     expect(
       (await send(
         bridge,
-        'POST',
-        '/dev/renew',
+        'GET',
+        '/moments/bootstrap',
         headers: {...headers, 'Origin': 'https://outside.example'},
-        body: '{}',
       )).status,
       403,
     );
-    expect(renewal.calls, 0);
-    final result = await send(bridge, 'POST', '/dev/renew', headers: headers, body: '{"name":"checkout"}');
-    expect(result.status, 202);
-    expect(renewal.calls, 1);
-    expect(result.text.contains('local-only'), isFalse);
     launch = {
       ...launch,
       'projection': {'transactionId': 'new'},

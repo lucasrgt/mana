@@ -161,12 +161,12 @@ List<Map<String, Object?>> evaluateChecks(
   ];
 }
 
-void validateChecks(Object? checks, Map<String, Object?>? properties, {bool navigation = false}) {
-  if (checks is! List || (!navigation && checks.isEmpty) || checks.length > 64) {
+void validateChecks(Object? checks, Map<String, Object?>? properties) {
+  if (checks is! List || checks.isEmpty || checks.length > 64) {
     throw const _Unavailable('This Moment has no bounded on-demand checks');
   }
   final declared = checks.cast<Map>();
-  if (!navigation && !declared.any((c) => c['scope'] != 'step')) {
+  if (!declared.any((c) => c['scope'] != 'step')) {
     throw const _Unavailable('A Moment requires a final criterion');
   }
   final names = <String>{};
@@ -277,32 +277,18 @@ Future<Map<String, Object?>> checkMoment({
   bool refresh = false,
   int refreshTimeout = 80000,
   bool journey = false,
-  bool navigation = false,
   bool profile = false,
   bool restart = false,
-  bool materialized = false,
   String? manifestFile,
 }) async {
   manifestFile ??= p.join(project, 'moments/manifest.json');
-  journey = journey || navigation || profile;
+  journey = journey || profile;
   final started = nowMs();
   final transport = request;
   Map<String, Object?>? lease;
   var lastHeartbeat = 0.0;
   double? finalObservationStarted;
-  Object? actorContext;
-  void assertActor(Map<String, Object?>? value) {
-    if (materialized &&
-        actorContext != null &&
-        (!deepEqual(value?['materialization'], actorContext) || (value?['state'] as Map?)?['name'] != name)) {
-      throw const _Unavailable('Materialized actor identity changed');
-    }
-  }
-
   Future<Map<String, Object?>> guarded(String path, [Map<String, Object?>? data]) async {
-    if (materialized && actorContext != null && gestureKinds.any((kind) => path == '/journey/$kind')) {
-      assertActor(await transport('/moments/look'));
-    }
     if (lease != null && nowMs() - lastHeartbeat > 15000) {
       final renewed = await transport('/journey/lease', {'operation': 'heartbeat', 'journeyId': lease['id']});
       if (renewed['id'] != lease!['id'] || renewed['phase'] != 'active') {
@@ -311,7 +297,6 @@ Future<Map<String, Object?>> checkMoment({
       lastHeartbeat = nowMs();
     }
     final result = await transport(path, lease != null && data != null ? {...data, 'journeyId': lease['id']} : data);
-    if (path.startsWith('/moments/look')) assertActor(result);
     return result;
   }
 
@@ -341,9 +326,6 @@ Future<Map<String, Object?>> checkMoment({
     report['stage'] = 'prepare';
   }
   try {
-    if (materialized && (refresh || restart)) {
-      throw const _Unavailable('Materialized actors cannot refresh or restart through the legacy checker');
-    }
     if (refresh) {
       report['operation'] = 'refresh-check';
       report['stage'] = 'declaration';
@@ -357,32 +339,10 @@ Future<Map<String, Object?>> checkMoment({
     if (declared == null) throw const _Unavailable('Unknown Moment');
     final scene = {...declared, 'checks': declared['checks'] ?? <Object?>[], 'steps': declared['steps'] ?? <Object?>[]};
     final checks = (scene['checks']! as List).cast<Map<String, Object?>>();
-    Map<String, Object?>? inherited;
-    if (materialized) {
-      inherited = await request('/moments/look');
-      actorContext = jsonCopy(inherited['materialization']);
-      final context = actorContext as Map?;
-      if (context == null ||
-          context.keys.any((key) => !const ['instanceId', 'moment', 'from', 'manifest'].contains(key)) ||
-          context['moment'] != name ||
-          context['manifest'] != hashBytes(manifestBytes) ||
-          !RegExp(r'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$').hasMatch('${context['instanceId'] ?? ''}') ||
-          ![scene['from'], name].contains(context['from'])) {
-        throw const _Unavailable('A matching coordinator-owned actor is required');
-      }
-      assertActor(inherited);
-      report['materialization'] = actorContext;
-      report['operation'] = journey ? 'materialized-journey' : 'materialized-check';
-    } else {
-      assertMaterializable(scene);
-    }
+    assertMaterializable(scene);
     final properties = propertiesFor(manifest, (scene['projection'] as Map?)?['route']);
-    validateChecks(checks, properties, navigation: navigation);
-    if (journey || checks.any((c) => c['scope'] == 'step')) validateSteps(scene, navigation: navigation);
-    if (navigation) {
-      report['operation'] = materialized ? 'materialized-navigation' : 'navigation';
-      report['verification'] = 'not-performed';
-    }
+    validateChecks(checks, properties);
+    if (journey || checks.any((c) => c['scope'] == 'step')) validateSteps(scene);
     // While polling, the runtime's own digest (assertDartRuntime) stands in for
     // a full reread; the boundaries below still reread every Dart file.
     Map<String, Object?> declaredVersion() => _sources(project, manifestFile!, manifest, scene);
@@ -476,7 +436,6 @@ Future<Map<String, Object?>> checkMoment({
     }
     markPhase('preparationAndRestoration');
     final opened =
-        inherited ??
         refreshed?.snapshot ??
         await request(
           '/moments/open',
@@ -490,7 +449,6 @@ Future<Map<String, Object?>> checkMoment({
     Map<String, Object?> look;
     while (true) {
       look = await request('/moments/look');
-      assertActor(look);
       if (look['revision'] != revision || (look['state'] as Map?)?['name'] != name) {
         throw const _Unavailable('Moment changed during the check');
       }
@@ -517,39 +475,6 @@ Future<Map<String, Object?>> checkMoment({
       }
     }
 
-    Future<Object?> settle() async {
-      final captured = await request('/moments/settle', {'revision': revision, 'client': first['client']});
-      final sequence = captured['sequence'];
-      if (captured['status'] != 'captured' ||
-          captured['name'] != name ||
-          captured['revision'] != revision ||
-          captured['client'] != first['client'] ||
-          sequence is! int ||
-          sequence < 1 ||
-          !RegExp(r'^[-a-f0-9]{36}$').hasMatch('${captured['id'] ?? ''}')) {
-        throw const _Unavailable('Runtime did not confirm a fresh persisted UI capture');
-      }
-      final current = await request('/moments/look');
-      final inspection = await request('/moments/inspect');
-      validateInspection(inspection);
-      final observed = current['observed'] as Map?;
-      final lastReported = (inspection['screen'] as Map?)?['lastReported'] as Map?;
-      if (current['revision'] != revision ||
-          (current['state'] as Map?)?['name'] != name ||
-          current['codeChanged'] == true ||
-          observed?['client'] != first['client'] ||
-          observed?['revision'] != revision ||
-          observed?['captureSequence'] != sequence ||
-          observed?['reportedAt'] != captured['reportedAt'] ||
-          (inspection['moment'] as Map?)?['revision'] != revision ||
-          lastReported?['matchesRevision'] != true ||
-          !deepEqual(observed?['projection'], lastReported?['projection'])) {
-        throw const _Unavailable('State changed after fresh UI capture');
-      }
-      assertDartRuntime(current['dart']);
-      return captured;
-    }
-
     if (journey) {
       if (!deepEqual(version, await sourceVersion())) throw const _Unavailable('Source changed during preparation');
       report['stage'] = 'steps';
@@ -564,151 +489,122 @@ Future<Map<String, Object?>> checkMoment({
         evaluate: evaluateChecks,
         report: report,
         validateInspection: validateInspection,
-        settle: navigation ? settle : null,
       );
       report['stage'] = 'check';
     }
-    if (navigation) {
-      report['stage'] = 'capture';
-      report['capture'] = await settle();
-      if (!deepEqual(version, await sourceVersion())) throw const _Unavailable('Source changed during the capture');
-      report['status'] = 'captured';
-      report['verification'] =
-          ((report['steps'] as List?) ?? const []).cast<Map>().any(
-            (step) => (step['checks'] as List?)?.isNotEmpty ?? false,
-          )
-          ? 'step-criteria-only'
-          : 'not-performed';
-      report['skippedFinalCriteria'] = [
-        for (final c in checks)
-          if (c['scope'] != 'step') c['name'],
-      ];
-      if (requiresBackend) {
-        code['backend'] = {
-          'services': serviceIdentity,
-          'scope': 'Owned backend identity checked during capture; no business criteria evaluated',
-        };
-      }
-    } else {
-      markPhase('verification');
-      final finalChecks = checks.where((c) => c['scope'] != 'step').toList();
-      final settlementStarted = nowMs(), settlementDeadline = settlementStarted + timeout;
-      finalObservationStarted = settlementStarted;
-      final finalObservation = <String, Object?>{'attempts': 0, 'timeoutMs': timeout, 'status': 'waiting'};
-      if (journey) report['finalObservation'] = finalObservation;
-      while (true) {
-        if (journey) {
-          finalObservation['attempts'] = (finalObservation['attempts']! as int) + 1;
-          look = await request('/moments/look');
-          assertActor(look);
-          final observed = look['observed'] as Map?;
-          if (look['revision'] != revision ||
-              (look['state'] as Map?)?['name'] != name ||
-              look['codeChanged'] == true ||
-              observed?['client'] != first['client'] ||
-              observed?['revision'] != revision) {
-            throw const _Unavailable('Runtime changed after journey');
-          }
-          assertDartRuntime(look['dart']);
-          // Legitimate UI updates after the final gesture may still be arriving.
-          // The runtime identity is fixed; only its projections may settle.
-          expected = (look['state']! as Map)['projection'];
-          first = asObject(observed);
-        }
-        final inspection = await request('/moments/inspect');
-        final last = await request('/moments/look');
-        assertActor(last);
-        assertDartRuntime(last['dart']);
-        assertDartRuntime((inspection['moment'] as Map?)?['dart']);
-        final observed = last['observed'] as Map?;
-        final moment = inspection['moment'] as Map?;
-        if (last['revision'] != revision ||
-            (last['state'] as Map?)?['name'] != name ||
+    markPhase('verification');
+    final finalChecks = checks.where((c) => c['scope'] != 'step').toList();
+    final settlementStarted = nowMs(), settlementDeadline = settlementStarted + timeout;
+    finalObservationStarted = settlementStarted;
+    final finalObservation = <String, Object?>{'attempts': 0, 'timeoutMs': timeout, 'status': 'waiting'};
+    if (journey) report['finalObservation'] = finalObservation;
+    while (true) {
+      if (journey) {
+        finalObservation['attempts'] = (finalObservation['attempts']! as int) + 1;
+        look = await request('/moments/look');
+        final observed = look['observed'] as Map?;
+        if (look['revision'] != revision ||
+            (look['state'] as Map?)?['name'] != name ||
+            look['codeChanged'] == true ||
             observed?['client'] != first['client'] ||
-            observed?['revision'] != revision ||
-            moment?['revision'] != revision ||
-            last['codeChanged'] == true ||
-            moment?['codeChanged'] == true ||
-            !deepEqual({...version}..remove('dart'), declaredVersion())) {
-          throw const _Unavailable('Source or runtime changed during the check; run it again');
+            observed?['revision'] != revision) {
+          throw const _Unavailable('Runtime changed after journey');
         }
-        if (requiresBackend) {
-          final finalSupervisor = await request('/dev/status');
-          final finalIdentity = _backendIdentity(finalSupervisor);
-          final inspected = inspection['supervisor'] as Map?;
-          if (!deepEqual(
-                target,
-                _targetIdentity(finalSupervisor['target'], present: _own(finalSupervisor, 'target')),
-              ) ||
-              !deepEqual(target, _targetIdentity(inspected?['target'], present: _own(inspected, 'target')))) {
-            throw const _Unavailable('Flutter target changed during the check');
-          }
-          if (!deepEqual(serviceIdentity, finalIdentity) || !deepEqual(serviceIdentity, _backendIdentity(inspected))) {
-            throw const _Unavailable('Backend source or process changed during the check; run it again');
-          }
-          code['backend'] = {
-            'services': serviceIdentity,
-            'scope':
-                'Declared service sources applied to owned live processes; not a database snapshot or deployment attestation',
-          };
-        }
-        final lastReported = (inspection['screen'] as Map?)?['lastReported'] as Map?;
-        final stable =
-            lastReported?['matchesRevision'] == true &&
-            deepEqual(expected, (last['state']! as Map)['projection']) &&
-            deepEqual(first['projection'], observed!['projection']) &&
-            deepEqual(observed['projection'], lastReported!['projection']);
-        if (!stable && !journey) throw const _Unavailable('State changed during the check; run it again');
-        final outcomes = stable
-            ? evaluateChecks(
-                finalChecks,
-                expected: expected,
-                observed: observed['projection'],
-                backend: inspection['backend'],
-                properties: properties,
-              )
-            : <Map<String, Object?>>[];
-        report['checks'] = outcomes;
-        report['status'] = !stable || outcomes.any((c) => c['status'] == 'unavailable')
-            ? 'unavailable'
-            : outcomes.any((c) => c['status'] == 'failed')
-            ? 'failed'
-            : 'passed';
-        report['restoration'] = {
-          'revision': revision,
-          'reportedAt': observed?['reportedAt'],
-          'elapsedMs': nowMs() - started,
-        };
-        if (refreshed != null) {
-          final supervisor = await request('/dev/status');
-          if (supervisor['id'] != refreshed.id ||
-              supervisor['phase'] != 'ready' ||
-              supervisor['pending'] == true ||
-              supervisor['held'] == true) {
-            throw const _Unavailable('Another refresh or edit started during the check');
-          }
-        }
-        if (!journey) break;
-        finalObservation['durationMs'] = nowMs() - settlementStarted;
-        finalObservation['status'] = report['status'];
-        if (report['status'] == 'passed') break;
-        if (nowMs() >= settlementDeadline) {
-          report['reason'] = stable
-              ? 'Final journey criteria were not reached before the deadline'
-              : 'UI did not settle before the final journey deadline';
-          break;
-        }
-        // Retry observations only. Preparation and gestures remain exactly once.
-        final observation = last['observation'];
-        if (observation is int) {
-          await request('/moments/look?after=$observation&wait=250');
-        } else {
-          await _sleep(poll);
-        }
+        assertDartRuntime(look['dart']);
+        // Legitimate UI updates after the final gesture may still be arriving.
+        // The runtime identity is fixed; only its projections may settle.
+        expected = (look['state']! as Map)['projection'];
+        first = asObject(observed);
       }
-      if (!deepEqual(version, await sourceVersion())) {
+      final inspection = await request('/moments/inspect');
+      final last = await request('/moments/look');
+      assertDartRuntime(last['dart']);
+      assertDartRuntime((inspection['moment'] as Map?)?['dart']);
+      final observed = last['observed'] as Map?;
+      final moment = inspection['moment'] as Map?;
+      if (last['revision'] != revision ||
+          (last['state'] as Map?)?['name'] != name ||
+          observed?['client'] != first['client'] ||
+          observed?['revision'] != revision ||
+          moment?['revision'] != revision ||
+          last['codeChanged'] == true ||
+          moment?['codeChanged'] == true ||
+          !deepEqual({...version}..remove('dart'), declaredVersion())) {
         throw const _Unavailable('Source or runtime changed during the check; run it again');
       }
+      if (requiresBackend) {
+        final finalSupervisor = await request('/dev/status');
+        final finalIdentity = _backendIdentity(finalSupervisor);
+        final inspected = inspection['supervisor'] as Map?;
+        if (!deepEqual(target, _targetIdentity(finalSupervisor['target'], present: _own(finalSupervisor, 'target'))) ||
+            !deepEqual(target, _targetIdentity(inspected?['target'], present: _own(inspected, 'target')))) {
+          throw const _Unavailable('Flutter target changed during the check');
+        }
+        if (!deepEqual(serviceIdentity, finalIdentity) || !deepEqual(serviceIdentity, _backendIdentity(inspected))) {
+          throw const _Unavailable('Backend source or process changed during the check; run it again');
+        }
+        code['backend'] = {
+          'services': serviceIdentity,
+          'scope':
+              'Declared service sources applied to owned live processes; not a database snapshot or deployment attestation',
+        };
+      }
+      final lastReported = (inspection['screen'] as Map?)?['lastReported'] as Map?;
+      final stable =
+          lastReported?['matchesRevision'] == true &&
+          deepEqual(expected, (last['state']! as Map)['projection']) &&
+          deepEqual(first['projection'], observed!['projection']) &&
+          deepEqual(observed['projection'], lastReported!['projection']);
+      if (!stable && !journey) throw const _Unavailable('State changed during the check; run it again');
+      final outcomes = stable
+          ? evaluateChecks(
+              finalChecks,
+              expected: expected,
+              observed: observed['projection'],
+              backend: inspection['backend'],
+              properties: properties,
+            )
+          : <Map<String, Object?>>[];
+      report['checks'] = outcomes;
+      report['status'] = !stable || outcomes.any((c) => c['status'] == 'unavailable')
+          ? 'unavailable'
+          : outcomes.any((c) => c['status'] == 'failed')
+          ? 'failed'
+          : 'passed';
+      report['restoration'] = {
+        'revision': revision,
+        'reportedAt': observed?['reportedAt'],
+        'elapsedMs': nowMs() - started,
+      };
+      if (refreshed != null) {
+        final supervisor = await request('/dev/status');
+        if (supervisor['id'] != refreshed.id ||
+            supervisor['phase'] != 'ready' ||
+            supervisor['pending'] == true ||
+            supervisor['held'] == true) {
+          throw const _Unavailable('Another refresh or edit started during the check');
+        }
+      }
+      if (!journey) break;
+      finalObservation['durationMs'] = nowMs() - settlementStarted;
+      finalObservation['status'] = report['status'];
+      if (report['status'] == 'passed') break;
+      if (nowMs() >= settlementDeadline) {
+        report['reason'] = stable
+            ? 'Final journey criteria were not reached before the deadline'
+            : 'UI did not settle before the final journey deadline';
+        break;
+      }
+      // Retry observations only. Preparation and gestures remain exactly once.
+      final observation = last['observation'];
+      if (observation is int) {
+        await request('/moments/look?after=$observation&wait=250');
+      } else {
+        await _sleep(poll);
+      }
+    }
+    if (!deepEqual(version, await sourceVersion())) {
+      throw const _Unavailable('Source or runtime changed during the check; run it again');
     }
   } on Object catch (error, stack) {
     if (Platform.environment['MOMENTS_DEBUG'] != null) stderr.writeln('$error\n$stack');
@@ -817,13 +713,6 @@ Future<Map<String, Object?>> checkMoment({
         ],
       },
     if (report['target'] != null) 'target': report['target'],
-    if (report['materialization'] != null) 'materialization': report['materialization'],
-    if (navigation) ...{
-      'operation': report['operation'],
-      'verification': report['verification'],
-      'capture': report['capture'],
-      'skippedFinalCriteria': report['skippedFinalCriteria'],
-    },
     if (refresh) ...{'name': name, 'stage': report['stage'], 'refresh': report['refresh']},
     if (journey) ...{
       'name': name,

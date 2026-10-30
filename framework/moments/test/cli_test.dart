@@ -222,6 +222,8 @@ void main() {
       var revision = 0;
       final supervisor = {
         'phase': 'ready',
+        'id': 1,
+        'moment': 'inbox',
         'services': [
           {
             'name': 'backend',
@@ -237,7 +239,7 @@ void main() {
         expect(request.headers.value('authorization'), 'Bearer test-only-token');
         await request.drain<void>();
         switch (request.uri.path) {
-          case '/dev/status':
+          case '/dev/status' || '/dev/refresh':
             return replyJson(request, supervisor);
           case '/moments/open':
             revision++;
@@ -270,7 +272,7 @@ void main() {
         return replyJson(request, {}, status: 404);
       });
       runtimeFile(app, api.port, 'test-only-token');
-      final result = await moments(['check', 'inbox', '--json'], cwd: p.join(app, 'lib/nested'));
+      final result = await moments(['refresh', '--check', '--json'], cwd: p.join(app, 'lib/nested'));
       expect(result.code, {'passed': 0, 'failed': 1, 'unavailable': 2}[expected]);
       final value = jsonDecode(result.stdout) as Map;
       expect(value['status'], expected);
@@ -278,7 +280,7 @@ void main() {
       expect(result.stderr, '');
       expect(result.stdout, isNot(contains('test-only-token')));
       if (expected == 'passed') {
-        final human = await moments(['check', 'inbox'], cwd: root);
+        final human = await moments(['refresh', '--check'], cwd: root);
         expect(human.code, 0);
         expect(human.stdout, contains('PASSED · inbox'));
         expect(human.stdout, contains('Report:'));

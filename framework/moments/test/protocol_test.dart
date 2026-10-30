@@ -5,7 +5,6 @@ import 'package:moments/src/backend_recipes.dart';
 import 'package:moments/src/check.dart';
 import 'package:moments/src/errors.dart';
 import 'package:moments/src/graph.dart';
-import 'package:moments/src/http_server.dart' show reply;
 import 'package:moments/src/manifest.dart';
 import 'package:moments/src/profile.dart';
 import 'package:moments/src/protocol.dart';
@@ -216,13 +215,12 @@ void main() {
       expect((result['protocol']! as Map)['version'], '0.1');
       expect(result['conformance'], 'partial');
       final declared = (result['capabilities']! as Map).cast<String, Object?>();
-      expect(declared['independentFork'], true);
-      expect(declared['parentMaterialization'], true);
+      expect(declared['independentFork'], false);
+      expect(declared['parentMaterialization'], false);
       expect(declared['wholeSituationSnapshot'], false);
       final profiles = (result['executionProfiles']! as Map).cast<String, Object?>();
       expect((profiles['launcher']! as Map)['parentMaterialization'], false);
-      expect((profiles['materialized']! as Map)['parentMaterialization'], true);
-      expect((profiles['materialized']! as Map)['verification'], contains('Explicit check'));
+      expect(profiles.keys, ['launcher']);
       expect((result['semantics']! as Map)['reset --discard-data'], contains('not protocol reset'));
     },
   );
@@ -251,7 +249,7 @@ void main() {
       startBase: (_) async => effects.add('base'),
       beforePrepare: (_) async => effects.add('checkpoint'),
     );
-    await expectLater(backend.prepare('approved'), throwing('Parent materialization'));
+    await expectLater(backend.prepare('approved'), throwing('cannot open'));
     expect(effects, isEmpty);
   });
 
@@ -260,7 +258,7 @@ void main() {
     final runtime = Moments.create(project, MomentsOptions(manifestFile: file, initialName: 'checkout'))!;
     addTearDown(runtime.close);
     final before = File(p.join(project, 'moments/.session.json')).readAsStringSync();
-    expect(() => runtime.open('approved'), throwing('Parent materialization'));
+    expect(() => runtime.open('approved'), throwing('cannot open'));
     expect(File(p.join(project, 'moments/.session.json')).readAsStringSync(), before);
     expect((runtime.inspect()['state']! as Map)['name'], 'checkout');
   });
@@ -279,104 +277,6 @@ void main() {
     );
     expect(result['status'], 'unavailable');
     expect(calls, isEmpty);
-  });
-
-  test(
-    'a coordinator-bound child inherits the checkpoint and rejects legacy open/reset and declaration drift',
-    () async {
-      final (:project, :file, :manifest) = fixture();
-      (manifest['properties']! as Map)['draft'] = {'type': 'string', 'maxLength': 120};
-      for (final value in (manifest['moments']! as Map).values) {
-        ((value as Map)['projection'] as Map)['draft'] = 'declaration default';
-      }
-      writeJson(file, manifest);
-      final session = p.join(project, 'moments/.session.json');
-      Moments.create(project, MomentsOptions(manifestFile: file, initialName: 'checkout'))!.close();
-      final saved = (readJson(session)! as Map).cast<String, Object?>();
-      (((saved['states']! as Map)['checkout'] as Map)['projection'] as Map)['draft'] = 'Inherited parent draft';
-      writeJson(session, saved);
-      final materialization = {
-        'instanceId': '00000000-0000-4000-8000-000000000001',
-        'moment': 'approved',
-        'from': 'checkout',
-        'manifest': readManifest(file)['recipeHash'],
-      };
-      final child = Moments.create(project, MomentsOptions(manifestFile: file, materialization: materialization))!;
-      addTearDown(child.close);
-      final state = (child.inspect()['state']! as Map).cast<String, Object?>();
-      expect(state['name'], 'approved');
-      expect((state['projection']! as Map)['draft'], 'Inherited parent draft');
-      expect(child.inspect()['materialization'], materialization);
-      final before = File(session).readAsStringSync();
-      expect(() => child.open('declined'), throwing('coordinator'));
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(() => server.close(force: true));
-      server.listen((request) async {
-        try {
-          await child.handle(
-            request,
-            request.uri,
-            () async => (jsonDecode(await utf8.decoder.bind(request).join()) as Map).cast(),
-          );
-        } on Object catch (error) {
-          reply(request.response, 400, {'error': error is MomentsError ? error.message : '$error'});
-        }
-      });
-      Future<({int code, Object? body})> send(String path, [Map<String, Object?>? data]) async {
-        final client = HttpClient();
-        try {
-          final request = await client.openUrl(
-            data == null ? 'GET' : 'POST',
-            Uri.parse('http://127.0.0.1:${server.port}$path'),
-          );
-          if (data != null) request.add(utf8.encode(jsonEncode(data)));
-          final response = await request.close();
-          return (code: response.statusCode, body: jsonDecode(await utf8.decoder.bind(response).join()));
-        } finally {
-          client.close(force: true);
-        }
-      }
-
-      final reset = await send('/moments/reset', {});
-      expect(reset.code, 400);
-      expect('${(reset.body! as Map)['error']}', contains('coordinator'));
-      final reopen = await send('/moments/open', {'name': 'approved', 'prepare': false});
-      expect(reopen.code, 400);
-      expect('${(reopen.body! as Map)['error']}', contains('cannot prepare'));
-      expect(File(session).readAsStringSync(), before);
-      final listing = await send('/moments/ls');
-      expect((listing.body! as List).cast<Map>().firstWhere((v) => v['name'] == 'approved')['from'], 'checkout');
-      scene(manifest, 'approved')['description'] = 'Changed';
-      writeJson(file, manifest);
-      expect(child.inspect, throwing('declaration changed'));
-    },
-  );
-
-  test('materialized actor binding refuses missing or mismatched parent checkpoints before modifying them', () {
-    final (:project, :file, manifest: _) = fixture();
-    final session = p.join(project, 'moments/.session.json');
-    Moments.create(project, MomentsOptions(manifestFile: file, initialName: 'checkout'))!.close();
-    final before = File(session).readAsStringSync();
-    final context = {
-      'instanceId': '00000000-0000-4000-8000-000000000001',
-      'moment': 'approved',
-      'from': 'checkout',
-      'manifest': readManifest(file)['recipeHash'],
-    };
-    for (final override in <Map<String, Object?>>[
-      {'from': 'declined'},
-      {'from': 'approved'},
-      {'manifest': 'b' * 64},
-      {'instanceId': 'bad'},
-      {'token': 'DO NOT LEAK'},
-    ]) {
-      expect(
-        () => Moments.create(project, MomentsOptions(manifestFile: file, materialization: {...context, ...override})),
-        throwing('[Mm]aterialized'),
-        reason: '$override',
-      );
-      expect(File(session).readAsStringSync(), before);
-    }
   });
 
   test('parallel and nested timings remain separate observations, not an additive wall-time breakdown', () {

@@ -26,8 +26,6 @@ final class Dev implements Development {
   };
   @override
   Future<void> Function()? get stop => null;
-  @override
-  Renewal? get renewal => null;
 }
 
 void main() {
@@ -123,7 +121,7 @@ void main() {
         call(bridge.url, bridge.token, path, data);
     final first = (await request('/journey/lease', {'operation': 'acquire', 'name': 'inbox'})).value;
     expect((await request('/journey/lease', {'operation': 'acquire', 'name': 'inbox'})).code, 400);
-    for (final path in ['/moments/open', '/moments/reset', '/dev/refresh', '/dev/renew']) {
+    for (final path in ['/moments/open', '/moments/reset', '/dev/refresh']) {
       expect((await request(path, {'name': 'inbox'})).code, 400, reason: path);
     }
     expect(prepares, 0);

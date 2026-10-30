@@ -36,8 +36,6 @@ final class Dev implements Development {
   Map<String, Object?> Function(Map<String, Object?> input)? get refresh => null;
   @override
   Future<void> Function()? get stop => null;
-  @override
-  Renewal? get renewal => null;
 }
 
 final class Fixture {

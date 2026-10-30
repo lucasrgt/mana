@@ -16,16 +16,16 @@ final class JourneyError implements Exception {
 final _target = RegExp(r'^[a-zA-Z0-9_.:-]{1,160}$');
 const _criteria = ['ui_equals', 'backend_equals'];
 
-void validateSteps(Map<String, Object?> scene, {bool navigation = false}) {
+void validateSteps(Map<String, Object?> scene) {
   final checks = scene['checks'] ?? const [];
   if (checks is! List) throw const JourneyError('Invalid check declaration');
   final steps = scene['steps'];
-  if (steps is! List || (!navigation && steps.isEmpty) || steps.length > 32) {
+  if (steps is! List || steps.isEmpty || steps.length > 32) {
     throw const JourneyError('Declare 1–32 journey steps before running');
   }
   final declared = checks.cast<Map>();
   final stepList = steps.cast<Map>();
-  if (!navigation && !declared.any((c) => c['scope'] != 'step' && _criteria.contains(c['kind']))) {
+  if (!declared.any((c) => c['scope'] != 'step' && _criteria.contains(c['kind']))) {
     throw const JourneyError('A journey requires an observed UI or backend criterion');
   }
   for (final check in declared.where((c) => c['scope'] == 'step')) {
@@ -49,7 +49,7 @@ void validateSteps(Map<String, Object?> scene, {bool navigation = false}) {
         !_target.hasMatch('${step['target'] ?? ''}') ||
         ((kind == 'fill' || inputRef != null) && !_target.hasMatch('${inputRef ?? ''}')) ||
         until is! List ||
-        (!navigation && kind == 'tap' && until.isEmpty && index != stepList.length - 1) ||
+        (kind == 'tap' && until.isEmpty && index != stepList.length - 1) ||
         until.length > 32 ||
         !until.every((name) => declared.any((c) => c['name'] == name && _criteria.contains(c['kind'])));
     if (invalid) throw const JourneyError('Invalid journey target, input reference or postcondition');
@@ -88,7 +88,6 @@ Future<void> executeSteps({
   required Evaluate evaluate,
   required Map<String, Object?> report,
   void Function(Map<String, Object?> inspection)? validateInspection,
-  Future<Object?> Function()? settle,
   int timeout = 8000,
   int poll = 100,
   int wait = 250,
@@ -136,15 +135,12 @@ Future<void> executeSteps({
           receipt['status']! as String,
         );
       }
-      if (settle != null) receipt['capture'] = await settle();
       final until = (step['until'] as List?) ?? const [];
       final checks = checksDeclared.where((c) => until.contains(c['name'])).toList();
       final deadline = nowMs() + timeout;
       if (checks.isEmpty) {
         receipt['status'] = 'passed';
-        receipt['meaning'] = settle != null
-            ? 'Operation dispatched and declared UI captured; no business criterion evaluated for this step'
-            : 'Operation dispatched; application effects are checked by later steps and final criteria';
+        receipt['meaning'] = 'Operation dispatched; application effects are checked by later steps and final criteria';
         continue;
       }
       Object? observation;
