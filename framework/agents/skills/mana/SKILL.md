@@ -14,7 +14,7 @@ Mana is not a set of loose libraries. Every piece below is part of one system: t
 1. `framework/cli/mana capabilities <topic>` — does Mana already do this? Use it.
 2. `framework/cli/mana features which <path>` — which feature owns the file; `mana features show <feature>` lists its files and Moments.
 3. Change the Ash resource first; regenerate the client (`mana client generate`); then the Flutter half.
-4. Prove it with the feature's Moments (`framework/moments/moments check|run <name>`); read the AVP verdict, never only the exit code.
+4. Prove it with the feature's Moments (`framework/moments/moments suite <name> --headless`, or `suite --affected --headless` for all the change touches); read the AVP verdict, never only the exit code.
 5. `dart analyze` at the package root (Mana lints) and `framework/cli/mana doctor` before finishing.
 
 ## Coordinates — shared addresses
@@ -30,9 +30,9 @@ The shared feature:<name> address: which files, verbs, Moments and sensors belon
 
 ### Moments (`moments`)
 
-Named, reproducible situations of an app (moment:<app>/<name>): open, check, run and fork them instead of navigating by hand.
+Named, reproducible situations of an app (moment:<app>/<name>): open one in seconds with its data and screen, prove it and measure it instead of navigating by hand.
 
-- **Use:** framework/moments/moments list|open|check|run|suite|affected --project apps/<app>. Declare Moments in Ash (backend/lib/<app>/moments) and run moments sync.
+- **Use:** Prove: framework/moments/moments suite <name> --headless --project <app folder> (one or more), or suite --affected --headless (what the change touches). Look before editing a screen: with its Moment open, moments inspect --json gives the screen's files, its Ash source and its criteria. Warm loop: moments up <name> once (it keeps running), moments open <other> to switch (up refuses while one runs), moments refresh --check after saving Dart, moments down at the end. Slow journey: moments profile <name> --json (requests, Ash actions and queries). Declare Moments in Ash (backend/lib/<app>/moments) and run moments sync after editing them.
 - **Instead of:** one-off UI test suites; manual navigation to reach a state; screenshots as proof
 - **Docs:** `framework/moments/README.md`
 
@@ -335,7 +335,7 @@ An agent's plan of verb steps runs first as a dry run inside a transaction that 
 
 Every Moments journey (browser or headless suite) links each gesture to the requests it made, the Ash actions they ran, the database time they took and — through Mana.History — which records changed and which fields, by name only; moments check prints the changes.
 
-- **Use:** Already on in Moments runs: the app calls MomentActionTrace.attach(dio, Uri.parse(baseUrl)) (do it in the app's account package), the backend mounts Moments.ActionTrace.Plug in dev with config :ash, :tracer, [Moments.ActionTrace] and Moments.ActionTrace.Telemetry, and moments/backend.json defines MANA_ACTION_TRACE. Read it: framework/moments/moments suite <moment> --headless, then the report's actions.receipts[].changes, or moments check output ("changed: ...").
+- **Use:** Already on in Moments runs: the app calls MomentActionTrace.attach(dio, Uri.parse(baseUrl)) (do it in the app's account package), the backend mounts Moments.ActionTrace.Plug in dev with config :ash, :tracer, [Moments.ActionTrace] and Moments.ActionTrace.Telemetry, and moments/backend.json defines MANA_ACTION_TRACE. Read it: framework/moments/moments suite <moment> --headless, then the report's actions.receipts[].changes.
 - **Instead of:** guessing which endpoint a button hits; print debugging across client and server; grepping logs for a request id
 - **Docs:** `framework/ash/moments/README.md`
 

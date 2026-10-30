@@ -39,11 +39,9 @@ const help = '''Moments — edit, resume and verify Flutter
   moments refresh --restart --check Restarts to apply main/initState/initializers
   moments check <name>             Verifies without compiling
   moments check <name> --session <dir> [--actor <id>]  Verifies a copy that is already open
-  moments navigate <name>          Runs the path and captures the UI; does not verify final criteria
   moments prepare --profile <name> Prepares a new profile through the project adapter
   moments recover --preparation <dir> Closes an interrupted preparation, without replay
   moments compose --plan <file> --profile <name>  Prepares interfaces and runs the selected checkpoints
-  moments run <name>               Prepares, runs gestures and verifies the journey
   moments profile <name>           Runs the same journey with a latency/actions/queries profile
   moments recover                  Releases an interrupted journey after inspecting its effects
   moments recover --run <dir>      Discards copies of an interrupted run; keeps the origin and external roots
@@ -108,7 +106,6 @@ const _commands = {
   'compose',
   'profile',
   'fork',
-  'navigate',
   'review',
   'capabilities',
   'graph',
@@ -116,7 +113,6 @@ const _commands = {
   'down',
   'refresh',
   'check',
-  'run',
   'recover',
   'list',
   'open',
@@ -271,7 +267,7 @@ CliOptions parseArgs(List<String> args) {
     if (result.base != null && !result.affected) _usage('--base requires suite --affected.');
     return result..names = names;
   }
-  final named = const ['profile', 'check', 'run', 'navigate', 'open', 'up', 'fork', 'renew'].contains(command);
+  final named = const ['profile', 'check', 'open', 'up', 'fork', 'renew'].contains(command);
   if (words.length != (named ? 2 : 1) || (named && !_momentName.hasMatch(name!))) {
     _usage('Usage: moments $command${named ? ' <name>' : ''}');
   }
@@ -360,8 +356,7 @@ String findProject(String cwd, String? explicit) {
     if (config.existsSync()) {
       final value = jsonDecode(config.readAsStringSync());
       final project = value is Map ? value['project'] : null;
-      if (project is! String || project.trim().isEmpty)
-        throw const MomentsError('.moments.json must declare project.');
+      if (project is! String || project.trim().isEmpty) throw const MomentsError('.moments.json must declare project.');
       return p.normalize(p.join(dir, project));
     }
     final parent = p.dirname(dir);
@@ -396,9 +391,7 @@ String formatResult(Object? raw, CliOptions options) {
     return lines([
       'Composition: ${_status(value['status'])} · ${((value['composition'] as Map?)?['stages'] as List?)?.length ?? 0} stages observed',
       'Evidence per checkpoint; does not approve the final state of every referenced Moment.',
-      value['resourcesClosed'] == true
-          ? 'Own resources closed.'
-          : 'Shutdown not confirmed; recovery required.',
+      value['resourcesClosed'] == true ? 'Own resources closed.' : 'Shutdown not confirmed; recovery required.',
       value['reason'],
       'Report: ${value['report']}',
     ]);
@@ -428,9 +421,7 @@ String formatResult(Object? raw, CliOptions options) {
   if (command == 'graph') {
     final execution = value['execution'] as Map?;
     return [
-      execution != null
-          ? 'Map with recorded events · ${execution['scope']}'
-          : 'Declared map · no path run',
+      execution != null ? 'Map with recorded events · ${execution['scope']}' : 'Declared map · no path run',
       for (final node in (value['nodes']! as List).cast<Map>())
         '  ${node['name']}${node['from'] != null ? ' ← ${node['from']}' : ' (root)'}',
       if (execution != null) ...[
@@ -567,7 +558,7 @@ String formatResult(Object? raw, CliOptions options) {
     return 'Moment: ${(value['state'] as Map?)?['name'] ?? options.name}\n'
         '${options.fresh ? 'Origin: initial UI recipe.\n' : ''}'
         '${value['observed'] != null ? 'Resume confirmed.' : 'Resume not confirmed yet.'}\n'
-        'Use moments check ${options.name} to verify the criteria.';
+        'Use moments refresh --check to verify its criteria.';
   }
   if (command == 'inspect' && options.full) return _pretty.convert(value);
   if (command == 'inspect') {
@@ -656,15 +647,8 @@ Future<Object?> _live(String project, CliOptions options) async {
   final request = bridgeRequest(project);
   final runtime = File(p.join(project, 'moments/.backend/.runtime.json'));
   switch (options.command) {
-    case 'check' || 'run' || 'navigate' || 'profile':
-      return checkMoment(
-        project: project,
-        name: options.name,
-        request: request,
-        journey: options.command == 'run',
-        navigation: options.command == 'navigate',
-        profile: options.command == 'profile',
-      );
+    case 'check' || 'profile':
+      return checkMoment(project: project, name: options.name, request: request, profile: options.command == 'profile');
     case 'recover':
       final current = await request('/journey/lease');
       return request('/journey/lease', {'operation': 'recover', 'journeyId': current['id'], 'acknowledge': true});

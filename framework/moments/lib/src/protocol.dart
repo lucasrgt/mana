@@ -55,7 +55,7 @@ Map<String, Object?> capabilities() {
             'Sequential composition; adapter owns preparation, leases and fault policy. No automatic branch enumeration or universal fresh build',
       },
       'launcher': {
-        'commands': ['up', 'open', 'run', 'navigate', 'profile'],
+        'commands': ['up', 'open', 'suite', 'profile'],
         'parentMaterialization': false,
         'independentFork': false,
       },
@@ -184,9 +184,7 @@ Map<String, Object?> capabilities() {
       'open --fresh': 'Restore declared UI fields; not a whole-system reset',
       'up --fresh': 'Run app-owned preparation; not snapshot restoration',
       'reset --discard-data': 'Discard the stopped local database; not protocol reset-to-origin',
-      'navigate':
-          'Prepare one root or traverse a coordinator-owned actor and capture declared UI; no final business verification or whole-situation snapshot',
-      'run': 'Prepare and verify one linear journey; not exploration of all branches',
+      'suite': 'Prepare and verify each linear journey; not exploration of all branches',
       'compose':
           'Select existing steps and criteria across prepared surfaces; preserve checkpoint scope and declared ancestry',
       'prepare':

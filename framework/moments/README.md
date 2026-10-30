@@ -42,7 +42,7 @@ representation. There is no second dependency file.
 The materializer walks `from`, runs each ancestor once and captures its layers
 before opening independent copies. The public path is `open --isolated` or
 `fork`, with an explicit local adapter and a browser host. Plain opening and
-the launcher's `run` keep refusing children: they cannot treat them as
+journeys keep refusing children: they cannot treat them as
 independent roots.
 
 Capturing the database also captures durable queues. The adapter must control
@@ -67,8 +67,7 @@ and does not promise exactly-once delivery.
 `open --fresh` resets presentation; `up --fresh` runs the app's preparation;
 `reset --discard-data` discards the stopped database. None of them is the
 specification's `reset` to the origin. Navigation stays distinct from
-verification: the map and the export accept Moments without criteria; `run` is
-specific to verified journeys.
+verification: the map and the export accept Moments without criteria.
 
 Focused contract check (no backend or Flutter):
 
@@ -92,8 +91,7 @@ the first run does `dart pub get` and compiles the executable into
 moments up notifications            # keep running in a terminal
 moments up notifications --fresh    # prepare data and UI again, explicitly
 moments refresh --check             # after saving Dart; readable summary
-moments check notifications --json
-moments run notification-read       # prepare, tap the UI and check in Ash
+moments suite notification-read --headless  # prepare, tap the UI and check in Ash
 moments recover                     # after inspecting an interrupted journey
 moments open notifications          # resume the saved state
 moments open notifications --fresh  # reapply the initial UI recipe
@@ -280,7 +278,7 @@ that boundary.
 ### Latency profile of the same journey
 
 `moments profile <name> --json` runs the declared journey once, with the same
-preparation, gestures and criteria as `run`. Writes that are part of the
+preparation, gestures and criteria as the suite. Writes that are part of the
 journey happen normally; there is no automatic repetition to collect samples.
 It uses the local launcher, without `--session`, materialized branches or
 concurrent load.
@@ -506,7 +504,7 @@ same discard. `up` cannot cross a pending reset.
 
 ### Interrupted journey and durable intent
 
-`run` records ownership in `moments/.backend/.journey.json` before preparing
+A journey records ownership in `moments/.backend/.journey.json` before preparing
 data. Before delivering each gesture, it writes its intent (kind, ID and
 target) with fsync and an atomic replace. The record holds no typed values. A
 write failure prevents delivery; the intent record alone does not confirm the
@@ -518,8 +516,8 @@ recompiles and serves the services without their initial preparation and
 without reapplying the scenario's recipe. New journeys, preparations, refresh
 and gestures are blocked; edits stay pending. `status` shows the last intent;
 `inspect` lets you check UI and backend. After checking the effects, `recover`
-releases the instance without undoing or repeating actions. Only a new explicit
-`run` prepares and runs again.
+releases the instance without undoing or repeating actions. Only a new journey
+prepares and runs again.
 
 This file is local operational state, distinct from the disposable proofs in
 `.proofs/`. Do not delete it to unblock a run. The protection belongs to the
@@ -622,9 +620,7 @@ returns `unavailable`/exit 2 and asks for a sync. There is no silent empty
 selection when evidence is missing.
 
 The JSON lists `selected`, `omitted`, `removed`, `changed` and the reasons for
-widening. Each selected entry says `operation: run` if it has steps, or `check`
-otherwise. Run that operation in the indicated project with
-`moments run <name> --project <app>` or `moments check <name> --project <app>`.
+widening. `moments suite --affected --project <app>` runs the selection.
 
 Renames count on both ends; deletions and new files take part. Paths with
 spaces or newlines use Git's NUL protocol. `--base` is only valid for
@@ -653,9 +649,9 @@ data came from. An interrupted preparation stays on the `--retry-preparation`
 path; an interrupted journey opens for inspection and needs `recover`. `--fresh`
 cannot bypass those paths nor be combined with `--retry-preparation`.
 
-### Journeys: `run`
+### Journeys
 
-`run` requires steps declared in the Ash DSL. It prepares and opens the
+A journey requires steps declared in the Ash DSL. It prepares and opens the
 situation once, fires real events through Flutter's gesture system and waits for
 the postconditions of each step that declares `until`. After the last step, it
 waits for the final criteria for up to 12 s, repeating only observations. The
@@ -752,8 +748,8 @@ applied always rescans. Steps and the final wait read `look?after=<n>&wait=<ms>`
 which answers as soon as the screen sends its next report. An identity, source or transport change stops as `unavailable`,
 without repeating gestures or preparation. When the wait runs out, a last
 coherent observation that contradicts the criterion is `failed`; missing
-coherent evidence is `unavailable`. That wait belongs to `run`; `check` and
-`refresh --check` observe a coherent situation without waiting for false
+coherent evidence is `unavailable`. That wait belongs to journeys; `refresh --check`
+observes a coherent situation without waiting for false
 criteria to become true.
 
 Flows across several screens can keep a binding in the development shell, with
@@ -761,7 +757,7 @@ a stable entry route and an observed/restorable current destination. Session
 identity and phase are observations only (`restore: false`); restoring the
 destination never authenticates the user and the normal guards stay active.
 
-During `run`, the instance has one exclusive owner. Other commands that
+During a journey, the instance has one exclusive owner. Other commands that
 open/reset situations, prepare data or start a manual refresh are refused.
 `status --json` shows the ownership in `journey`; reading and inspection stay
 free. Success releases the ownership. Failure or expiry keeps it to avoid
@@ -897,10 +893,8 @@ catalog runs.
 
 The suite runs several Moments at once against the backend of an open `up`.
 Each worker has its own bridge and goes through `checkMoment`: recipes,
-gestures, criteria, code identity and proofs in `.proofs/` are the same as
-`moments run`. Data is not isolated between workers beyond the unique fixtures
-each recipe creates. A failing journey keeps its ownership for inspection, as in
-`run`; in the suite, the worker releases it explicitly (`ownershipRecovered` in
+gestures, criteria, code identity and proofs land in `.proofs/`. Data is not isolated between workers beyond the unique fixtures
+each recipe creates. A failing journey keeps its ownership for inspection; in the suite, the worker releases it explicitly (`ownershipRecovered` in
 the result) because the effects stay in disposable fixtures. If ownership stays
 active, the worker retires instead of guessing.
 
@@ -943,7 +937,7 @@ artifact cached:
 
 | Track | App A (14) | App B (11) | Peak memory (PSS) |
 | --- | --- | --- | --- |
-| Serial `run` in the dev sandbox | ~70 s + reopens | — | dev Flutter ~2.3 GB |
+| Serial journeys in the dev sandbox | ~70 s + reopens | — | dev Flutter ~2.3 GB |
 | Browser, 1 worker | 50 s | — | 0.85 GB |
 | Browser JS, 4 workers, 1 Chromium | 33–36 s | 21 s | 1.6–1.8 GB |
 | Browser wasm, 4 workers | 26–27 s | — | 1.65 GB |
@@ -1250,7 +1244,7 @@ debug/loopback.
 `moments up <name> --device linux` starts native Flutter through the same machine
 protocol used for the web. `--device web-server` is the default. Stop the
 instance before switching targets; two UIs never compete for one session.
-`check`, `run`, `open` and `refresh --check` keep the same names and
+`open`, `suite` and `refresh --check` keep the same names and
 declarations. `status --json` exposes `target: {requested, connected}` and only
 reports a connection after `app.started`. Full-stack receipts record `target`
 with `source: flutter-daemon`; a missing, divergent or changed target prevents

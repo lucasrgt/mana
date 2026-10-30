@@ -111,7 +111,8 @@ A version 3 receipt also carries `changes`: the records the request changed, as
 a history reported them (`Mana.History` calls
 `Moments.ActionTrace.annotate_change/1`) — resource, id, action, `done` or
 `failed` and the field names, never values; up to 16 per request.
-`moments check` prints each one as `changed:`. A local origin alone does not
+`moments refresh --check` prints each one as `changed:`; a suite report keeps
+them in `actions.receipts[].changes`. A local origin alone does not
 imply tracing support: a local release may refuse these headers in CORS. The dev
 sandbox declares the flag; actors using production artifacts keep it off.
 

@@ -252,8 +252,8 @@ final class Catalog {
         '3. Change the Ash resource first; regenerate the client (`mana client generate`); then the Flutter half.',
       )
       ..writeln(
-        '4. Prove it with the feature\'s Moments (`framework/moments/moments check|run <name>`); read the AVP '
-        'verdict, never only the exit code.',
+        '4. Prove it with the feature\'s Moments (`framework/moments/moments suite <name> --headless`, or '
+        '`suite --affected --headless` for all the change touches); read the AVP verdict, never only the exit code.',
       )
       ..writeln(
         '5. `dart analyze` at the package root (Mana lints) and `framework/cli/mana doctor` before finishing.',

@@ -169,7 +169,10 @@ final class Lifecycle implements ServiceLifecycle {
       'android': ?android,
     };
     validateLifecycle(state, project);
-    if (File(file).existsSync()) throw MomentsError('Instance already running: $file');
+    if (File(file).existsSync())
+      throw MomentsError(
+        'The instance is already running ($file): moments open <name> switches Moments in it; moments down stops it.',
+      );
     final handle = openPrivate(file);
     try {
       handle.writeStringSync('${const JsonEncoder.withIndent('  ').convert(state)}\n');

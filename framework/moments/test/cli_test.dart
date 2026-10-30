@@ -419,7 +419,7 @@ void main() {
   test('restart is an explicit refresh option, never an implicit recipe replay', () {
     expect(parseArgs(['refresh', '--restart', '--check']).restart, isTrue);
     expect(
-      () => parseArgs(['run', 'inbox', '--restart']),
+      () => parseArgs(['profile', 'inbox', '--restart']),
       throwsA(predicate((e) => '$e'.contains('only applies to refresh'))),
     );
   });
