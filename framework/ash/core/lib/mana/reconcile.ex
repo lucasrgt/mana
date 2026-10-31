@@ -83,6 +83,12 @@ defmodule Mana.Reconcile do
     end
   end
 
+  @doc "The records among `records` that `rule` of `resource` is about and that diverge from it, with the detail."
+  def diverging(resource, name, records) do
+    rule = Enum.find(declared(resource), &(&1.name == name)) || raise(ArgumentError, "#{inspect(resource)} declares no reconcile rule #{inspect(name)}")
+    for record <- records, in_scope?(rule, record), detail = divergence(rule, record), do: %{id: record.id, detail: detail}
+  end
+
   defp divergence(rule, record) do
     {module, function} = rule.holds
 

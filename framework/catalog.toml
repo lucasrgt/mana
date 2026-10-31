@@ -274,6 +274,28 @@ replaces = ["a cron that scans a table for expired rows", "polling a screen for 
 docs = "framework/ash/core/lib/mana/entity.ex"
 
 [[capability]]
+id = "invariants"
+name = "Invariants (laws)"
+layer = "core"
+status = "available"
+summary = "What must hold for every record after every action, declared once on the resource: every create and update is refused with invariant.<name> (409) when it would break a law, whichever action or caller wrote it. Rules that become true over time (deadlines, answers from outside) stay in Mana.Reconcile."
+keywords = ["invariant", "law", "rule", "business rule", "must always", "never", "consistency", "integrity", "constraint", "guard", "refuse"]
+use = "Server: extensions: [Mana.Invariants]; invariants do invariant :refund_within_paid, \"a refund never exceeds what was paid\", holds: expr(refunded_cents <= amount_cents); invariant :paid_has_money, \"...\", scope: expr(status == :paid), holds: {MyApp.Laws, :charged?} end ({Mod, :fun}(record) answers true, false or {false, detail}). A non-atomic write is checked before it is written; an atomic write, or an expression reaching other rows (exists(...)), right after it inside the transaction. Mana.Invariants.violations(resource) finds records that got in around the actions (seeds, SQL); verdict/2 makes it an AVP verdict. A law another resource's write can break is declared on that resource too, or caught by Mana.Explore."
+replaces = ["the same state check repeated in every handler", "a rule only a nightly job notices", "trusting every new action to remember the rules"]
+docs = "framework/ash/core/lib/mana/invariants.ex"
+
+[[capability]]
+id = "explore"
+name = "Exploration (break the laws)"
+layer = "verification"
+status = "available"
+summary = "Random sequences of what people may do now (the verbs each record offers each actor) and what the world does (deadlines coming due, app events such as webhooks), with every law checked after every step and named Reconcile rules after the world settles; a breach is shrunk to the shortest sequence that still breaks it, and coverage shows which moves were never reached."
+keywords = ["explore", "fuzz", "property", "stateful", "random test", "sequence", "shrink", "counterexample", "break the rules", "model based", "what if"]
+use = "Test: Mana.Explore.run(resources: [Service, Booking, Charge], setup: fn -> %{actors: [host, traveler]} end, isolate: fn run -> {:error, {:ok, r}} = Repo.transaction(fn -> Repo.rollback({:ok, run.()}) end); r end, read: &records_of_this_run/2, input: &input/5, events: [{:stripe_pays, &targets/1, &pay/2}], eventual: [{Booking, :cancelled_releases_money}], runs: 40, steps: 14); assert result.breaches == [], Enum.map_join(result.breaches, \"\\n\", &Mana.Explore.describe/1); Mana.Explore.unreached(result) lists moves never done (give them input or a situation)."
+replaces = ["hand-written state machine models for property tests", "guessing which sequences of actions to test", "bugs found only by combining actions in an order no test tried"]
+docs = "framework/ash/core/lib/mana/explore.ex"
+
+[[capability]]
 id = "verbs"
 name = "Verbs"
 layer = "core"

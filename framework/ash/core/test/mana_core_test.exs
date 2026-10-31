@@ -647,10 +647,75 @@ defmodule ManaCoreTest.Slot do
   end
 end
 
+defmodule ManaCoreTest.Wallet do
+  use Ash.Resource, domain: ManaCoreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Invariants]
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:paid_cents, :integer, default: 0, public?: true)
+    attribute(:refunded_cents, :integer, default: 0, public?: true)
+    attribute(:status, :atom, constraints: [one_of: [:open, :closed]], default: :open, public?: true)
+    attribute(:closed_by, :string, public?: true)
+  end
+
+  actions do
+    defaults([:read, :destroy, create: [:paid_cents]])
+    update(:refund, accept: [:refunded_cents], require_atomic?: false)
+    update(:close, change: set_attribute(:status, :closed), require_atomic?: false)
+    update(:close_by, accept: [:closed_by], change: set_attribute(:status, :closed), require_atomic?: false)
+    update(:refund_atomically, accept: [:refunded_cents])
+  end
+
+  invariants do
+    invariant(:refund_within_paid, "a refund never exceeds what was paid", holds: expr(refunded_cents <= paid_cents))
+    invariant(:closed_says_who, "a closed wallet says who closed it", scope: expr(status == :closed), holds: {ManaCoreTest.Wallet, :closer?})
+  end
+
+  def closer?(wallet), do: if(wallet.closed_by in [nil, ""], do: {false, "closed by nobody"}, else: true)
+end
+
+# A void tab keeps its receipt: a planted defect for Mana.Explore to find.
+defmodule ManaCoreTest.Tab do
+  use Ash.Resource, domain: ManaCoreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.Invariants, Mana.Reconcile]
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:status, :atom, constraints: [one_of: [:open, :paid, :void]], default: :open, public?: true)
+    attribute(:receipt, :string, public?: true)
+  end
+
+  actions do
+    defaults([:read, :destroy, create: []])
+    update(:pay, require_atomic?: false, change: set_attribute(:status, :paid), change: set_attribute(:receipt, "r-1"))
+    update(:pay_without_receipt, require_atomic?: false, change: set_attribute(:status, :paid))
+    update(:void, require_atomic?: false, change: set_attribute(:status, :void))
+    update(:reopen, require_atomic?: false, change: set_attribute(:status, :open), change: set_attribute(:receipt, nil))
+  end
+
+  verbs do
+    verb(:pay, when: expr(status == :open))
+    verb(:pay_without_receipt, when: expr(status == :open))
+    verb(:void, when: expr(status in [:open, :paid]))
+    verb(:reopen, when: expr(status == :void))
+  end
+
+  invariants do
+    invariant(:paid_has_receipt, "a paid tab has a receipt", scope: expr(status == :paid), holds: expr(not is_nil(receipt)))
+  end
+
+  reconcile do
+    desired(:void_has_no_receipt, "a void tab keeps no receipt", scope: expr(status == :void), holds: {ManaCoreTest.Tab, :no_receipt?})
+  end
+
+  def no_receipt?(tab), do: if(is_nil(tab.receipt), do: true, else: {false, "void with receipt #{tab.receipt}"})
+end
+
 defmodule ManaCoreTest.Domain do
   use Ash.Domain, extensions: [Mana.Domain], validate_config_inclusion?: false
 
   resources do
+    resource(ManaCoreTest.Wallet)
+    resource(ManaCoreTest.Tab)
     resource(ManaCoreTest.Slot)
     resource(ManaCoreTest.Ping)
     resource(ManaCoreTest.Secret)
@@ -1839,6 +1904,70 @@ defmodule ManaCoreTest do
       on_exit(fn -> Application.delete_env(:mana_core, :adopter) end)
       assert [%{state: :converged, repaired: 1} = done] = Mana.Reconcile.observe(ManaCoreTest.Order, apply: true)
       assert %{"outcome" => "pass", "acceptanceScore" => 1.0} = Mana.Reconcile.verdict("orders", [done])
+    end
+  end
+
+  describe "invariants" do
+    test "an action that would break a law is refused before anything is written, whichever action it is" do
+      ref = make_ref()
+      :telemetry.attach("invariant-refused-#{inspect(ref)}", [:mana, :invariant, :refused], fn _, _, meta, pid -> send(pid, {:refused, meta}) end, self())
+      on_exit(fn -> :telemetry.detach("invariant-refused-#{inspect(ref)}") end)
+
+      wallet = Ash.create!(ManaCoreTest.Wallet, %{paid_cents: 100})
+      assert {:ok, %{refunded_cents: 100}} = Ash.update(wallet, %{refunded_cents: 100}, action: :refund)
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Mana.Error{code: "invariant.refund_within_paid", status: 409}]}} =
+               Ash.update(wallet, %{refunded_cents: 101}, action: :refund)
+
+      assert_received {:refused, %{invariant: :refund_within_paid, action: :refund}}
+      assert Ash.get!(ManaCoreTest.Wallet, wallet.id).refunded_cents == 100
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Mana.Error{code: "invariant.closed_says_who", meta: %{detail: "closed by nobody"}}]}} =
+               Ash.update(wallet, %{}, action: :close)
+
+      assert Ash.get!(ManaCoreTest.Wallet, wallet.id).status == :open
+      assert {:ok, %{status: :closed}} = Ash.update(wallet, %{closed_by: "support"}, action: :close_by)
+    end
+
+    # ETS has no transactions, so only the refusal is observable here; the
+    # rollback is the data layer's (the Hostpoint suite proves it on Postgres).
+    test "an atomic write is checked as written" do
+      wallet = Ash.create!(ManaCoreTest.Wallet, %{paid_cents: 100})
+      assert {:ok, %{refunded_cents: 100}} = Ash.update(wallet, %{refunded_cents: 100}, action: :refund_atomically)
+      assert {:error, error} = Ash.update(wallet, %{refunded_cents: 101}, action: :refund_atomically)
+      assert %Ash.Error.Invalid{errors: [%Mana.Error{code: "invariant.refund_within_paid"}]} = Ash.Error.to_error_class(error)
+    end
+
+    test "violations lists records written around the actions, and a verdict judges them" do
+      for wallet <- Ash.read!(ManaCoreTest.Wallet), do: Ash.destroy!(wallet)
+      Ash.create!(ManaCoreTest.Wallet, %{paid_cents: 50})
+      seeded = Ash.Seed.seed!(ManaCoreTest.Wallet, %{paid_cents: 10, refunded_cents: 20})
+      id = seeded.id
+
+      assert [%{invariant: :refund_within_paid, checked: 2, breaking: [%{id: ^id}]} = refund, %{invariant: :closed_says_who, breaking: []} = closed] =
+               Mana.Invariants.violations(ManaCoreTest.Wallet)
+
+      assert %{"outcome" => "fail", "acceptanceScore" => 0.5} = Mana.Invariants.verdict("wallets", [refund, closed])
+    end
+  end
+
+  describe "exploration" do
+    test "random verbs find a broken rule, shrink it to the steps that matter and count what the laws refused" do
+      setup = fn ->
+        for tab <- Ash.read!(ManaCoreTest.Tab), do: Ash.destroy!(tab)
+        Ash.create!(ManaCoreTest.Tab, %{})
+        %{actors: [%{id: Ash.UUID.generate()}]}
+      end
+
+      result = Mana.Explore.run(resources: [ManaCoreTest.Tab], setup: setup, eventual: [{ManaCoreTest.Tab, :void_has_no_receipt}], runs: 40, steps: 8, seed: 3)
+
+      assert [%{law: {:eventual, ManaCoreTest.Tab, :void_has_no_receipt}, steps: steps, detail: "Tab #1: void with receipt r-1"} = breach] = result.breaches
+      assert Enum.map(steps, & &1.move) == ["tab.pay", "tab.void"]
+      assert Mana.Explore.describe(breach) =~ "1. actor 0 does tab.pay on Tab #1"
+
+      assert %{done: 0, refused: refused} = result.coverage["tab.pay_without_receipt"]
+      assert refused > 0
+      assert "tab.pay_without_receipt" in Mana.Explore.unreached(result)
     end
   end
 
