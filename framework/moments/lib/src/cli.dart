@@ -626,6 +626,8 @@ Future<int> _suite(String project, CliOptions options) async {
       if (options.json) return;
       final reason = event['reason'];
       switch (event['phase']) {
+        case 'recover':
+          print('Suite: the last instance ended without moments down; recovering it, data kept…');
         case 'backend':
           print('Suite: no backend open; starting a temporary one (--backend-only)…');
         case 'affected':

@@ -13,10 +13,12 @@ import 'canonical.dart';
 import 'check.dart';
 import 'chromium.dart';
 import 'dart_sources.dart';
+import 'down.dart';
 import 'errors.dart';
 import 'headless_runtime.dart';
 import 'inspect.dart';
 import 'json.dart';
+import 'lifecycle.dart';
 import 'manifest.dart';
 import 'memory.dart';
 import 'paths.dart';
@@ -164,7 +166,19 @@ Future<Map<String, Object?>> runSuite({
   final instanceFile = p.join(directory, 'instance.json'), runtimeFile = p.join(directory, '.runtime.json');
   _TemporaryBackend? temporary;
   Timer? poller;
-  if (!File(p.join(directory, 'running.json')).existsSync() || !File(runtimeFile).existsSync()) {
+  final running = File(p.join(directory, 'running.json'));
+  if (running.existsSync() &&
+      !sameProcess(
+        (validateLifecycle(jsonDecode(running.readAsStringSync()), project)['supervisor'] as Map?)
+            ?.cast<String, Object?>(),
+      )) {
+    // A run that ended without moments down (a reboot, a closed terminal)
+    // leaves its record; recover it, keeping the data, instead of trusting a
+    // backend that is gone.
+    emit({'phase': 'recover'});
+    await downInstance(project);
+  }
+  if (!running.existsSync() || !File(runtimeFile).existsSync()) {
     emit({'phase': 'backend'});
     temporary = await _TemporaryBackend.start(project: project, directory: directory, name: adapter.initialMoment);
   }
