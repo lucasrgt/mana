@@ -258,10 +258,12 @@ final class Catalog {
       '2. `$cli features which <path>` before editing a file; `$cli features show <feature>` lists its files and '
           'Moments; `$cli note show <coordinate>` says why a rule exists and what was already tried.',
       '3. Change the Ash resource first; regenerate the client (`$cli client generate`); then the Flutter half.',
-      '4. Prove it with Moments: `$moments suite <name> --headless --project <app folder>`, or '
-          '`suite --affected --headless` for all the change touches; read the AVP verdict, never only the exit code.',
+      '4. Prove it with Moments: after a backend change, `$moments sync --project <app folder>`; then '
+          '`$moments suite <name> --headless --project <app folder>`, or `suite --affected --headless` for all the '
+          'change touches; read the AVP verdict, never only the exit code.',
       '5. Before saying done: `dart analyze` at the package root (Mana lints), `$cli sense --changed` and '
-          '`$cli doctor` pass; record the decision with `$cli note add`.',
+          '`$cli doctor` pass. A failing or unavailable Moment is not done: fix it, or say it is still open. '
+          'Record the decision with `$cli note add`.',
     ];
   }
 

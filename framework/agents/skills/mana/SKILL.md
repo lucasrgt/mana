@@ -14,8 +14,8 @@ Mana is not a set of loose libraries. Every piece below is part of one system: t
 1. `framework/cli/mana capabilities <topic>`: does Mana already do this? Use it.
 2. `framework/cli/mana features which <path>` before editing a file; `framework/cli/mana features show <feature>` lists its files and Moments; `framework/cli/mana note show <coordinate>` says why a rule exists and what was already tried.
 3. Change the Ash resource first; regenerate the client (`framework/cli/mana client generate`); then the Flutter half.
-4. Prove it with Moments: `framework/moments/moments suite <name> --headless --project <app folder>`, or `suite --affected --headless` for all the change touches; read the AVP verdict, never only the exit code.
-5. Before saying done: `dart analyze` at the package root (Mana lints), `framework/cli/mana sense --changed` and `framework/cli/mana doctor` pass; record the decision with `framework/cli/mana note add`.
+4. Prove it with Moments: after a backend change, `framework/moments/moments sync --project <app folder>`; then `framework/moments/moments suite <name> --headless --project <app folder>`, or `suite --affected --headless` for all the change touches; read the AVP verdict, never only the exit code.
+5. Before saying done: `dart analyze` at the package root (Mana lints), `framework/cli/mana sense --changed` and `framework/cli/mana doctor` pass. A failing or unavailable Moment is not done: fix it, or say it is still open. Record the decision with `framework/cli/mana note add`.
 
 ## Coordinates — shared addresses
 
