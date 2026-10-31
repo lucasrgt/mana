@@ -59,6 +59,51 @@ void main() {
     },
   );
 
+  test(
+    'setup keeps the catalog core in AGENTS.md and CLAUDE.md importing it; doctor fails on drift',
+    () {
+      final (:root, config: _) = fixture();
+      final agentsFile = File(p.join(root, 'AGENTS.md'));
+      final claudeFile = File(p.join(root, 'CLAUDE.md'));
+      expect(invoke(root, ['setup']).exitCode, 0);
+      expect(agentsFile.readAsStringSync(), startsWith('<!-- mana:core'));
+      expect(claudeFile.readAsStringSync(), '@AGENTS.md\n');
+
+      agentsFile.writeAsStringSync('# Project\n\nOur own notes.\n');
+      claudeFile.writeAsStringSync('Project rules.\n');
+      expect(invoke(root, ['setup']).exitCode, 0);
+      final agents = agentsFile.readAsStringSync();
+      expect(
+        agents,
+        startsWith('# Project\n\nOur own notes.\n\n<!-- mana:core'),
+      );
+      expect(agents, contains('mana/framework/cli/mana capabilities <topic>'));
+      expect(agents, contains('→ `pagination`'));
+      expect(claudeFile.readAsStringSync(), '@AGENTS.md\n\nProject rules.\n');
+      expect(invoke(root, ['setup']).exitCode, 0);
+      expect(agentsFile.readAsStringSync(), agents);
+      expect(invoke(root, ['doctor']).exitCode, 0);
+
+      agentsFile.writeAsStringSync(agents.replaceFirst('Use it.', 'Maybe.'));
+      expect(invoke(root, ['doctor']).stderr, contains('out of date'));
+      expect(invoke(root, ['setup']).exitCode, 0);
+      expect(agentsFile.readAsStringSync(), agents);
+      agentsFile.writeAsStringSync(
+        agents.replaceFirst('<!-- /mana:core -->', ''),
+      );
+      expect(invoke(root, ['setup']).stderr, contains('broken mana:core'));
+      agentsFile.writeAsStringSync(agents);
+
+      claudeFile.writeAsStringSync('Project rules.\n');
+      expect(
+        invoke(root, ['doctor']).stderr,
+        contains('does not import AGENTS.md'),
+      );
+      agentsFile.writeAsStringSync('${'x' * 33 * 1024}\n');
+      expect(invoke(root, ['setup']).stderr, contains('Codex reads only'));
+    },
+  );
+
   test('bad checksum and unknown fields fail before dependency execution', () {
     final (:root, :config) = fixture();
     File(p.join(root, 'source')).writeAsStringSync('bad');
@@ -252,6 +297,7 @@ void main() {
       'site': {'frontend': 'apps/web'},
     };
     save(root, config);
+    expect(invoke(root, ['setup', '--skip-tasks']).exitCode, 0);
     final result = invoke(root, ['doctor']);
     expect(result.exitCode, 0, reason: '${result.stderr}');
     expect(result.stdout, contains('web: backend + apps/web'));

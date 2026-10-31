@@ -231,13 +231,13 @@ docs = "framework/ash/runtime/README.md"
 
 [[capability]]
 id = "agents"
-name = "Agent launcher and setup"
+name = "Setup and agent guidance"
 layer = "core"
 status = "available"
-summary = "mana.toml declares products, setup tasks and agent skills; mana setup, doctor and agent run them."
-keywords = ["setup", "doctor", "agent", "skill", "claude", "codex"]
-use = "framework/cli/mana setup | doctor | agent claude|codex."
-replaces = ["per-developer agent configuration", "README setup steps"]
+summary = "mana.toml declares products, setup tasks and agent skills. mana setup runs the tasks, links each agent's skills where it looks for them (.claude/skills, .agents/skills) and keeps this catalog's core in AGENTS.md, which CLAUDE.md imports, so every Claude and Codex session starts with it; mana doctor fails when any of that drifted."
+keywords = ["setup", "doctor", "agent", "skill", "claude", "codex", "AGENTS.md", "CLAUDE.md"]
+use = "framework/cli/mana setup (or setup --skip-tasks after a framework update), then a plain claude or codex in the project. Never edit the mana:core block in AGENTS.md: change the catalog and run setup; the project's own notes go outside it."
+replaces = ["per-developer agent configuration", "README setup steps", "copying framework rules into AGENTS.md by hand"]
 docs = "framework/cli/README.md"
 
 [[capability]]

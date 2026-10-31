@@ -19,6 +19,85 @@ Map<String, Object?> _agent(Config config, String name) =>
 List<String> _strings(Object? value) =>
     (value as List?)?.cast<String>() ?? const [];
 
+/// Codex reads this much of AGENTS.md by default (`project_doc_max_bytes`).
+const codexDocLimit = 32 * 1024;
+
+/// The framework the project builds on, as a path from its root: this
+/// checkout when it lies inside the project, else the `mana/` submodule.
+String projectFramework(String root) {
+  String? running;
+  try {
+    running = frameworkRoot();
+  } on ManaFailure {
+    running = null;
+  }
+  if (running != null && p.isWithin(root, running)) {
+    return p.relative(running, from: root);
+  }
+  if (File(p.join(root, 'mana/framework/catalog.toml')).existsSync()) {
+    return 'mana/framework';
+  }
+  throw const ManaFailure(
+    'No Mana framework inside the project (expected mana/framework)',
+  );
+}
+
+/// Keeps the catalog's core in AGENTS.md (between the mana:core markers; the
+/// rest of the file is the project's) and, for Claude, CLAUDE.md importing
+/// it, so every Claude and Codex session starts with the loop and the
+/// capabilities before any code. [check] reports drift instead of writing.
+void syncGuidance(String root, List<String> names, {bool check = false}) {
+  if (names.isEmpty) return;
+  final framework = projectFramework(root);
+  final block = Catalog.load(p.join(root, framework)).core(framework);
+  final agents = File(projectPath(root, 'AGENTS.md'));
+  final text = agents.existsSync() ? agents.readAsStringSync() : '';
+  final begin = text.indexOf(Catalog.coreBegin);
+  final end = text.indexOf(Catalog.coreEnd);
+  if ((begin < 0) != (end < 0) || end < begin) {
+    throw const ManaFailure(
+      'AGENTS.md has a broken mana:core block; remove what is left of it and run mana setup',
+    );
+  }
+  final updated = begin >= 0
+      ? text.replaceRange(begin, end + Catalog.coreEnd.length, block)
+      : text.trim().isEmpty
+      ? '$block\n'
+      : '${text.trimRight()}\n\n$block\n';
+  final size = utf8.encode(updated).length;
+  if (size > codexDocLimit) {
+    throw ManaFailure(
+      'AGENTS.md would be ${(size / 1024).toStringAsFixed(1)} KiB; Codex reads only the first '
+      '${codexDocLimit ~/ 1024} KiB. Move project detail into docs/ or a skill',
+    );
+  }
+  final claude = File(projectPath(root, 'CLAUDE.md'));
+  final instructions = claude.existsSync() ? claude.readAsStringSync() : null;
+  final imports =
+      instructions != null &&
+      RegExp(r'^@AGENTS\.md\s*$', multiLine: true).hasMatch(instructions);
+  final importMissing = names.contains('claude') && !imports;
+  if (check) {
+    if (updated != text) {
+      throw const ManaFailure(
+        'The Mana block in AGENTS.md is missing or out of date with the catalog; run mana setup --skip-tasks',
+      );
+    }
+    if (importMissing) {
+      throw const ManaFailure(
+        'CLAUDE.md does not import AGENTS.md, so Claude never reads the Mana block; run mana setup --skip-tasks',
+      );
+    }
+    return;
+  }
+  if (updated != text) agents.writeAsStringSync(updated);
+  if (importMissing) {
+    claude.writeAsStringSync(
+      instructions == null ? '@AGENTS.md\n' : '@AGENTS.md\n\n$instructions',
+    );
+  }
+}
+
 void inspectAgents(String root, Config config, List<String> names) {
   for (final name in names) {
     final agent = _agent(config, name);
@@ -73,6 +152,7 @@ Future<void> setup(
     }
   }
   if (!runtimeOnly) {
+    syncGuidance(root, names);
     for (final name in names) {
       syncSkills(
         root,
@@ -96,6 +176,7 @@ Future<void> doctor(String root, Config config, List<String> names) async {
   }
   inspectAgents(root, config, names);
   artifactPlan(root, config);
+  syncGuidance(root, names, check: true);
   String? framework;
   try {
     framework = frameworkRoot();

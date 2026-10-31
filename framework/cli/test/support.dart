@@ -74,6 +74,11 @@ Fixture fixture() {
   File(p.join(root, 'agents/skills/local/SKILL.md')).writeAsStringSync(
     '---\nname: local\ndescription: Project fixture\n---\nUse this project only.\n',
   );
+  // The project's own framework, which the AGENTS.md block is generated from.
+  Directory(p.join(root, 'mana/framework')).createSync(recursive: true);
+  File(
+    p.join(Directory.current.path, '../catalog.toml'),
+  ).copySync(p.join(root, 'mana/framework/catalog.toml'));
   final agent = {
     'command': [agentBinary],
     'skills': ['agents/skills/local'],

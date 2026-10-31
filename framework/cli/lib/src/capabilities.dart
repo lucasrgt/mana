@@ -216,6 +216,55 @@ final class Catalog {
   ].join('\n');
 
   /// The agent skill, generated so it cannot drift from the catalog.
+  static const coreBegin = '<!-- mana:core', coreEnd = '<!-- /mana:core -->';
+
+  /// The part of the catalog every agent session loads, kept by `mana setup`
+  /// in the project's AGENTS.md: the loop, and what each capability replaces,
+  /// so a hand-rolled version is recognised before it is written.
+  /// [framework] is the framework's path from the project root.
+  String core(String framework) {
+    final out = StringBuffer()
+      ..writeln(
+        '$coreBegin — generated from $framework/catalog.toml by `mana setup`; edit the catalog, never this block -->',
+      )
+      ..writeln('## Mana: read before any change')
+      ..writeln()
+      ..writeln(
+        'This project is built on Mana: the Ash resources declare intent once, and Mana derives the API, the Dart '
+        'client, the Flutter halves, the Moments and the verification. A hand-written version of a piece Mana has '
+        'is a defect even when it works. The whole catalog is the `mana` skill and '
+        '`$framework/cli/mana capabilities <topic>`.',
+      )
+      ..writeln()
+      ..writeAll(_loop(framework), '\n')
+      ..writeln()
+      ..writeln()
+      ..writeln(
+        'Before writing any of these by hand, open the capability (`$framework/cli/mana capabilities <id>`):',
+      )
+      ..writeln();
+    for (final c in capabilities) {
+      if (c.status != 'available' || c.replaces.isEmpty) continue;
+      out.writeln('- ${c.replaces.join('; ')} → `${c.id}`');
+    }
+    out.write(coreEnd);
+    return out.toString();
+  }
+
+  static List<String> _loop(String framework) {
+    final cli = '$framework/cli/mana', moments = '$framework/moments/moments';
+    return [
+      '1. `$cli capabilities <topic>`: does Mana already do this? Use it.',
+      '2. `$cli features which <path>` before editing a file; `$cli features show <feature>` lists its files and '
+          'Moments; `$cli note show <coordinate>` says why a rule exists and what was already tried.',
+      '3. Change the Ash resource first; regenerate the client (`$cli client generate`); then the Flutter half.',
+      '4. Prove it with Moments: `$moments suite <name> --headless --project <app folder>`, or '
+          '`suite --affected --headless` for all the change touches; read the AVP verdict, never only the exit code.',
+      '5. Before saying done: `dart analyze` at the package root (Mana lints), `$cli sense --changed` and '
+          '`$cli doctor` pass; record the decision with `$cli note add`.',
+    ];
+  }
+
   String skill() {
     final out = StringBuffer()
       ..writeln('---')
@@ -241,23 +290,8 @@ final class Catalog {
       ..writeln()
       ..writeln('## Before you write code')
       ..writeln()
-      ..writeln(
-        '1. `framework/cli/mana capabilities <topic>` — does Mana already do this? Use it.',
-      )
-      ..writeln(
-        '2. `framework/cli/mana features which <path>` — which feature owns the file; '
-        '`mana features show <feature>` lists its files and Moments.',
-      )
-      ..writeln(
-        '3. Change the Ash resource first; regenerate the client (`mana client generate`); then the Flutter half.',
-      )
-      ..writeln(
-        '4. Prove it with the feature\'s Moments (`framework/moments/moments suite <name> --headless`, or '
-        '`suite --affected --headless` for all the change touches); read the AVP verdict, never only the exit code.',
-      )
-      ..writeln(
-        '5. `dart analyze` at the package root (Mana lints) and `framework/cli/mana doctor` before finishing.',
-      )
+      ..writeAll(_loop('framework'), '\n')
+      ..writeln()
       ..writeln();
     for (final layer in _layers) {
       final items = capabilities

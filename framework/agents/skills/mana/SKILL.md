@@ -11,11 +11,11 @@ Mana is not a set of loose libraries. Every piece below is part of one system: t
 
 ## Before you write code
 
-1. `framework/cli/mana capabilities <topic>` — does Mana already do this? Use it.
-2. `framework/cli/mana features which <path>` — which feature owns the file; `mana features show <feature>` lists its files and Moments.
-3. Change the Ash resource first; regenerate the client (`mana client generate`); then the Flutter half.
-4. Prove it with the feature's Moments (`framework/moments/moments suite <name> --headless`, or `suite --affected --headless` for all the change touches); read the AVP verdict, never only the exit code.
-5. `dart analyze` at the package root (Mana lints) and `framework/cli/mana doctor` before finishing.
+1. `framework/cli/mana capabilities <topic>`: does Mana already do this? Use it.
+2. `framework/cli/mana features which <path>` before editing a file; `framework/cli/mana features show <feature>` lists its files and Moments; `framework/cli/mana note show <coordinate>` says why a rule exists and what was already tried.
+3. Change the Ash resource first; regenerate the client (`framework/cli/mana client generate`); then the Flutter half.
+4. Prove it with Moments: `framework/moments/moments suite <name> --headless --project <app folder>`, or `suite --affected --headless` for all the change touches; read the AVP verdict, never only the exit code.
+5. Before saying done: `dart analyze` at the package root (Mana lints), `framework/cli/mana sense --changed` and `framework/cli/mana doctor` pass; record the decision with `framework/cli/mana note add`.
 
 ## Coordinates — shared addresses
 
@@ -78,12 +78,12 @@ Explicit release configuration, edge, metrics and readiness for Ash/Phoenix.
 - **Instead of:** ad-hoc release config
 - **Docs:** `framework/ash/runtime/README.md`
 
-### Agent launcher and setup (`agents`)
+### Setup and agent guidance (`agents`)
 
-mana.toml declares products, setup tasks and agent skills; mana setup, doctor and agent run them.
+mana.toml declares products, setup tasks and agent skills. mana setup runs the tasks, links each agent's skills where it looks for them (.claude/skills, .agents/skills) and keeps this catalog's core in AGENTS.md, which CLAUDE.md imports, so every Claude and Codex session starts with it; mana doctor fails when any of that drifted.
 
-- **Use:** framework/cli/mana setup | doctor | agent claude|codex.
-- **Instead of:** per-developer agent configuration; README setup steps
+- **Use:** framework/cli/mana setup (or setup --skip-tasks after a framework update), then a plain claude or codex in the project. Never edit the mana:core block in AGENTS.md: change the catalog and run setup; the project's own notes go outside it.
+- **Instead of:** per-developer agent configuration; README setup steps; copying framework rules into AGENTS.md by hand
 - **Docs:** `framework/cli/README.md`
 
 ### Live entities and deadlines (`entities`)
