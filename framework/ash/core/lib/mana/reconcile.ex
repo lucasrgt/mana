@@ -159,9 +159,10 @@ defmodule Mana.Reconcile do
     end
   end
 
-  defp duration(seconds) when seconds >= 86_400 and rem(seconds, 86_400) == 0, do: "#{div(seconds, 86_400)}d"
-  defp duration(seconds) when seconds >= 3600 and rem(seconds, 3600) == 0, do: "#{div(seconds, 3600)}h"
-  defp duration(seconds) when seconds >= 60 and rem(seconds, 60) == 0, do: "#{div(seconds, 60)}m"
+  # In its largest whole unit: "20d", not "1728003s".
+  defp duration(seconds) when seconds >= 86_400, do: "#{div(seconds, 86_400)}d"
+  defp duration(seconds) when seconds >= 3600, do: "#{div(seconds, 3600)}h"
+  defp duration(seconds) when seconds >= 60, do: "#{div(seconds, 60)}m"
   defp duration(seconds), do: "#{seconds}s"
 
   defp repair(rule, record) do
