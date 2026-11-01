@@ -32,8 +32,8 @@ The shared feature:<name> address: which files, verbs, Moments and sensors belon
 
 Named, reproducible situations of an app (moment:<app>/<name>): open one in seconds with its data and screen, prove it and measure it instead of navigating by hand.
 
-- **Use:** Prove: framework/moments/moments suite <name> --headless --project <app folder> (one or more), or suite --affected --headless (what the change touches). Look before editing a screen: with its Moment open, moments inspect --json gives the screen's files, its Ash source and its criteria. Warm loop: moments up <name> once (it keeps running), moments open <other> to switch (up refuses while one runs), moments refresh --check after saving Dart, moments down at the end. Slow journey: moments profile <name> --json (requests, Ash actions and queries). Declare Moments in Ash (backend/lib/<app>/moments) and run moments sync after editing them.
-- **Instead of:** one-off UI test suites; manual navigation to reach a state; screenshots as proof
+- **Use:** Prove: framework/moments/moments suite <name> --headless --project <app folder> (one or more), or suite --affected --headless (what the change touches). Look before editing a screen: with its Moment open, moments inspect --json gives the screen's files, its Ash source and its criteria. Warm loop: moments up <name> once (it keeps running), moments open <other> to switch (up refuses while one runs), moments refresh --check after saving Dart, moments down at the end. Slow journey: moments profile <name> --json (requests, Ash actions and queries). Declare Moments in Ash (backend/lib/<app>/moments) and run moments sync after editing them. Tap a control by its verb, not a hand-placed key: step(:pay, verb: {:booking, :pay}, on: "booking.id") (VerbGate(recordId:) marks it verb:booking.pay:<id>; the export refuses a verb the resource does not declare), and check what the screen offers with check(:can_pay, kind: :offered | :not_offered, verb: {:booking, :pay}). A recipe declared recipe :x, "...", data_scope: true prepares in a database of its own (Mana.Snapshot; Moments.Recipes repo: MyApp.Repo, config :mana_core, data_scopes: true, plug Mana.Snapshot.Plug, repo: MyApp.Repo before the API router), so parallel suite workers never share rows.
+- **Instead of:** one-off UI test suites; manual navigation to reach a state; screenshots as proof; ValueKey strings placed by hand for gestures; unique fixtures to keep parallel workers apart
 - **Docs:** `framework/moments/README.md`
 
 ### Reasoning memory (`memory`)
@@ -59,6 +59,14 @@ Switch between prepared Moments by rebuilding the app's tree for the new Moment 
 - **Use:** In main(), runApp(MomentRestartable(build: () async { final launch = await prepare...(); return App(...); })) so everything that depends on the Moment (launch, persona session, start route) runs inside build. Keep app state in the widget tree; globals outside build survive a remount.
 - **Instead of:** a hot restart per Moment switch in restartOnOpen adapters
 - **Docs:** `framework/flutter/live_ui/lib/src/moment_restartable.dart`
+
+### Program graph (`graph`)
+
+One graph derived from the declarations — resources, verbs, views, flow steps, rules, deadlines, knobs, features — plus the Moments that name each verb and the Dart screens that refer to it; canned questions answer from it as the code stands.
+
+- **Use:** mana graph verbs-without-moment | dead-verbs | proves booking.pay | knob coupons_enabled | verb booking.pay [--json] (the CLI adds the screens' XVerbs.y references); in the backend mix mana.graph [...] [--manifest path] [--screens file]. In code: Mana.Graph.build(domains, manifests: [...], knobs: MyApp.Knobs) |> Mana.Graph.query(:dead_verbs).
+- **Instead of:** grepping for a verb's callers; guessing whether a verb is still used; a hand-kept coverage list
+- **Docs:** `framework/ash/core/lib/mana/graph.ex`
 
 ## Core
 
@@ -90,7 +98,7 @@ mana.toml declares products, setup tasks and agent skills. mana setup runs the t
 
 A resource's changes are announced on entity:<type>:<id> and entity:<type>:for:<user> (only the id; clients read again through the API), and its deadlines are durable Oban jobs scheduled by the change that enters the watched state, run only if the state still holds.
 
-- **Use:** Server: extensions: [Mana.Entity]; entity do broadcast MyAppWeb.Endpoint; audience [:owner_id]; deadline :expire, action: :expire, when: expr(status == :open), after: {30, :minute} end; mount once channel "entity:*", Mana.Entity.Channel, assigns: %{otp_app: :my_app} (serves every live resource). A repair a deadline missed belongs in Mana.Reconcile with apply. Flutter (mana_live): once at the app root ManaLiveScope(changes: PhoenixEntityChanges.api(baseUrl, token: session.accessToken), me: <signed-in user id listenable>, child: ...) — put it in the app's account scope; then the widget that shows the records declares what it follows — LiveEntity.of(MunicipalityEntity.entity, onChange: viewModel.load, child: screen) follows the signed-in user's records (the generated XEntity.entity), LiveEntity.of(entity, id: recordId, ...) one record, LiveEntity.view(BookingViews.reservationCard, onChange: ..., child: ...) a view declared live: true. It subscribes while mounted and cancels when it leaves; widgets on the same topic share one channel; after a dropped connection comes back every followed screen reads again once (EntityTopics.missed), so no timer polls. No subscription code in view models. A resource may declare watchers: {Mod, :fun}(user) for who follows every record of it on entity:<type>:all (an operator queue); Flutter LiveEntity.of(XEntity.entity, all: true). Deadline conditions are asked of the stored row, so they may use relationships (exists(charges, ...)). Moments: Mana.Entity.observe(record) (topics, deadlines that hold) and fake(resource, id, deadline) (a deadline comes due now).
+- **Use:** Server: extensions: [Mana.Entity]; entity do broadcast MyAppWeb.Endpoint; audience [:owner_id]; deadline :expire, action: :expire, when: expr(status == :open), after: {30, :minute} end; mount once channel "entity:*", Mana.Entity.Channel, assigns: %{otp_app: :my_app} (serves every live resource). A repair a deadline missed belongs in Mana.Reconcile with apply; a rule that a record must leave a state in time is desired :x, "...", scope: expr(status == :accepted), within: {15, :minute} (since: :updated_at by default; holds: optional with within), which exploration also checks on a moved clock. Flutter (mana_live): once at the app root ManaLiveScope(changes: PhoenixEntityChanges.api(baseUrl, token: session.accessToken), me: <signed-in user id listenable>, child: ...) — put it in the app's account scope; then the widget that shows the records declares what it follows — LiveEntity.of(MunicipalityEntity.entity, onChange: viewModel.load, child: screen) follows the signed-in user's records (the generated XEntity.entity), LiveEntity.of(entity, id: recordId, ...) one record, LiveEntity.view(BookingViews.reservationCard, onChange: ..., child: ...) a view declared live: true. It subscribes while mounted and cancels when it leaves; widgets on the same topic share one channel; after a dropped connection comes back every followed screen reads again once (EntityTopics.missed), so no timer polls. No subscription code in view models. A resource may declare watchers: {Mod, :fun}(user) for who follows every record of it on entity:<type>:all (an operator queue); Flutter LiveEntity.of(XEntity.entity, all: true). Deadline conditions are asked of the stored row, so they may use relationships (exists(charges, ...)). Moments: Mana.Entity.observe(record) (topics, deadlines that hold) and fake(resource, id, deadline) (a deadline comes due now).
 - **Instead of:** a cron that scans a table for expired rows; polling a screen for changes; ad-hoc PubSub broadcasts per action; subscribe/unsubscribe code in view models
 - **Docs:** `framework/ash/core/lib/mana/entity.ex`
 
@@ -141,6 +149,14 @@ mana new writes a whole project around Mana (Ash backend, Flutter app, generated
 - **Use:** mana new <folder> [--mana-ref <release>] then moments suite --headless --project app; MANA_MOMENTS_INSTANCE=app/moments/.backend/instance.json mana lab prepare|serve|test|mix. Replace the starter Notes domain with yours and keep the wiring (OpenApi module, recipes, MomentHost/MomentViewBinding in the app).
 - **Instead of:** copying an existing app to start a new one; hand-wiring Moments, contracts and the client in a fresh project; per-project scripts that point a backend at the sandbox database
 - **Docs:** `framework/cli/README.md`
+
+### Undo from history (`undo`)
+
+The newest change a person made to a record is taken back through its verb's declared inverse, while the record offers it; the undo records via: undo:<entry id> and is not itself undoable.
+
+- **Use:** Server: Mana.Undo.last(record, actor, within: {5, :minute}) / Mana.Undo.undo(record, actor). Flutter (mana_command): HistoryView(verbs: XVerbs.all, offered: record.verbs, me: userId, undo: (inverse) => ...) offers it on the newest entry (undoable/4 applies the same rules); VerbGate(showUndo:) offers it right after the verb ran.
+- **Instead of:** hand-written undo endpoints; undo that ignores who made the change
+- **Docs:** `framework/ash/core/lib/mana/undo.ex`
 
 ## Primitives
 
@@ -378,4 +394,36 @@ Whether agents actually use the framework: a task given with no hints (evals/<na
 - **Use:** framework/cli/mana eval list; mana eval run <name> [--agent claude|codex] [--keep] (minutes; spends model tokens). Declare a new one as evals/<name>/task.md + checks.toml ([[check]] kind = "diff" with files/pattern/absent, or kind = "command" with run/cwd). Receipts in .mana/evals/.
 - **Instead of:** hoping agents find the primitives; judging agent work by reading it once
 - **Docs:** `framework/cli/lib/src/evals.dart`
+
+### State-space exploration (`explore`)
+
+The app walks its own reachable states from what it declares: actors perform offered verbs, start collection verbs, probe verbs not offered and move the clock; after every move it checks that offers are honest, refusals enforced, idempotent verbs idempotent, inverses restoring, reconcile rules holding (timed ones on the moved clock), flows monotonic and not deadlocked, and history replaying. A violation is shrunk to its shortest moves and can be saved as a Moment trace.
+
+- **Use:** config :mana_core, :explore, MyApp.Explore (a module whose options/0 answers setup: fn -> %{host: host, traveler: traveler} end, reset: Mana.Explore.snapshot_reset(MyApp.Repo) on Postgres, resources:, skip_rules:, generators: %{{MyApp.Booking, :request} => %{nights: 2}}); mix mana.explore [--runs 50 --depth 10 --seed 1 --resource MyApp.Booking --save moments/explore] exits 1 on a violation. In code: Mana.Explore.run(domains, opts) |> Mana.Explore.format(); Mana.Explore.verdict/2 for AVP; a saved trace rebuilds in a Moment recipe with Mana.Explore.replay_file(path, domains, actors). External and money verbs are never performed (external: :run opts in). Set config :ash, disable_async?: true where it runs on Postgres.
+- **Instead of:** hand-written property tests per resource; guessing which verb sequences break a rule; clicking through states to find a race with a deadline
+- **Docs:** `framework/ash/core/lib/mana/explore.ex`
+
+### Affordance lock (`affordances`)
+
+affordances.json, committed with the backend, says which verbs each actor is offered in each record shape (its atom, boolean and enum fields), from a seeded exploration; a pull request that changes what people may do shows it as a diff, and the check reads it as sentences.
+
+- **Use:** mix mana.affordances writes backend/affordances.json (uses the explore module's options; seed 1 unless configured); mix mana.affordances --check prints what changed ("`cancel` is no longer offered to host on booking when status=paid") and exits 1. Commit the file; run --check in CI or as a sensor.
+- **Instead of:** reading a diff of when: expressions to guess who lost a button; manual permission matrices
+- **Docs:** `framework/ash/core/lib/mana/explore/lock.ex`
+
+### Snapshots and data scopes (`snapshots`)
+
+On Postgres a situation's data is a database cloned from a template: a migrated base built once per migration set, scopes (a database and pool of their own, used through a dynamic repo), snapshots (a frozen scope by name), forks and a diff by row counts and history entries. Development and tests only.
+
+- **Use:** Mana.Snapshot.open(MyApp.Repo) / with_scope(repo, id, fun) / capture(repo, id, "booking-paid") / fork(repo, "booking-paid", 3) / diff(repo, a, b, logs: [MyApp.HistoryEntry]) / drop(repo, id). Requests carrying x-mana-data-scope run on their scope with plug Mana.Snapshot.Plug, repo: MyApp.Repo and config :mana_core, data_scopes: true (live_ui sends the Moment's dataScope). Oban queues and Ash async loads do not follow a scope (config :ash, disable_async?: true).
+- **Instead of:** truncating tables between runs; unique fixture names to keep runs apart; one shared development database for every worker
+- **Docs:** `framework/ash/core/lib/mana/snapshot.ex`
+
+### Production replay (`replay`)
+
+An exported history log replays against the code compiled now, each subject inside a transaction that is rolled back, and comes out per feature as same, diverged (with the fields), refused (external, redacted) or failed — real traffic as a regression check of a change.
+
+- **Use:** mix mana.history.export --since <iso> --out history.jsonl on the source, then against a database holding what it refers to: mix mana.replay --log history.jsonl [--actor-resource MyApp.Accounts.User] [--skip-external] [--json] (exits 1 on a divergence). In code: Mana.Replay.read(path) |> Mana.Replay.run(domains: ..., actor: fn id -> ... end).
+- **Instead of:** hoping a refactor keeps old behaviour; shadow traffic infrastructure
+- **Docs:** `framework/ash/core/lib/mana/replay.ex`
 

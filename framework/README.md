@@ -13,7 +13,7 @@ limits and the Moments that prove each journey. The contract for agents is in
 | [`moments/`](moments/README.md) | the Moments runner: open, sync and run named situations in a browser, `flutter_tester` or Android |
 | [`contracts/`](contracts/README.md) | Ash → OpenAPI → Dart client, with `oasdiff` blocking breaking changes |
 | **Elixir** (`ash/`) | |
-| [`ash/core`](ash/core/README.md) | Spark extensions: privacy, retention, limits, errors, enums, search, uploads, storage, webhooks, verbs, views, history and more |
+| [`ash/core`](ash/core/README.md) | Spark extensions: privacy, retention, limits, errors, enums, search, uploads, storage, webhooks, verbs, views, history, exploration, snapshots, the program graph, replay and undo |
 | [`ash/moments`](ash/moments/README.md) | the `moment` DSL and backend recipes |
 | [`ash/session`](ash/session/README.md) | short sessions and rotating refresh for Flutter clients |
 | [`ash/runtime`](ash/runtime/README.md) | release configuration, edge, metrics and readiness |
