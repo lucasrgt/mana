@@ -1,6 +1,6 @@
 defmodule Mana.Reconcile.Desired do
   @moduledoc false
-  defstruct [:name, :describe, :scope, :holds, :apply, :__identifier__, :__spark_metadata__]
+  defstruct [:name, :describe, :scope, :holds, :apply, :within, :since, :__identifier__, :__spark_metadata__]
 end
 
 defmodule Mana.Reconcile do
@@ -26,6 +26,20 @@ defmodule Mana.Reconcile do
   verdict: converged passes, diverging fails with evidence.
   `Mana.Reconcile.Worker` runs `observe` on a schedule and emits
   `[:mana, :reconcile, :diverged]` telemetry.
+
+  ## Rules with time
+
+      desired :accepted_resolves, "an accepted booking is paid or expires within 15 minutes",
+        scope: expr(status == :accepted),
+        within: {15, :minute}
+
+  A record diverges only once it has been in scope longer than `within`,
+  measured from `since` (a timestamp field; `updated_at`, else
+  `inserted_at`). Without `holds`, staying in scope that long is the
+  divergence; with it, `holds` gets that long to become true.
+  `observe(resource, now: datetime)` measures against another clock (or
+  `now: fn record -> datetime end`, a clock per record, which is how
+  `Mana.Explore` moves time).
   """
 
   @desired %Spark.Dsl.Entity{
@@ -37,14 +51,16 @@ defmodule Mana.Reconcile do
       name: [type: :atom, required: true],
       describe: [type: :string, required: true, doc: "The rule, as a person would say it."],
       scope: [type: :any, required: true, doc: "An expression selecting the records the rule is about."],
-      holds: [type: {:tuple, [:atom, :atom]}, required: true, doc: "`{Module, :fun}`: true, false or `{false, detail}` for a record."],
+      holds: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :fun}`: true, false or `{false, detail}` for a record; may be left out when `within` is given."],
+      within: [type: {:tuple, [:pos_integer, {:in, [:second, :minute, :hour, :day]}]}, doc: "How long a record may stay in scope (or fail `holds`): `{15, :minute}`."],
+      since: [type: :atom, doc: "The timestamp field `within` counts from."],
       apply: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :fun}` that brings a diverging record back; observe-only without it."]
     ]
   }
 
   @reconcile %Spark.Dsl.Section{name: :reconcile, imports: [Ash.Expr], entities: [@desired]}
 
-  use Spark.Dsl.Extension, sections: [@reconcile]
+  use Spark.Dsl.Extension, sections: [@reconcile], transformers: [Mana.Reconcile.Verify]
 
   def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:reconcile])
 
@@ -52,7 +68,8 @@ defmodule Mana.Reconcile do
   def observe(resource, opts \\ []) do
     for rule <- declared(resource) do
       records = resource |> Ash.Query.do_filter(rule.scope) |> Ash.read!(authorize?: false)
-      diverging = for record <- records, detail = divergence(rule, record), do: {record, detail}
+      now = opts[:now] || DateTime.utc_now()
+      diverging = for record <- records, detail = divergence(rule, record, now), do: {record, detail}
 
       {repaired, blocked} =
         if opts[:apply] && rule.apply,
@@ -83,7 +100,27 @@ defmodule Mana.Reconcile do
     end
   end
 
-  defp divergence(rule, record) do
+  defp divergence(%{within: nil} = rule, record, _now), do: holds(rule, record)
+
+  defp divergence(rule, record, now) do
+    case age(rule, record, now) do
+      nil ->
+        "has no #{since(rule, record)} to count #{duration(within_seconds(rule.within))} from"
+
+      seconds ->
+        detail = holds(rule, record)
+
+        if seconds > within_seconds(rule.within) and detail do
+          "in scope for #{duration(seconds)}, longer than #{duration(within_seconds(rule.within))}" <>
+            if(rule.holds, do: ": #{detail}", else: "")
+        end
+    end
+  end
+
+  # A timed rule without `holds` is about leaving the scope in time.
+  defp holds(%{holds: nil}, _record), do: "still in scope"
+
+  defp holds(rule, record) do
     {module, function} = rule.holds
 
     case apply(module, function, [record]) do
@@ -93,11 +130,36 @@ defmodule Mana.Reconcile do
     end
   end
 
+  @doc false
+  def within_seconds({amount, :second}), do: amount
+  def within_seconds({amount, :minute}), do: amount * 60
+  def within_seconds({amount, :hour}), do: amount * 3600
+  def within_seconds({amount, :day}), do: amount * 86_400
+
+  @doc false
+  def since(%{since: field}, _record) when not is_nil(field), do: field
+  def since(_rule, record), do: if(Map.has_key?(record, :updated_at), do: :updated_at, else: :inserted_at)
+
+  defp age(rule, record, now) when is_function(now, 1), do: age(rule, record, now.(record))
+
+  defp age(rule, record, now) do
+    case Map.get(record, since(rule, record)) do
+      %DateTime{} = at -> DateTime.diff(now, at, :second)
+      %NaiveDateTime{} = at -> NaiveDateTime.diff(DateTime.to_naive(now), at, :second)
+      _ -> nil
+    end
+  end
+
+  defp duration(seconds) when seconds >= 86_400 and rem(seconds, 86_400) == 0, do: "#{div(seconds, 86_400)}d"
+  defp duration(seconds) when seconds >= 3600 and rem(seconds, 3600) == 0, do: "#{div(seconds, 3600)}h"
+  defp duration(seconds) when seconds >= 60 and rem(seconds, 60) == 0, do: "#{div(seconds, 60)}m"
+  defp duration(seconds), do: "#{seconds}s"
+
   defp repair(rule, record) do
     {module, function} = rule.apply
     apply(module, function, [record])
     {:ok, fresh} = Ash.get(record.__struct__, record.id, authorize?: false)
-    not in_scope?(rule, fresh) or is_nil(divergence(rule, fresh))
+    not in_scope?(rule, fresh) or is_nil(divergence(rule, fresh, DateTime.utc_now()))
   rescue
     _ -> false
   end
@@ -126,6 +188,28 @@ defmodule Mana.Reconcile do
       "acceptanceScore" => if(criteria == [], do: 1.0, else: passed / length(criteria)),
       "criteria" => criteria
     }
+  end
+end
+
+defmodule Mana.Reconcile.Verify do
+  @moduledoc false
+  # A transformer, not a verifier, so the refusal is a compile error.
+  use Spark.Dsl.Transformer
+
+  @impl true
+  def transform(dsl) do
+    case Enum.find(Spark.Dsl.Transformer.get_entities(dsl, [:reconcile]), &(is_nil(&1.holds) and is_nil(&1.within))) do
+      nil ->
+        {:ok, dsl}
+
+      rule ->
+        {:error,
+         Spark.Error.DslError.exception(
+           module: Spark.Dsl.Transformer.get_persisted(dsl, :module),
+           path: [:reconcile, rule.name],
+           message: "desired #{inspect(rule.name)} needs holds:, within:, or both"
+         )}
+    end
   end
 end
 

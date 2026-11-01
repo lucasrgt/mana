@@ -13,7 +13,9 @@ defmodule ManaCore.MixProject do
         {:plug, "~> 1.16", optional: true},
         {:phoenix, "~> 1.7", optional: true},
         {:open_api_spex, "~> 3.16", optional: true},
-        {:vix, "~> 0.35", optional: true}
+        {:vix, "~> 0.35", optional: true},
+        {:ecto_sql, "~> 3.12", optional: true},
+        {:postgrex, "~> 0.20", optional: true}
       ]
     ]
 

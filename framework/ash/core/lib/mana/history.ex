@@ -320,6 +320,7 @@ defmodule Mana.History do
       agent = context[:mana_agent] -> {:agent, to_string(agent)}
       deadline = context[:mana_deadline] -> {:system, "deadline:#{deadline}"}
       is_nil(actor) -> {:system, nil}
+      undone = context[:mana_undo_of] -> {:user, "undo:#{undone}"}
       true -> {:user, nil}
     end
   end
