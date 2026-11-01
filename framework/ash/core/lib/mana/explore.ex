@@ -952,7 +952,14 @@ defmodule Mana.Explore do
         nil
 
       {:ok, rebuilt, _} ->
-        fields = changed(record, rebuilt) |> Enum.reject(&(&1 == :id))
+        # A time an action stamps from the clock (requested_at) is not
+        # something a replay can reproduce; one that came in as input is.
+        inputs = for entry <- entries, key <- Map.keys(entry["params"] || %{}), into: MapSet.new(), do: to_string(key)
+
+        fields =
+          changed(record, rebuilt)
+          |> Enum.reject(&(&1 == :id))
+          |> Enum.reject(&(clock_value?(Map.get(record, &1)) and not MapSet.member?(inputs, to_string(&1))))
 
         try do
           Ash.destroy!(rebuilt, authorize?: false)
@@ -971,6 +978,10 @@ defmodule Mana.Explore do
   rescue
     error -> "#{Mana.Entity.type(resource)} #{record.id}: replay crashed: #{Exception.message(error) |> String.slice(0, 200)}"
   end
+
+  defp clock_value?(%DateTime{}), do: true
+  defp clock_value?(%NaiveDateTime{}), do: true
+  defp clock_value?(_), do: false
 
   # ---------------------------------------------------------------------------
   # Affordances

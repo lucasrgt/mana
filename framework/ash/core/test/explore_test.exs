@@ -279,7 +279,7 @@ defmodule ExploreTest.Entry do
   use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.History.Log]
 
   history_log do
-    subjects([ExploreTest.Memo, ExploreTest.Serial])
+    subjects([ExploreTest.Memo, ExploreTest.Serial, ExploreTest.Stamped])
   end
 end
 
@@ -378,6 +378,35 @@ defmodule ExploreTest.Book do
   end
 end
 
+defmodule ExploreTest.Stamped do
+  @moduledoc false
+  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.History]
+
+  history do
+    log(ExploreTest.Entry)
+  end
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:closed_at, :utc_datetime_usec, public?: true)
+  end
+
+  actions do
+    defaults([:read, :destroy])
+    create(:open)
+
+    update :close do
+      require_atomic?(false)
+      change(fn changeset, _ -> Ash.Changeset.force_change_attribute(changeset, :closed_at, DateTime.utc_now()) end)
+    end
+  end
+
+  verbs do
+    verb(:open, collection: true)
+    verb(:close, when: expr(is_nil(closed_at)))
+  end
+end
+
 defmodule ExploreTest.Domain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false
@@ -395,6 +424,7 @@ defmodule ExploreTest.Domain do
     resource(ExploreTest.Entry)
     resource(ExploreTest.Memo)
     resource(ExploreTest.Serial)
+    resource(ExploreTest.Stamped)
     resource(ExploreTest.Shelf)
     resource(ExploreTest.Book)
   end
@@ -497,6 +527,8 @@ defmodule Mana.ExploreTest do
 
   test "history that replays to the same record passes; one that does not is reported" do
     assert explore(ExploreTest.Memo).violations == []
+    # a time the action stamps from the clock is not a divergence
+    assert explore(ExploreTest.Stamped).violations == []
 
     assert [%{property: :history_replays, detail: detail}] = explore(ExploreTest.Serial).violations
     assert detail =~ "number"
