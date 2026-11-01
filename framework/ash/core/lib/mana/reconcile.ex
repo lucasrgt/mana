@@ -33,6 +33,8 @@ defmodule Mana.Reconcile do
         scope: expr(status == :accepted),
         within: {15, :minute}
 
+  `within` may be `{Module, :fun}`, called with the record and answering
+  `{amount, unit}`, for a window that is a setting rather than code.
   A record diverges only once it has been in scope longer than `within`,
   measured from `since` (a timestamp field; `updated_at`, else
   `inserted_at`). Without `holds`, staying in scope that long is the
@@ -52,7 +54,10 @@ defmodule Mana.Reconcile do
       describe: [type: :string, required: true, doc: "The rule, as a person would say it."],
       scope: [type: :any, required: true, doc: "An expression selecting the records the rule is about."],
       holds: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :fun}`: true, false or `{false, detail}` for a record; may be left out when `within` is given."],
-      within: [type: {:tuple, [:pos_integer, {:in, [:second, :minute, :hour, :day]}]}, doc: "How long a record may stay in scope (or fail `holds`): `{15, :minute}`."],
+      within: [
+        type: {:or, [{:tuple, [:pos_integer, {:in, [:second, :minute, :hour, :day]}]}, {:tuple, [:atom, :atom]}]},
+        doc: "How long a record may stay in scope (or fail `holds`): `{15, :minute}`, or `{Module, :fun}` answering that for a record (a window read from a knob)."
+      ],
       since: [type: :atom, doc: "The timestamp field `within` counts from."],
       apply: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :fun}` that brings a diverging record back; observe-only without it."]
     ]
@@ -105,13 +110,13 @@ defmodule Mana.Reconcile do
   defp divergence(rule, record, now) do
     case age(rule, record, now) do
       nil ->
-        "has no #{since(rule, record)} to count #{duration(within_seconds(rule.within))} from"
+        "has no #{since(rule, record)} to count #{duration(window(rule, record))} from"
 
       seconds ->
         detail = holds(rule, record)
 
-        if seconds > within_seconds(rule.within) and detail do
-          "in scope for #{duration(seconds)}, longer than #{duration(within_seconds(rule.within))}" <>
+        if seconds > window(rule, record) and detail do
+          "in scope for #{duration(seconds)}, longer than #{duration(window(rule, record))}" <>
             if(rule.holds, do: ": #{detail}", else: "")
         end
     end
@@ -129,6 +134,10 @@ defmodule Mana.Reconcile do
       {false, detail} -> detail
     end
   end
+
+  @doc false
+  def window(%{within: {module, function}}, record) when is_atom(module) and is_atom(function), do: within_seconds(apply(module, function, [record]))
+  def window(%{within: within}, _record), do: within_seconds(within)
 
   @doc false
   def within_seconds({amount, :second}), do: amount

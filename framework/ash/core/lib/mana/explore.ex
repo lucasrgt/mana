@@ -169,7 +169,9 @@ defmodule Mana.Explore do
       for resource <- resources, Mana.Entity in Spark.extensions(resource), deadline <- Mana.Entity.deadlines(resource), match?({n, _} when is_integer(n), deadline.after),
           do: deadline.after
 
-    timed = for resource <- resources, Mana.Reconcile in Spark.extensions(resource), rule <- Mana.Reconcile.declared(resource), rule.within, do: rule.within
+    timed = for resource <- resources, Mana.Reconcile in Spark.extensions(resource), rule <- Mana.Reconcile.declared(resource), match?({n, _} when is_integer(n), rule.within), do: rule.within
+    # Windows read from a setting ({Module, :fun}) are not known here: give
+    # those apps clock: explicitly.
     (deadlines ++ timed) |> Enum.uniq() |> Enum.map(fn {n, unit} -> {n + 1, unit} end)
   end
 

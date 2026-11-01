@@ -35,6 +35,16 @@ defmodule Mana.ReconcileWithinTest do
     assert id == old.id
   end
 
+  test "a window may come from a function of the record" do
+    defmodule Window do
+      def of(%{expires: false}), do: {1, :hour}
+    end
+
+    rule = %Mana.Reconcile.Desired{within: {Window, :of}}
+    assert Mana.Reconcile.window(rule, %{expires: false}) == 3600
+    assert Mana.Reconcile.window(%Mana.Reconcile.Desired{within: {2, :minute}}, %{}) == 120
+  end
+
   test "a rule needs holds, within, or both" do
     assert_raise Spark.Error.DslError, ~r/needs holds:, within:, or both/, fn ->
       defmodule Pointless do
