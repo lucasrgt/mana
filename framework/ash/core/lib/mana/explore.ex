@@ -451,7 +451,7 @@ defmodule Mana.Explore do
   end
 
   defp child_start(ctx, state, name, parent, type, verb) do
-    with child when not is_nil(child) <- Enum.find(ctx.all, &(Mana.Entity.type(&1) == type)),
+    with child when not is_nil(child) <- Enum.find(ctx.resources, &(Mana.Entity.type(&1) == type)),
          verb = String.to_existing_atom(verb),
          true <- performable?(ctx, child, verb) do
       [%{kind: :start, actor: name, resource: child, verb: verb, parent: ref_of(state, parent.__struct__, parent.id)}]
