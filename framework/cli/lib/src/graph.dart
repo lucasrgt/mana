@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import 'elixir.dart';
 import 'failure.dart';
+import 'lab.dart';
 import 'manifest.dart';
 
 final _reference = RegExp(r'\b([A-Z][A-Za-z0-9]*)Verbs\.([a-z][A-Za-z0-9]*)\b');
@@ -62,13 +63,21 @@ Future<void> graph(String root, List<String> arguments) async {
   final file = File(p.join(root, backend, '_build', 'mana-graph-screens.json'))
     ..createSync(recursive: true)
     ..writeAsStringSync(jsonEncode(screens));
+  final args = [
+    'mana.graph',
+    ...arguments,
+    '--screens',
+    p.relative(file.path, from: p.join(root, backend)),
+  ];
+  // A backend whose runtime config reads the lab's settings needs the lab
+  // around it even to read declarations; without a lab database it runs bare.
+  bool given(String key) => Platform.environment[key]?.isNotEmpty ?? false;
   try {
-    await mix(p.join(root, backend), [
-      'mana.graph',
-      ...arguments,
-      '--screens',
-      p.relative(file.path, from: p.join(root, backend)),
-    ]);
+    if (given('MANA_LAB_POSTGRES') || given('MANA_MOMENTS_INSTANCE')) {
+      await lab(root, ['mix', ...args], backend: backend);
+    } else {
+      await mix(p.join(root, backend), args);
+    }
   } finally {
     if (file.existsSync()) file.deleteSync();
   }
