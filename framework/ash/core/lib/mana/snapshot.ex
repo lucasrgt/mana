@@ -156,7 +156,8 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
 
     @doc false
     def start_repo(repo, database) do
-      config = Keyword.merge(config(repo), database: database, pool_size: 2, name: nil, url: nil)
+      # A scope is a database of its own: it never shares a test's sandbox pool.
+      config = Keyword.merge(config(repo), database: database, pool_size: 2, name: nil, url: nil, pool: DBConnection.ConnectionPool)
       repo.start_link(config)
     end
 
