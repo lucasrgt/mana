@@ -10,6 +10,7 @@ import 'dart_sources.dart';
 import 'errors.dart';
 import 'format.dart';
 import 'http_server.dart';
+import 'journey.dart' show verbIdentity;
 import 'json.dart';
 import 'manifest.dart';
 import 'projection.dart';
@@ -592,6 +593,13 @@ final class Moments implements WatchedMoments, GestureMoments {
 
   static bool _safeInt(Object? value) => value is int;
 
+  /// What the screen's controls offer (`MomentAffordances`); a malformed or
+  /// oversized list is left out, so `offered` checks see it as unavailable.
+  static List<String>? _offered(Object? value) =>
+      value is List && value.length <= 256 && value.every((v) => v is String && verbIdentity.hasMatch(v))
+      ? List.unmodifiable(value.cast<String>())
+      : null;
+
   Future<bool> handle(HttpRequest request, Uri url, Body body) async {
     if (!url.path.startsWith('/moments/')) return false;
     final response = request.response;
@@ -712,6 +720,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         'projection': projection,
         'reportedAt': DateTime.now().toUtc().toIso8601String(),
         'timing': null,
+        'offered': ?_offered(data['offered']),
         if (frame.capture) 'captureSequence': frame.sequence,
       });
       frame.observed = _observed;
@@ -795,6 +804,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         'revision': _revision,
         'client': _activeClient,
         'projection': projection,
+        'offered': ?_offered(data['offered']),
         'timing': timing,
         'reportedAt': DateTime.now().toUtc().toIso8601String(),
         'openToObservedMs': _moveStarted == null ? null : nowMs() - _moveStarted!,

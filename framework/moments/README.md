@@ -440,6 +440,22 @@ step(:row_menu, long_press: "list.row")                     # held past the long
 step(:close, back: true)                                    # the platform's back button
 ```
 
+A step can name the verb it performs instead of a key, and a check what the
+screen offers; the exporter refuses a verb the resource does not declare (see
+[steps that name a verb](../ash/moments/README.md#steps-that-name-a-verb)):
+
+```elixir
+step(:pay, verb: {:booking, :pay}, on: "booking.id", until: [:paid]) # that record's control
+check(:paid, kind: :not_offered, verb: {:booking, :pay}, scope: :step)
+```
+
+It taps `verb:booking.pay`: without `on`, the first control `VerbGate` keyed
+for the verb in tree order; with `on`, the input reference resolved like `from`
+gives the record, `verb:booking.pay:<id>`. `offered` / `not_offered` read the
+`offered` list of the screen report, the verbs its mounted controls offer
+(`type.verb[:id]`); a report without it leaves them `unavailable`. Step and check
+receipts name the verb.
+
 `submit` focuses the field and calls `EditableTextState.performAction` with the
 field's own `textInputAction`, so `onSubmitted` runs as from the keyboard.
 `swipe` drags the target's centre across 60% of its size in pointer moves, so

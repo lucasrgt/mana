@@ -6,5 +6,14 @@ defmodule Moments.MixProject do
   end
 
   def application, do: [extra_applications: [:logger, :crypto]]
-  defp deps, do: [{:ash, "~> 3.34 and >= 3.34.3"}, {:jason, "~> 1.4"}, {:plug, "~> 1.16"}]
+  # Verb steps read `Mana.Verbs` when the consumer has it; tests declare verbs with it.
+  defp deps,
+    do: [
+      {:ash, "~> 3.34 and >= 3.34.3"},
+      {:jason, "~> 1.4"},
+      {:plug, "~> 1.16"},
+      {:mana_core, path: "../core", only: :test},
+      {:ecto_sql, "~> 3.12", only: :test},
+      {:postgrex, "~> 0.20", only: :test}
+    ]
 end

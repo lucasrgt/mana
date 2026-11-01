@@ -1,4 +1,5 @@
 import 'errors.dart';
+import 'journey.dart' show verbIdentity;
 
 final _uuid = RegExp(r'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$');
 final _module = RegExp(r'^[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*$');
@@ -41,6 +42,7 @@ Map<String, Object?> actionReceipt(Object? value) {
     'coverage',
     if (profiled) 'profile',
     if (changed) 'changes',
+    'verb',
   ])) {
     _invalid('Invalid action evidence');
   }
@@ -53,7 +55,8 @@ Map<String, Object?> actionReceipt(Object? value) {
       receipt['scope'] != 'request-actions-only' ||
       receipt['coverage'] != 'not-established' ||
       receipt['actions'] is! List ||
-      (receipt['actions']! as List).length > 16) {
+      (receipt['actions']! as List).length > 16 ||
+      (receipt['verb'] != null && (receipt['verb'] is! String || !verbIdentity.hasMatch(receipt['verb']! as String)))) {
     _invalid('Invalid action evidence');
   }
   final actions = [

@@ -3,18 +3,27 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:mana_primitives/mana_primitives.dart';
 
-/// The newest change in [entries] that can be taken back now: a done entry
-/// whose verb declares an `inverse:` the record [offered] at this moment.
-/// Only the newest change is undoable, so nothing older is undone under a
-/// later one.
+/// The newest change in [entries] that can be taken back now: the newest
+/// done entry, when its verb declares an `inverse:` the record [offered] at
+/// this moment and it is not itself an undo (`via: "undo:<id>"`). With [me],
+/// only that person's own change — the rules `Mana.Undo` applies on the
+/// server. Only the newest change is undoable, so nothing older is undone
+/// under a later one.
 (ManaHistoryEntry, ManaVerb)? undoable(
   List<ManaHistoryEntry> entries,
   List<ManaVerb> verbs,
-  Iterable<String>? offered,
-) {
-  final newest = entries.where((entry) => !entry.failed && entry.verb != null);
-  if (newest.isEmpty) return null;
-  final entry = newest.first;
+  Iterable<String>? offered, {
+  String? me,
+}) {
+  final done = entries.where((entry) => !entry.failed);
+  if (done.isEmpty) return null;
+  final entry = done.first;
+  if (entry.verb == null || (entry.via?.startsWith('undo:') ?? false)) {
+    return null;
+  }
+  if (me != null && (entry.actor != HistoryActor.user || entry.actorId != me)) {
+    return null;
+  }
   final verb = verbs.where((v) => v.name == entry.verb).firstOrNull;
   final inverse = verbs.where((v) => v.name == verb?.inverse).firstOrNull;
   if (inverse == null || !inverse.offeredBy(offered)) return null;
@@ -31,6 +40,7 @@ final class HistoryView extends StatefulWidget {
     required this.entry,
     this.verbs = const [],
     this.offered,
+    this.me,
     this.undo,
     this.asOf,
     this.changes,
@@ -53,6 +63,9 @@ final class HistoryView extends StatefulWidget {
 
   /// What the record offers now (its `verbs` attribute).
   final Iterable<String>? offered;
+
+  /// The signed-in person's id: only their own newest change is undoable.
+  final String? me;
 
   /// Performs the inverse verb; the history reads again after it.
   final Future<void> Function(ManaVerb inverse)? undo;
@@ -123,7 +136,7 @@ final class _HistoryViewState extends State<HistoryView> {
     if (shown.isEmpty) return const SizedBox.shrink();
     final takeBack = widget.undo == null || _undoing
         ? null
-        : undoable(shown, widget.verbs, widget.offered);
+        : undoable(shown, widget.verbs, widget.offered, me: widget.me);
     final rows = [
       for (final entry in shown)
         widget.entry(

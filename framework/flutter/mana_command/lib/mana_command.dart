@@ -293,6 +293,11 @@ final class ViewModels {
 /// gathers them first with [collect] (null cancels), checks them against the
 /// verb's rules, and hands them to [runWith]; that form is the confirmation
 /// when no [confirm] is given.
+///
+/// The control carries the verb's identity as its key ([keyFor]), with
+/// [recordId] when it acts on one record of a list, so a Moment step names
+/// the verb (`step(:pay, verb: {:booking, :pay})`) instead of a hand-placed
+/// key; while a Moment runs it also tells [MomentAffordances] it offers it.
 final class VerbGate extends StatefulWidget {
   const VerbGate({
     required this.verb,
@@ -305,11 +310,18 @@ final class VerbGate extends StatefulWidget {
     this.undo,
     this.showUndo,
     this.hideWhenNotOffered = true,
+    this.recordId,
     super.key,
   });
 
+  /// `verb:booking.pay`, or `verb:booking.pay:<recordId>`: a control drawn
+  /// for [runVerb] outside a [VerbGate] takes it to be found the same way.
+  static ValueKey<String> keyFor(ManaVerb verb, {String? recordId}) =>
+      ValueKey('verb:${verb.identity(recordId)}');
+
   final ManaVerb verb;
   final Iterable<String>? offered;
+  final String? recordId;
   final Future<void> Function()? run;
 
   /// Asks for the verb's inputs, keyed by input name; null when dismissed.
@@ -345,6 +357,36 @@ final class VerbGate extends StatefulWidget {
 final class _VerbGateState extends State<VerbGate> {
   // A second activation while the verb runs does nothing: one tap, one effect.
   var _running = false;
+  String? _offering;
+  void Function()? _withdraw;
+
+  @override
+  void initState() {
+    super.initState();
+    _offer();
+  }
+
+  @override
+  void didUpdateWidget(VerbGate oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _offer();
+  }
+
+  @override
+  void dispose() {
+    _withdraw?.call();
+    super.dispose();
+  }
+
+  void _offer() {
+    final next = widget.verb.offeredBy(widget.offered)
+        ? widget.verb.identity(widget.recordId)
+        : null;
+    if (next == _offering) return;
+    _withdraw?.call();
+    _offering = next;
+    _withdraw = next == null ? null : MomentAffordances.offer(next);
+  }
 
   Future<void> _perform(BuildContext context) async {
     if (_running) return;
@@ -366,15 +408,19 @@ final class _VerbGateState extends State<VerbGate> {
     confirm: widget.confirm,
     undo: widget.undo,
     showUndo: widget.showUndo,
+    recordId: widget.recordId,
   );
 
   @override
   Widget build(BuildContext context) {
     final available = widget.verb.offeredBy(widget.offered);
     if (!available && widget.hideWhenNotOffered) return const SizedBox.shrink();
-    return widget.builder(
-      context,
-      available && !_running ? () => _perform(context) : null,
+    return KeyedSubtree(
+      key: VerbGate.keyFor(widget.verb, recordId: widget.recordId),
+      child: widget.builder(
+        context,
+        available && !_running ? () => _perform(context) : null,
+      ),
     );
   }
 }
@@ -416,7 +462,9 @@ final class AvailableVerbs extends ChangeNotifier {
 /// when [offered] lacks the verb; [collect] gathers and checks the inputs
 /// (null cancels, and the form stands for the confirmation); [confirm] is
 /// asked when the declaration wants it; then [run] or [runWith], and Undo
-/// when the verb has an inverse. True when the verb ran.
+/// when the verb has an inverse. True when the verb ran. Inside a Moment's
+/// gesture, the verb ([recordId]'s, when given) is named on the gesture's
+/// trace before it runs.
 Future<bool> runVerb(
   BuildContext context,
   ManaVerb verb, {
@@ -433,6 +481,7 @@ Future<bool> runVerb(
     Future<void> Function() undo,
   )?
   showUndo,
+  String? recordId,
 }) async {
   if (!verb.offeredBy(offered)) return false;
   Map<String, Object?>? inputs;
@@ -452,6 +501,7 @@ Future<bool> runVerb(
     }
     if (!await confirm(context, verb) || !context.mounted) return false;
   }
+  MomentAffordances.performing(verb.identity(recordId));
   if (inputs != null) {
     await runWith!(inputs);
   } else {

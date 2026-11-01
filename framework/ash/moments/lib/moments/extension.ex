@@ -16,7 +16,7 @@ end
 
 defmodule Moments.Check do
   @moduledoc false
-  defstruct [:name, :kind, :field, :equals, :match, :scope, :__identifier__, :__spark_metadata__]
+  defstruct [:name, :kind, :field, :equals, :match, :scope, :verb, :__identifier__, :__spark_metadata__]
 end
 
 defmodule Moments.Scene do
@@ -37,7 +37,7 @@ end
 
 defmodule Moments.Step do
   @moduledoc false
-  defstruct [:name, :tap, :fill, :from, :reveal, :back, :swipe, :direction, :long_press, :submit, :until, :__identifier__, :__spark_metadata__]
+  defstruct [:name, :tap, :fill, :from, :reveal, :back, :swipe, :direction, :long_press, :submit, :verb, :on, :until, :__identifier__, :__spark_metadata__]
 end
 
 defmodule Moments.Extension do
@@ -68,10 +68,14 @@ defmodule Moments.Extension do
     identifier: :name,
     schema: [
       name: [type: :atom, required: true],
-      kind: [type: {:in, [:restored, :ui_equals, :backend_equals]}, required: true],
+      kind: [type: {:in, [:restored, :ui_equals, :backend_equals, :offered, :not_offered]}, required: true],
       field: [type: :atom],
       equals: [type: :any],
       match: [type: :atom],
+      verb: [
+        type: {:tuple, [:atom, :atom]},
+        doc: "`{Resource or :type, :verb}` for `:offered` / `:not_offered`: whether a mounted control (`VerbGate`) offers it."
+      ],
       scope: [type: {:in, [:step, :final]}, default: :final]
     ]
   }
@@ -90,6 +94,11 @@ defmodule Moments.Extension do
       direction: [type: {:in, [:left, :right, :up, :down]}, doc: "Where `swipe` drags."],
       long_press: [type: :string, doc: "Holds the widget with this key past the long-press timeout."],
       submit: [type: :string, doc: "Presses the keyboard's action key (done, search, send) on the text field with this key."],
+      verb: [
+        type: {:tuple, [:atom, :atom]},
+        doc: "Taps the control that performs `{Resource or :type, :verb}` (`VerbGate`); the export refuses a verb the resource does not declare."
+      ],
+      on: [type: :string, doc: "With `verb`, the input reference whose value is the record id: taps that record's control."],
       from: [type: :string],
       until: [type: {:list, :atom}, default: []]
     ]

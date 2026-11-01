@@ -154,6 +154,11 @@ final class ManaVerb {
   /// How lists of offered verbs name a collection verb: `booking.request`.
   String get qualified => '$resource.$name';
 
+  /// How Moments names the control that performs it: `booking.pay`, or
+  /// `booking.pay:<recordId>` for one record's.
+  String identity([String? recordId]) =>
+      recordId == null ? qualified : '$qualified:$recordId';
+
   /// Whether a client asks before running it: it moves money or cannot be
   /// undone, or its declaration says `confirm: true`.
   bool get confirms => _confirm || risk.confirms;
@@ -171,6 +176,73 @@ final class ManaVerb {
 
   @override
   String toString() => '$resource.$name';
+}
+
+/// The verbs the mounted controls offer while a Moment runs (`VerbGate`
+/// offers its own), named as [ManaVerb.identity] does; Moments' `offered`
+/// and `not_offered` checks read them from the screen's report. Nothing is
+/// kept until the Moments bridge calls [enable], so other builds pay nothing.
+abstract final class MomentAffordances {
+  static bool _enabled = false;
+  static void Function(String identity)? _performing;
+  static final _offers = <String, int>{};
+  static final _listeners = <void Function()>[];
+
+  static bool get enabled => _enabled;
+
+  /// Starts keeping offers; [performing] hears each verb reported to
+  /// [MomentAffordances.performing], inside the gesture that performs it.
+  static void enable({void Function(String identity)? performing}) {
+    _enabled = true;
+    _performing = performing;
+  }
+
+  static void disable() {
+    _enabled = false;
+    _performing = null;
+    _offers.clear();
+    _notify();
+  }
+
+  /// Each offered identity once, sorted.
+  static List<String> get offered => [..._offers.keys]..sort();
+
+  /// Records that a control offers [identity] until the returned function
+  /// (safe to call twice) withdraws it.
+  static void Function() offer(String identity) {
+    if (!_enabled) return _nothing;
+    _offers[identity] = (_offers[identity] ?? 0) + 1;
+    if (_offers[identity] == 1) _notify();
+    var withdrawn = false;
+    return () {
+      if (withdrawn) return;
+      withdrawn = true;
+      final count = _offers[identity];
+      if (count == null) return;
+      if (count > 1) {
+        _offers[identity] = count - 1;
+      } else {
+        _offers.remove(identity);
+        _notify();
+      }
+    };
+  }
+
+  /// Names the verb a control is about to perform, for the gesture's trace.
+  static void performing(String identity) => _performing?.call(identity);
+
+  static void addListener(void Function() listener) => _listeners.add(listener);
+
+  static void removeListener(void Function() listener) =>
+      _listeners.remove(listener);
+
+  static void _nothing() {}
+
+  static void _notify() {
+    for (final listener in [..._listeners]) {
+      listener();
+    }
+  }
 }
 
 /// What one screen reads from a resource (`Mana.Views`): the declared fields,

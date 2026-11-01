@@ -14,6 +14,13 @@ abstract final class MomentKnobScope {
   static String? current;
 }
 
+/// The database the running Moment's recipe prepared in (`dataScope` in
+/// its launch, a `Mana.Snapshot` scope); `MomentActionTrace.attach` sends
+/// it with every API request, so parallel runs never share rows.
+abstract final class MomentDataScope {
+  static String? current;
+}
+
 /// Fetches only a disposable sandbox account from the authenticated local bridge.
 /// Authentication is delegated to the app's normal session seam.
 Future<String?> prepareMomentLaunch({
@@ -51,6 +58,7 @@ Future<String?> prepareMomentLaunch({
     }
     final route = launch['route'] as String;
     MomentKnobScope.current = launch['knobScope'] as String?;
+    MomentDataScope.current = launch['dataScope'] as String?;
     MomentHandOff.startRecording();
     if (!route.startsWith('/') || route.startsWith('//')) {
       throw StateError('Moment route must stay in the app');

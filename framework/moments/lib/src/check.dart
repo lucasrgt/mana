@@ -75,6 +75,7 @@ List<Map<String, Object?>> evaluateChecks(
   required Object? observed,
   required Object? properties,
   required Object? backend,
+  Object? offered,
 }) {
   final saved = restorableProjection(asObject(expected), (properties as Map?)?.cast()),
       restored = restorableProjection(asObject(observed), (properties)?.cast());
@@ -105,6 +106,7 @@ List<Map<String, Object?>> evaluateChecks(
                 'Declared state reported after restoration; not a screenshot or arbitrary widget-memory comparison.',
           };
         }
+        if (check['kind'] == 'offered' || check['kind'] == 'not_offered') return offeredOutcome(check, offered);
         if (check['kind'] == 'ui_equals') {
           final actual = observedMap[field];
           if (!_own(observedMap, field!) || !_scalar(actual)) {
@@ -174,8 +176,13 @@ void validateChecks(Object? checks, Map<String, Object?>? properties) {
     if (c['name'] is! String ||
         (c['name'] as String).isEmpty ||
         names.contains(c['name']) ||
-        !const ['restored', 'ui_equals', 'backend_equals'].contains(c['kind'])) {
+        !const ['restored', ...criteria].contains(c['kind'])) {
       throw const _Unavailable('Invalid or unsupported check declaration');
+    }
+    final verbCheck = const ['offered', 'not_offered'].contains(c['kind']);
+    if (verbCheck != c.containsKey('verb') ||
+        (verbCheck && (!isVerb(c['verb']) || c.containsKey('field') || c.containsKey('match')))) {
+      throw const _Unavailable('offered and not_offered checks take a verb, and only a verb');
     }
     if (c['scope'] != null && !const ['step', 'final'].contains(c['scope'])) {
       throw const _Unavailable('Invalid check scope');
@@ -563,6 +570,7 @@ Future<Map<String, Object?>> checkMoment({
               observed: observed['projection'],
               backend: inspection['backend'],
               properties: properties,
+              offered: observed['offered'],
             )
           : <Map<String, Object?>>[];
       report['checks'] = outcomes;

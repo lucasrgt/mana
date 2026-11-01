@@ -57,9 +57,11 @@ compared before/after compilation and planning; the hashes identify that slice
 without certifying external dependencies or runtime behaviour.
 
 The listed Moments are candidates from the resource's primary domain, with
-`unverified` coverage. There is no compiled link yet between each gesture and the
-action: the plan does not automatically pick a journey as proof of the action,
-nor resolve callers, dynamic calls or jobs created in custom code. A resource
+`unverified` coverage. A [`verb:` step](#steps-that-name-a-verb) links its
+gesture to a declared verb when the manifest is built, but the plan does not read
+that link yet: it does not pick a journey as proof of the action, nor resolve
+callers, dynamic calls or jobs created in custom code. A tap on a hand-keyed
+control stays unlinked. A resource
 with a configured policy is still subject to review of `authorize?: false`,
 direct Repo access and actor/tenant propagation. No property becomes
 `guaranteed` just by appearing in this report.
@@ -241,6 +243,47 @@ format is 3, Moments protocol 0.1, profile `mana-ash-flutter`; without relations
 In a production artifact, the tracer, handler and Plug are inactive and the HTTP/CORS
 headers are absent. The library modules may remain in the artifact; this excludes the
 consumer's development path, not arbitrary Elixir code inside the same VM.
+
+## Steps that name a verb
+
+A step can tap the control that performs a verb instead of a hand-placed key,
+and a check can ask whether the screen offers one:
+
+```elixir
+moment :booking_paid do
+  backend :accepted_booking
+  description "The traveler pays an accepted booking from its card."
+  step :pay, verb: {:booking, :pay}, on: "booking.id", until: [:paid]
+  check :paid, kind: :not_offered, verb: {:booking, :pay}, scope: :step
+  check :cancellable, kind: :offered, verb: {MyApp.Booking, :cancel}
+end
+```
+
+`verb` is `{Resource, :verb}` or `{:type, :verb}`, the type as records list what
+they offer; a type resolves among the resources of the exported domains and the
+app's `:ash_domains`. The export refuses a verb the resource does not declare
+in `Mana.Verbs`, an unknown or ambiguous type, and verb steps in a project
+without `mana_core`: the link gesture → verb is checked when the manifest is
+built, not discovered at runtime.
+
+The step exports as a tap on the key `VerbGate` (mana_command) gives its
+control, plus the verb: `{"kind": "tap", "target": "verb:booking.pay",
+"verb": "booking.pay"}`, so a runner that predates verb steps still taps it.
+Without `on`, the driver taps the first such control in tree order, whatever
+its record. `on` is an input reference like `from`: the app's adapter resolves
+it to a record id, and the driver taps `verb:booking.pay:<id>`.
+
+`:offered` and `:not_offered` read the verbs the mounted `VerbGate`s report in
+the screen report (`MomentAffordances`); one record's control counts for the
+verb. They can be final criteria or a step's `until`. Their receipts, and the
+step's, name the verb; an action receipt carries `verb` when the gesture ran one
+through `VerbGate` or `runVerb`.
+
+Limits: an offer is what the client drew from the record's `verbs`, not proof
+the server would accept the action. A control drawn outside `VerbGate` needs
+`VerbGate.keyFor(verb, recordId: id)` to be tapped by verb, and reports nothing
+to offer checks. A check names a verb, not a record. A runner older than verb
+steps appends an `on` id without its `:`.
 
 ## A Moment can be navigable only
 

@@ -26,6 +26,8 @@ ManaHistoryEntry _entry(String verb, int minute, {bool failed = false}) =>
       failed: failed,
     );
 
+final _at = DateTime.utc(2026, 10, 8, 12);
+
 void main() {
   test(
     'only the newest change is undoable, and only while its inverse is offered',
@@ -49,6 +51,40 @@ void main() {
       );
     },
   );
+
+  test('an undo is not undone, and with me only my own change is', () {
+    final verbs = [_publish, _unpublish, _edit];
+    final mine = ManaHistoryEntry(
+      action: 'publish',
+      summary: 'publish',
+      actor: HistoryActor.user,
+      actorId: 'me',
+      at: _at,
+      verb: 'publish',
+    );
+    final theirs = ManaHistoryEntry(
+      action: 'publish',
+      summary: 'publish',
+      actor: HistoryActor.user,
+      actorId: 'someone',
+      at: _at,
+      verb: 'publish',
+    );
+    final anUndo = ManaHistoryEntry(
+      action: 'publish',
+      summary: 'publish',
+      actor: HistoryActor.user,
+      actorId: 'me',
+      at: _at,
+      verb: 'publish',
+      via: 'undo:1',
+    );
+
+    expect(undoable([mine], verbs, ['unpublish'], me: 'me')?.$2, _unpublish);
+    expect(undoable([theirs], verbs, ['unpublish'], me: 'me'), isNull);
+    expect(undoable([theirs], verbs, ['unpublish'])?.$2, _unpublish);
+    expect(undoable([anUndo], verbs, ['unpublish']), isNull);
+  });
 
   testWidgets('undo performs the inverse and reads the history again', (
     tester,

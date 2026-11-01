@@ -7,6 +7,7 @@ import 'canonical.dart';
 import 'declaration_sources.dart';
 import 'errors.dart';
 import 'impact.dart';
+import 'journey.dart' show criteria;
 import 'json.dart';
 import 'manifest.dart';
 
@@ -315,7 +316,7 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
     final scene = _scene(manifest, name);
     final checks = ((scene['checks'] as List?) ?? const []).cast<Map>();
     if (((scene['steps'] as List?)?.length ?? 0) > 0) {
-      return checks.any((c) => c['scope'] != 'step' && const ['ui_equals', 'backend_equals'].contains(c['kind']))
+      return checks.any((c) => c['scope'] != 'step' && criteria.contains(c['kind']))
           ? 'run'
           : 'navigate';
     }

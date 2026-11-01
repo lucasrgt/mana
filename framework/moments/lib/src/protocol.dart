@@ -92,6 +92,14 @@ Map<String, Object?> capabilities() {
         'does':
             "Sends popRoute on flutter/navigation, as the system back button: the dialog or sheet on top closes, a pushed page pops, a router's back dispatcher decides",
       },
+      'verb': {
+        'step': 'step(:name, verb: {:booking, :pay}, on: "booking.id")',
+        'transport': 'flutter-pointer',
+        'does':
+            'A tap on the control VerbGate keys verb:<type>.<verb>: the first in tree order, or with on the one of the record the reference resolves to (verb:<type>.<verb>:<id>); the export refuses a verb its resource does not declare',
+        'checks':
+            'check(:name, kind: :offered | :not_offered, verb: {:booking, :pay}) reads the verbs the mounted VerbGates offer, from the screen report',
+      },
       'inputSuffix': {
         'step': 'step(:name, tap: "flow-service-", from: "service.id")',
         'does':

@@ -59,18 +59,33 @@ final class MomentGestures {
     await binding.endOfFrame;
   }
 
-  static List<Element> _find(String key) {
+  static List<Element> _find(String key) => _search(key).matches;
+
+  /// The widgets keyed [key]. A verb key with no record
+  /// (`verb:booking.pay`) stands for any record's control
+  /// (`verb:booking.pay:<id>`) and takes the first in tree order, as a
+  /// person picks the first row offering it.
+  static ({List<Element> matches, bool overflow}) _search(String key) {
     final matches = <Element>[];
+    final anyRecord =
+        key.startsWith('verb:') && !key.substring(5).contains(':');
     var visited = 0;
     void visit(Element element) {
       if (++visited > 20000) return;
-      if (element.widget.key == ValueKey<String>(key)) matches.add(element);
+      final found = element.widget.key;
+      if (anyRecord
+          ? matches.isEmpty &&
+                found is ValueKey<String> &&
+                (found.value == key || found.value.startsWith('$key:'))
+          : found == ValueKey<String>(key)) {
+        matches.add(element);
+      }
       element.visitChildren(visit);
     }
 
     final root = WidgetsBinding.instance.rootElement;
     if (root != null) visit(root);
-    return matches;
+    return (matches: matches, overflow: visited > 20000);
   }
 
   /// A target a lazy list (a `ListView.builder`, a select menu) has not built
@@ -126,17 +141,8 @@ final class MomentGestures {
     required bool Function() current,
   }) async {
     if (!momentsBuild) return 'unsupported';
-    final targets = <Element>[];
-    var visited = 0;
-    void visit(Element element) {
-      if (++visited > 20000) return;
-      if (element.widget.key == ValueKey<String>(key)) targets.add(element);
-      element.visitChildren(visit);
-    }
-
-    final root = WidgetsBinding.instance.rootElement;
-    if (root != null) visit(root);
-    if (visited > 20000) return 'unsupported';
+    final (matches: targets, :overflow) = _search(key);
+    if (overflow) return 'unsupported';
     if (targets.isEmpty) return 'not-found';
     if (targets.length != 1) return 'ambiguous';
     if (!current()) return 'stale';
@@ -184,17 +190,8 @@ final class MomentGestures {
     if (!momentsBuild || text.isEmpty || text.length > 4096) {
       return 'unsupported';
     }
-    final targets = <Element>[];
-    var visited = 0;
-    void visit(Element element) {
-      if (++visited > 20000) return;
-      if (element.widget.key == ValueKey<String>(key)) targets.add(element);
-      element.visitChildren(visit);
-    }
-
-    final root = WidgetsBinding.instance.rootElement;
-    if (root != null) visit(root);
-    if (visited > 20000) return 'unsupported';
+    final (matches: targets, :overflow) = _search(key);
+    if (overflow) return 'unsupported';
     if (targets.isEmpty) return 'not-found';
     if (targets.length != 1) return 'ambiguous';
     final editors = <EditableTextState>[];
@@ -289,17 +286,8 @@ final class MomentGestures {
     bool probeOnly = false,
   }) async {
     if (!momentsBuild) return 'unsupported';
-    final matches = <Element>[];
-    var visited = 0;
-    void visit(Element e) {
-      if (++visited > 20000) return;
-      if (e.widget.key == ValueKey<String>(key)) matches.add(e);
-      e.visitChildren(visit);
-    }
-
-    final root = WidgetsBinding.instance.rootElement;
-    if (root != null) visit(root);
-    if (visited > 20000) return 'unsupported';
+    final (:matches, :overflow) = _search(key);
+    if (overflow) return 'unsupported';
     if (matches.isEmpty) return 'not-found';
     if (matches.length != 1) return 'ambiguous';
     final element = matches.single;
@@ -663,6 +651,7 @@ final class MomentGestureReporter {
           await WidgetsBinding.instance.endOfFrame;
           frameMs = timing.elapsedMicroseconds / 1000;
           try {
+            final target = request['target'] as String?;
             outcome = await MomentActionTrace.run(
               id,
               (receipt) async {
@@ -721,6 +710,9 @@ final class MomentGestureReporter {
                 }
                 return outcome;
               },
+              verb: target != null && target.startsWith('verb:')
+                  ? target.substring(5)
+                  : null,
             );
           } on Object {
             outcome = 'dispatch-unknown';

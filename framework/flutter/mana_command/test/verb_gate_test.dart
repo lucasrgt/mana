@@ -150,4 +150,102 @@ void main() {
       });
     },
   );
+
+  testWidgets('the control carries its verb, and its record, as its key', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        Column(
+          children: [
+            VerbGate(
+              key: const ValueKey('gate'),
+              verb: cancel,
+              offered: const ['cancel'],
+              recordId: '42',
+              run: () async {},
+              builder: button,
+            ),
+            VerbGate(
+              verb: apply,
+              offered: const ['apply_coupon'],
+              run: () async {},
+              builder: button,
+            ),
+            VerbGate(
+              verb: apply,
+              offered: const [],
+              recordId: '7',
+              run: () async {},
+              builder: button,
+            ),
+          ],
+        ),
+      ),
+    );
+    expect(find.byKey(const ValueKey('gate')), findsOneWidget);
+    expect(
+      VerbGate.keyFor(cancel, recordId: '42'),
+      const ValueKey('verb:booking.cancel:42'),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('verb:booking.cancel:42')),
+        matching: find.text('on'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('verb:order.apply_coupon')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('verb:order.apply_coupon:7')),
+      findsNothing,
+    );
+  });
+
+  testWidgets(
+    'while Moments run, mounted gates offer what their record offers',
+    (tester) async {
+      final performed = <String>[];
+      MomentAffordances.enable(performing: performed.add);
+      addTearDown(MomentAffordances.disable);
+      Widget gates(List<String> offered, {bool second = true}) => host(
+        Column(
+          children: [
+            VerbGate(
+              verb: apply,
+              offered: offered,
+              recordId: '1',
+              run: () async {},
+              builder: button,
+            ),
+            if (second)
+              VerbGate(
+                verb: apply,
+                offered: offered,
+                recordId: '2',
+                run: () async {},
+                builder: button,
+              ),
+          ],
+        ),
+      );
+      await tester.pumpWidget(gates(const ['apply_coupon']));
+      expect(MomentAffordances.offered, [
+        'order.apply_coupon:1',
+        'order.apply_coupon:2',
+      ]);
+      await tester.pumpWidget(gates(const ['apply_coupon'], second: false));
+      expect(MomentAffordances.offered, ['order.apply_coupon:1']);
+      await tester.tap(find.text('on'));
+      await tester.pump();
+      expect(performed, ['order.apply_coupon:1']);
+      await tester.pumpWidget(gates(const []));
+      expect(MomentAffordances.offered, isEmpty);
+      await tester.pumpWidget(host(const SizedBox()));
+      expect(MomentAffordances.offered, isEmpty);
+    },
+  );
 }

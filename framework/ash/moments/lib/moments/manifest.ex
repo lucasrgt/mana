@@ -3,7 +3,8 @@ defmodule Moments.Manifest do
   alias Spark.Dsl.Extension, as: Dsl
 
   def build_many(modules, opts \\ []) do
-    manifests = Enum.map(modules, &build(&1, Keyword.put(opts, :defer_lineage, true)))
+    opts = opts |> Keyword.put(:defer_lineage, true) |> Keyword.put_new(:domains, modules)
+    manifests = Enum.map(modules, &build(&1, opts))
 
     screens =
       Map.new(manifests, fn m ->
@@ -56,6 +57,7 @@ defmodule Moments.Manifest do
 
     defaults = Map.new(fields, &{to_string(&1.name), &1.default})
     validate!(defaults, properties)
+    verb = &verb!(&1, Keyword.get(opts, :domains, [module]), module)
 
     moments =
       Map.new(scenes, fn scene ->
@@ -84,8 +86,8 @@ defmodule Moments.Manifest do
          %{
            "description" => scene.description,
            "projection" => Map.put(state, "route", route),
-           "checks" => checks(scene.checks, properties),
-           "steps" => steps(scene.steps, scene.checks),
+           "checks" => checks(scene.checks, properties, verb),
+           "steps" => steps(scene.steps, scene.checks, verb),
            "source" => source(scene, module, Keyword.get(opts, :source_root, File.cwd!()))
          }
          |> parent(scene.from)
@@ -179,7 +181,50 @@ defmodule Moments.Manifest do
     end
   end
 
-  defp checks(checks, properties) do
+  # A verb is named `type.verb`, the way records list what they offer and
+  # VerbGate keys its control; only a verb the resource declares is accepted.
+  defp verb!({resource, name}, domains, module) when is_atom(resource) and is_atom(name) do
+    unless Code.ensure_loaded?(Mana.Verbs) and Code.ensure_loaded?(Mana.Entity),
+      do: raise(ArgumentError, "verb steps and checks need Mana.Verbs (mana_core)")
+
+    resource = verb_resource!(resource, domains, module)
+
+    unless Mana.Verbs in Spark.extensions(resource) and
+             Enum.any?(apply(Mana.Verbs, :declared, [resource]), &(&1.name == name)),
+           do: raise(ArgumentError, "#{inspect(resource)} declares no verb #{inspect(name)}")
+
+    "#{apply(Mana.Entity, :type, [resource])}.#{name}"
+  end
+
+  defp verb!(_reference, _domains, _module),
+    do: raise(ArgumentError, "verb takes {Resource or :type, :verb_name}")
+
+  defp verb_resource!(resource, domains, module) do
+    if Code.ensure_loaded?(resource) and Ash.Resource.Info.resource?(resource) do
+      resource
+    else
+      app = Application.get_application(module)
+      domains = Enum.uniq(domains ++ ((app && Application.get_env(app, :ash_domains, [])) || []))
+      type = to_string(resource)
+
+      matches =
+        for domain <- domains,
+            Code.ensure_loaded?(domain),
+            Spark.Dsl.is?(domain, Ash.Domain),
+            candidate <- Ash.Domain.Info.resources(domain),
+            apply(Mana.Entity, :type, [candidate]) == type,
+            uniq: true,
+            do: candidate
+
+      case matches do
+        [found] -> found
+        [] -> raise(ArgumentError, "no resource of type #{inspect(resource)} in #{inspect(domains)}")
+        _ -> raise(ArgumentError, "several resources have type #{inspect(resource)}; name the module")
+      end
+    end
+  end
+
+  defp checks(checks, properties, verb) do
     if length(checks) > 64, do: raise(ArgumentError, "at most 64 checks per moment")
     names = Enum.map(checks, & &1.name)
     if length(names) != length(Enum.uniq(names)), do: raise(ArgumentError, "duplicate check name")
@@ -207,7 +252,12 @@ defmodule Moments.Manifest do
            !(is_boolean(check.equals) or is_number(check.equals) or is_binary(check.equals)),
          do: raise(ArgumentError, "check equals must be a scalar")
 
+      if (check.kind in [:offered, :not_offered]) != not is_nil(check.verb) or
+           (check.verb && (field || match)),
+         do: raise(ArgumentError, "offered and not_offered checks take a verb, and only a verb")
+
       %{"name" => to_string(check.name), "kind" => to_string(check.kind)}
+      |> then(fn value -> if check.verb, do: Map.put(value, "verb", verb.(check.verb)), else: value end)
       |> then(fn value ->
         if check.scope == :step, do: Map.put(value, "scope", "step"), else: value
       end)
@@ -218,21 +268,23 @@ defmodule Moments.Manifest do
     end)
   end
 
-  defp steps(steps, checks) do
+  @criteria [:ui_equals, :backend_equals, :offered, :not_offered]
+
+  defp steps(steps, checks, verb) do
     names = Enum.map(steps, & &1.name)
 
     if length(steps) > 32 or length(names) != length(Enum.uniq(names)),
       do: raise(ArgumentError, "journeys require at most 32 uniquely named steps")
 
     for check <- checks, check.scope == :step do
-      unless check.kind in [:ui_equals, :backend_equals] and
+      unless check.kind in @criteria and
                Enum.any?(steps, &(check.name in &1.until)),
              do: raise(ArgumentError, "step checks must be observed by a declared step")
     end
 
     Enum.map(steps, fn step ->
       gestures =
-        [tap: step.tap, fill: step.fill, reveal: step.reveal, back: step.back, swipe: step.swipe, long_press: step.long_press, submit: step.submit]
+        [tap: step.tap, fill: step.fill, reveal: step.reveal, back: step.back, swipe: step.swipe, long_press: step.long_press, submit: step.submit, verb: step.verb]
         |> Enum.reject(fn {_, value} -> value in [nil, false] end)
 
       {kind, target} =
@@ -241,8 +293,12 @@ defmodule Moments.Manifest do
           [{:back, true}] when is_nil(step.from) -> {"back", "system.back"}
           [{:reveal, key}] when is_nil(step.from) -> {"reveal", key}
           [{kind, key}] when kind in [:tap, :swipe, :long_press, :submit] and is_binary(key) -> {to_string(kind), key}
-          _ -> raise(ArgumentError, "step requires exactly one of tap, fill/from, reveal, back, swipe, long_press or submit")
+          [{:verb, reference}] when is_nil(step.from) -> {"tap", "verb:" <> verb.(reference)}
+          _ -> raise(ArgumentError, "step requires exactly one of tap, fill/from, reveal, back, swipe, long_press, submit or verb")
         end
+
+      if step.on && is_nil(step.verb), do: raise(ArgumentError, "on names the record of a verb step")
+      input = step.from || step.on
 
       unless (kind == "swipe") == not is_nil(step.direction),
         do: raise(ArgumentError, "swipe requires a direction, and only swipe takes one")
@@ -251,14 +307,14 @@ defmodule Moments.Manifest do
         is_binary(value) and Regex.match?(~r/^[a-zA-Z0-9_.:-]{1,160}$/, value)
       end
 
-      unless valid.(target) and (is_nil(step.from) or valid.(step.from)),
+      unless valid.(target) and (is_nil(input) or valid.(input)),
         do: raise(ArgumentError, "step requires bounded widget keys and input references")
 
       unless length(step.until) in 0..32 and
                Enum.all?(step.until, fn name ->
                  Enum.any?(
                    checks,
-                   &(&1.name == name and &1.kind in [:ui_equals, :backend_equals])
+                   &(&1.name == name and &1.kind in @criteria)
                  )
                end),
              do:
@@ -274,7 +330,10 @@ defmodule Moments.Manifest do
         "until" => Enum.map(step.until, &to_string/1)
       }
       |> then(fn value ->
-        if step.from, do: Map.put(value, "inputRef", step.from), else: value
+        if input, do: Map.put(value, "inputRef", input), else: value
+      end)
+      |> then(fn value ->
+        if step.verb, do: Map.put(value, "verb", String.replace_prefix(target, "verb:", "")), else: value
       end)
       |> then(fn value ->
         if step.direction, do: Map.put(value, "direction", to_string(step.direction)), else: value

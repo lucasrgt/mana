@@ -6,10 +6,12 @@ import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
+import 'package:mana_primitives/mana_primitives.dart' show MomentAffordances;
 
 import 'moment_restartable.dart';
 import 'rendered_tree.dart';
 import 'moment_gestures.dart';
+import 'action_trace.dart';
 import 'restart_frames.dart';
 import 'timing.dart';
 
@@ -32,7 +34,9 @@ final class MomentController extends ChangeNotifier {
     required this.navigate,
     this.resolveRoute,
     http.Client? client,
-  }) : _client = client ?? http.Client();
+  }) : _client = client ?? http.Client() {
+    MomentAffordances.addListener(_offersChanged);
+  }
 
   final void Function(String route) navigate;
   final String Function(Map<String, dynamic> projection)? resolveRoute;
@@ -55,6 +59,24 @@ final class MomentController extends ChangeNotifier {
   String? _reportedBlocker;
   bool _blockerScheduled = false;
   bool _supportsBlocker = false;
+  Map<String, dynamic>? _reported;
+  bool _offersScheduled = false;
+
+  // What the screen offers can change while its projection stays the same (a
+  // row's action appears once its record loads): report again so `offered`
+  // checks see it.
+  void _offersChanged() {
+    if (_disposed || _offersScheduled || _reported == null) return;
+    _offersScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _offersScheduled = false;
+      final value = _reported;
+      if (value != null && !(_pending?.isActive ?? false)) {
+        unawaited(_send('observe', revision, value));
+      }
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
 
   void setBlocker(Object owner, MomentBlockReason? reason) {
     if (_disposed) return;
@@ -169,11 +191,13 @@ final class MomentController extends ChangeNotifier {
         'revision': atRevision,
         'client': clientId,
         'projection': value,
+        if (MomentAffordances.enabled) 'offered': MomentAffordances.offered,
       }),
     );
     if (response.statusCode != 200) {
       throw StateError('Post-compile frame observation rejected');
     }
+    if (atRevision == revision) _reported = value;
     lastError = null;
   }
 
@@ -192,6 +216,7 @@ final class MomentController extends ChangeNotifier {
       throw StateError('Moment navigation must stay within the application');
     }
     _pending?.cancel();
+    _reported = null;
     MomentTiming.mark(MomentMark.momentReceived);
     revision = next;
     projection = nextProjection;
@@ -324,12 +349,14 @@ final class MomentController extends ChangeNotifier {
           'client': clientId,
           'sequence': ++_sequence,
           'projection': value,
+          if (MomentAffordances.enabled) 'offered': MomentAffordances.offered,
           if (op == 'observe') 'timing': MomentTiming.snapshot(),
         }),
       );
       if (response.statusCode != 200) {
         throw StateError('Draft not saved: ${response.statusCode}');
       }
+      if (atRevision == revision) _reported = value;
       lastError = null;
     } on Object catch (error) {
       if (!_disposed) lastError = error.toString();
@@ -339,6 +366,7 @@ final class MomentController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    MomentAffordances.removeListener(_offersChanged);
     _pending?.cancel();
     _restartFrames.dispose();
     _frameReaders.clear();
@@ -442,6 +470,9 @@ final class _MomentHostState extends State<MomentHost> {
 
   void _connect() {
     if (!momentsBuild || !momentsEnabled) return;
+    MomentAffordances.enable(
+      performing: (identity) => MomentActionTrace.current?.verb = identity,
+    );
     final endpoint = Uri.parse(MomentRuntime.bridgeUrl);
     final token = MomentRuntime.bridgeToken;
     final controller = _controller = MomentController(

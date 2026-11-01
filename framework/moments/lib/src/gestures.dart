@@ -249,7 +249,8 @@ final class GestureChannel {
         } on Object {
           throw const MomentsError('Local input reference unavailable');
         }
-        resolvedTarget = '$target$suffix';
+        // A verb key names its record after a colon: `verb:booking.pay:<id>`.
+        resolvedTarget = target.startsWith('verb:') ? '$target:$suffix' : '$target$suffix';
         if (!_target.hasMatch(resolvedTarget)) throw const MomentsError('Local input reference unavailable');
       }
       if (kind == 'fill') {

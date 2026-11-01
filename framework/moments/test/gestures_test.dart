@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mana/mana.dart' show uuidV4;
+import 'package:moments/src/action_evidence.dart';
 import 'package:moments/src/check.dart';
 import 'package:moments/src/errors.dart';
 import 'package:moments/src/gestures.dart';
@@ -29,7 +30,8 @@ final class State implements GestureMoments {
   @override
   bool inputAllowed(String reference, String target, [String kind = 'fill']) => kind == 'fill'
       ? reference == 'fixture.password' && target == 'secret-field'
-      : reference == 'fixture.item' && target == 'item-';
+      : (reference == 'fixture.item' && target == 'item-') ||
+            (reference == 'fixture.booking' && target == 'verb:booking.pay');
 }
 
 typedef Answer = ({int status, Map<String, Object?>? data});
@@ -273,6 +275,102 @@ void main() {
     expect(unsafe.channel.pending(), isFalse);
   });
 
+  test('a verb tap with a declared record aims at that record\'s control', () async {
+    final f = await Fixture.start(resolveInput: (_) => '42');
+    final input = {...f.input(), 'target': 'verb:booking.pay', 'inputRef': 'fixture.booking'};
+    final action = f.request('tap', input);
+    final delivered = await f.request('next?client=runtime');
+    expect(delivered.data!['target'], 'verb:booking.pay:42');
+    await f.request('result', {...input, 'outcome': 'dispatched'});
+    expect((await action).data!['status'], 'dispatched');
+  });
+
+  test('a verb step taps its verb key and may wait for what the screen offers', () {
+    final step = {
+      'name': 'pay',
+      'kind': 'tap',
+      'target': 'verb:booking.pay',
+      'verb': 'booking.pay',
+      'until': <Object?>[],
+    };
+    final checks = [
+      {'name': 'paid', 'kind': 'not_offered', 'verb': 'booking.pay'},
+    ];
+    validateSteps({
+      'steps': [step],
+      'checks': checks,
+    });
+    for (final wrong in [
+      {...step, 'target': 'verb:booking.cancel'},
+      {...step, 'kind': 'long_press'},
+      {...step, 'verb': 'booking.pay:42', 'target': 'verb:booking.pay:42'},
+    ]) {
+      expect(
+        () => validateSteps({
+          'steps': [wrong],
+          'checks': checks,
+        }),
+        throwsA(isA<JourneyError>()),
+        reason: '$wrong',
+      );
+    }
+    validateChecks(checks, null);
+    for (final wrong in [
+      {'name': 'paid', 'kind': 'offered'},
+      {'name': 'paid', 'kind': 'offered', 'verb': 'pay'},
+      {'name': 'paid', 'kind': 'offered', 'verb': 'booking.pay', 'field': 'page', 'equals': 1},
+      {'name': 'paid', 'kind': 'ui_equals', 'field': 'page', 'equals': 1, 'verb': 'booking.pay'},
+    ]) {
+      expect(() => validateChecks([wrong], null), throwsA(anything), reason: '$wrong');
+    }
+  });
+
+  test('offered checks read the verbs the mounted controls reported, any record or none', () {
+    const checks = [
+      {'name': 'payable', 'kind': 'offered', 'verb': 'booking.pay'},
+      {'name': 'kept', 'kind': 'not_offered', 'verb': 'booking.cancel'},
+    ];
+    List<Object?> statuses(Object? offered) => [
+      for (final c in evaluateChecks(
+        checks,
+        expected: const {},
+        observed: const {},
+        properties: null,
+        backend: null,
+        offered: offered,
+      ))
+        c['status'],
+    ];
+    expect(statuses(['booking.pay:42', 'booking.payout']), ['passed', 'passed']);
+    expect(statuses(['booking.pay', 'booking.cancel:7']), ['passed', 'failed']);
+    expect(statuses(['booking.payout']), ['failed', 'passed']);
+    expect(statuses(null), ['unavailable', 'unavailable']);
+    final outcome = evaluateChecks(
+      checks,
+      expected: const {},
+      observed: const {},
+      properties: null,
+      backend: null,
+      offered: ['booking.pay:42'],
+    ).first;
+    expect(outcome['verb'], 'booking.pay');
+    expect(outcome['observed'], ['booking.pay:42']);
+  });
+
+  test('an action receipt may name the verb its gesture ran, and nothing else', () {
+    final receipt = {
+      'version': 1,
+      'gesture': uuidV4(),
+      'request': 'c' * 32,
+      'truncated': false,
+      'scope': 'request-actions-only',
+      'coverage': 'not-established',
+      'actions': <Object?>[],
+    };
+    expect(actionReceipt({...receipt, 'verb': 'booking.pay:42'})['verb'], 'booking.pay:42');
+    expect(() => actionReceipt({...receipt, 'verb': 'DROP TABLE'}), throwsA(isA<MomentsError>()));
+  });
+
   test('explicit reveal uses the same single-use runtime fence without resolving private input', () async {
     final f = await Fixture.start(resolveInput: (_) => throw const MomentsError('Reveal must not resolve credentials'));
     final input = f.input(), action = f.request('reveal', input);
@@ -437,6 +535,62 @@ void main() {
     expect(taps, 1);
     expect(reads, 3);
     expect(((report['steps']! as List).first as Map)['status'], 'passed');
+  });
+
+  test('a verb step\'s receipt names its verb, and offered checks settle on the next report', () async {
+    final verbScene = {
+      'steps': [
+        {
+          'name': 'pay',
+          'kind': 'tap',
+          'target': 'verb:booking.pay',
+          'verb': 'booking.pay',
+          'until': ['paid'],
+        },
+      ],
+      'checks': [
+        {'name': 'paid', 'kind': 'not_offered', 'verb': 'booking.pay', 'scope': 'step'},
+        {'name': 'cancellable', 'kind': 'offered', 'verb': 'booking.cancel'},
+      ],
+    };
+    var looks = 0;
+    final report = <String, Object?>{};
+    List<String> offered() => looks >= 2 ? ['booking.cancel:1'] : ['booking.cancel:1', 'booking.pay:1'];
+    Future<Map<String, Object?>> request(String path, [Map<String, Object?>? data]) async {
+      if (path == '/journey/tap') return {...data!, 'status': 'dispatched', 'transport': 'flutter-pointer'};
+      const projection = {'route': '/bookings'};
+      if (path == '/moments/look') {
+        looks++;
+        return {
+          'revision': 'r',
+          'observed': {'client': 'c', 'projection': projection, 'offered': offered()},
+        };
+      }
+      return {
+        'moment': {'revision': 'r'},
+        'screen': {
+          'lastReported': {'matchesRevision': true, 'projection': projection},
+        },
+      };
+    }
+
+    validateSteps(verbScene);
+    await executeSteps(
+      scene: verbScene,
+      request: request,
+      revision: 'r',
+      client: 'c',
+      expected: {'route': '/bookings'},
+      properties: null,
+      evaluate: evaluateChecks,
+      report: report,
+      poll: 1,
+    );
+    final receipt = (report['steps']! as List).single as Map;
+    expect(receipt['verb'], 'booking.pay');
+    expect(receipt['status'], 'passed');
+    expect(((receipt['checks']! as List).single as Map)['verb'], 'booking.pay');
+    expect(looks, 2);
   });
 
   test('a lost gesture receipt ends the journey without a second attempt', () async {

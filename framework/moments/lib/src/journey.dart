@@ -14,7 +14,44 @@ final class JourneyError implements Exception {
 }
 
 final _target = RegExp(r'^[a-zA-Z0-9_.:-]{1,160}$');
-const _criteria = ['ui_equals', 'backend_equals'];
+
+/// What a journey can wait for: criteria observed after a gesture.
+const criteria = ['ui_equals', 'backend_equals', 'offered', 'not_offered'];
+
+/// A verb as records list what they offer and `VerbGate` keys its control:
+/// `booking.pay`, or `booking.pay:<id>` for one record's.
+final verbIdentity = RegExp(r'^[a-z][a-z0-9_-]{0,63}\.[a-z][a-z0-9_]{0,63}(?::[A-Za-z0-9_.-]{1,64})?$');
+
+/// A `verb:` step's or check's verb: `type.verb`, without a record.
+bool isVerb(Object? value) => value is String && verbIdentity.hasMatch(value) && !value.contains(':');
+
+bool _offers(Map check) => check['kind'] == 'offered' || check['kind'] == 'not_offered';
+
+/// An `offered` / `not_offered` check against the verbs the screen's mounted
+/// controls reported (`type.verb` or `type.verb:<id>`).
+Map<String, Object?> offeredOutcome(Map check, Object? offered) {
+  final verb = check['verb']! as String, wanted = check['kind'] == 'offered';
+  if (offered is! List) {
+    return {
+      'name': check['name'],
+      'status': 'unavailable',
+      'verb': verb,
+      'reason': 'The screen did not report what its controls offer',
+    };
+  }
+  final controls = [
+    for (final identity in offered.cast<String>())
+      if (identity == verb || identity.startsWith('$verb:')) identity,
+  ];
+  return {
+    'name': check['name'],
+    'status': controls.isNotEmpty == wanted ? 'passed' : 'failed',
+    'verb': verb,
+    'expected': wanted ? 'offered' : 'not-offered',
+    'observed': controls.take(16).toList(),
+    'meaning': 'Verbs the mounted controls (VerbGate) offered in the active UI; not proof the server would accept them.',
+  };
+}
 
 void validateSteps(Map<String, Object?> scene) {
   final checks = scene['checks'] ?? const [];
@@ -25,11 +62,11 @@ void validateSteps(Map<String, Object?> scene) {
   }
   final declared = checks.cast<Map>();
   final stepList = steps.cast<Map>();
-  if (!declared.any((c) => c['scope'] != 'step' && _criteria.contains(c['kind']))) {
+  if (!declared.any((c) => c['scope'] != 'step' && criteria.contains(c['kind']))) {
     throw const JourneyError('A journey requires an observed UI or backend criterion');
   }
   for (final check in declared.where((c) => c['scope'] == 'step')) {
-    if (!_criteria.contains(check['kind']) ||
+    if (!criteria.contains(check['kind']) ||
         !stepList.any((s) => (s['until'] as List?)?.contains(check['name']) ?? false)) {
       throw const JourneyError('Step checks must be observed by a declared step');
     }
@@ -37,7 +74,7 @@ void validateSteps(Map<String, Object?> scene) {
   final names = <String>{};
   for (final (index, step) in stepList.indexed) {
     final until = step['until'];
-    final kind = step['kind'], inputRef = step['inputRef'];
+    final kind = step['kind'], inputRef = step['inputRef'], verb = step['verb'];
     final invalid =
         step['name'] is! String ||
         (step['name'] as String).isEmpty ||
@@ -48,10 +85,11 @@ void validateSteps(Map<String, Object?> scene) {
         ((kind == 'back') != (step['target'] == backTarget)) ||
         !_target.hasMatch('${step['target'] ?? ''}') ||
         ((kind == 'fill' || inputRef != null) && !_target.hasMatch('${inputRef ?? ''}')) ||
+        (verb != null && (kind != 'tap' || !isVerb(verb) || step['target'] != 'verb:$verb')) ||
         until is! List ||
         (kind == 'tap' && until.isEmpty && index != stepList.length - 1) ||
         until.length > 32 ||
-        !until.every((name) => declared.any((c) => c['name'] == name && _criteria.contains(c['kind'])));
+        !until.every((name) => declared.any((c) => c['name'] == name && criteria.contains(c['kind'])));
     if (invalid) throw const JourneyError('Invalid journey target, input reference or postcondition');
     names.add(step['name'] as String);
   }
@@ -103,6 +141,7 @@ Future<void> executeSteps({
       'status': 'unavailable',
       'dispatch': 'unknown',
       'until': step['until'],
+      'verb': ?step['verb'],
     };
     receipts.add(receipt);
     double? dispatchedAt;
@@ -161,13 +200,17 @@ Future<void> executeSteps({
             !deepEqual(observed?['projection'], lastReported?['projection'])) {
           if (nowMs() >= deadline) throw const JourneyError('UI did not settle after gesture');
         } else {
-          final outcomes = evaluate(
-            checks,
+          final others = evaluate(
+            checks.where((c) => !_offers(c)).toList(),
             expected: expected,
             observed: observed!['projection'],
             properties: properties,
             backend: inspection['backend'],
-          );
+          ).iterator;
+          final outcomes = [
+            for (final check in checks)
+              if (_offers(check)) offeredOutcome(check, observed['offered']) else if (others.moveNext()) others.current,
+          ];
           receipt['checks'] = outcomes;
           receipt['status'] = outcomes.any((c) => c['status'] == 'unavailable')
               ? 'unavailable'

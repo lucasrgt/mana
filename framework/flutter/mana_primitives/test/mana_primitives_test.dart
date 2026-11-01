@@ -305,4 +305,34 @@ void main() {
       expect((both.retry, both.queues), (0, false));
     },
   );
+
+  test('controls offer verbs only while Moments keep them, each once', () {
+    const pay = ManaVerb(resource: 'booking', name: 'pay', action: 'pay');
+    expect(pay.identity(), 'booking.pay');
+    expect(pay.identity('42'), 'booking.pay:42');
+    MomentAffordances.offer(pay.identity());
+    expect(MomentAffordances.offered, isEmpty);
+    final performed = <String>[];
+    var changes = 0;
+    void changed() => changes++;
+    MomentAffordances.enable(performing: performed.add);
+    MomentAffordances.addListener(changed);
+    addTearDown(() {
+      MomentAffordances.removeListener(changed);
+      MomentAffordances.disable();
+    });
+    final one = MomentAffordances.offer(pay.identity('42'));
+    final two = MomentAffordances.offer(pay.identity('42'));
+    final row = MomentAffordances.offer(pay.identity('7'));
+    expect(MomentAffordances.offered, ['booking.pay:42', 'booking.pay:7']);
+    one();
+    one();
+    expect(MomentAffordances.offered, ['booking.pay:42', 'booking.pay:7']);
+    two();
+    row();
+    expect(MomentAffordances.offered, isEmpty);
+    expect(changes, 4);
+    MomentAffordances.performing('booking.pay:42');
+    expect(performed, ['booking.pay:42']);
+  });
 }

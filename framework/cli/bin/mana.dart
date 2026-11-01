@@ -35,6 +35,8 @@ mana eval list | run <name> [--agent claude|codex] [--keep]
   and checks whether it used the framework as intended (checks.toml) → AVP verdict.
 mana intent list | show <id> | approve <id> --by <name> | check <id>
   An ask as situations and criteria (intents/<id>.toml), frozen on approval, checked as an AVP verdict.
+mana graph [verbs-without-moment | dead-verbs | proves <type.verb> | knob <name> | verb <type.verb>] [--json]
+  The program graph (mix mana.graph) with the verbs each Dart screen refers to.
 mana examples [Module.fun] [--json]
   What each defexample function received and returned in each Moment
   (Mana.Examples), newest first, with what changed since the previous run.
@@ -351,6 +353,8 @@ Future<void> main(List<String> arguments) async {
       return _eval(arguments.skip(1).toList());
     case 'intent':
       return _intent(arguments.skip(1).toList());
+    case 'graph':
+      return _graph(arguments.skip(1).toList());
   }
   try {
     final parser = ArgParser()
@@ -554,6 +558,15 @@ Future<void> _new(List<String> arguments) async {
       manaRef: values.option('mana-ref'),
       setup: values.flag('setup'),
     );
+  } on ManaFailure catch (error) {
+    stderr.writeln(error.message);
+    exitCode = 1;
+  }
+}
+
+Future<void> _graph(List<String> arguments) async {
+  try {
+    await graph(findProject(), arguments);
   } on ManaFailure catch (error) {
     stderr.writeln(error.message);
     exitCode = 1;

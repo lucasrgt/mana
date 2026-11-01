@@ -3,6 +3,7 @@ export 'src/assets.dart';
 export 'src/capabilities.dart';
 export 'src/failure.dart';
 export 'src/features.dart';
+export 'src/graph.dart';
 export 'src/manifest.dart';
 export 'src/process.dart';
 export 'src/client.dart';

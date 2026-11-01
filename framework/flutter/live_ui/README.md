@@ -54,6 +54,18 @@ credentials, navigation or authorisation. While a block is active, the controlle
 refuses frame evidence and captures; clearing the reason does not confirm
 restoration. See [resume blocked by the session](../../moments/README.md#resume-blocked-by-the-session).
 
+## Controls that know their verb
+
+In a Moments build, `MomentHost` turns on `MomentAffordances` (mana_primitives):
+every mounted `VerbGate` (mana_command) records the verb it offers, as
+`type.verb` or `type.verb:<recordId>`, and each screen report carries that list
+as `offered`. When the list changes and the projection does not, the last
+projection is reported again. The gesture driver reads a target
+`verb:<type>.<verb>` with no record as any record's control, the first in tree
+order; `verb:<type>.<verb>:<id>` is that record's. A gesture's
+`MomentActionTrace` names its verb (from the target, or from `runVerb` as it
+runs) and forwards it as `verb` with each action receipt.
+
 ## Running actions
 
 The Moments package offers no Command or Result engine. A slice can use

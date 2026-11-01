@@ -209,6 +209,25 @@ void main() {
     expect(reported.containsKey('projection'), isFalse);
   });
 
+  test('a report carries the verbs its controls offer, and drops a malformed list', () async {
+    final f = Fixture('moment-offered-');
+    await f.start(initialName: 'inbox');
+    final revision = (await f.moments('changes?client=first')).data['revision'];
+    final message = {
+      'revision': revision,
+      'client': 'first',
+      'projection': {...projection, 'ids': 'id', 'read': 'no'},
+    };
+    Future<Object?> offered(Object? list) async {
+      expect((await f.moments('observe', {...message, 'offered': list})).status, 200);
+      return ((await f.moments('look')).data['observed']! as Map)['offered'];
+    }
+
+    expect(await offered(['booking.cancel:7', 'booking.pay']), ['booking.cancel:7', 'booking.pay']);
+    expect(await offered(['booking.pay', 'not a verb']), isNull);
+    expect(await offered(List.filled(257, 'booking.pay')), isNull);
+  });
+
   test('post-compile frame challenges reject old reports, wrong owners, duplicates and undeclared fields', () async {
     final f = Fixture('moment-frame-');
     final bridge = await f.start(initialName: 'inbox');

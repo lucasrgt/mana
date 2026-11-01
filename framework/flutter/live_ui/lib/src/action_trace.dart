@@ -4,15 +4,20 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import 'configuration.dart';
-import 'moment_launch.dart' show MomentKnobScope;
+import 'moment_launch.dart' show MomentDataScope, MomentKnobScope;
 
 /// Positive observations from gesture-originated HTTP requests, not coverage.
 /// Detached jobs and requests scheduled outside this zone are not attributed.
 final class MomentActionTrace {
   static const enabled = momentsBuild;
-  MomentActionTrace._(this.gesture, this._emit);
+  MomentActionTrace._(this.gesture, this._emit, this.verb);
   final String gesture;
   final Future<void> Function(Map<String, dynamic>) _emit;
+
+  /// The verb the gesture performs (`booking.pay:<id>`): its target's, when
+  /// it aimed at a verb key, or the one a control named as it ran
+  /// (`MomentAffordances.performing`). Its receipts carry it as `verb`.
+  String? verb;
   static final Object _key = Object();
   static MomentActionTrace? get current =>
       momentsBuild ? Zone.current[_key] as MomentActionTrace? : null;
@@ -20,8 +25,12 @@ final class MomentActionTrace {
   static Future<T> run<T>(
     String gesture,
     Future<void> Function(Map<String, dynamic>) emit,
-    Future<T> Function() action,
-  ) => runZoned(action, zoneValues: {_key: MomentActionTrace._(gesture, emit)});
+    Future<T> Function() action, {
+    String? verb,
+  }) => runZoned(
+    action,
+    zoneValues: {_key: MomentActionTrace._(gesture, emit, verb)},
+  );
 
   /// Never attach development metadata to a different origin or a release API.
   static bool allows(Uri request, Uri api, {bool backendEnabled = false}) =>
@@ -32,7 +41,8 @@ final class MomentActionTrace {
       request.origin == api.origin &&
       request.userInfo.isEmpty;
 
-  /// Sends every request with the Moment's `x-mana-knob-scope`, and each one
+  /// Sends every request with the Moment's `x-mana-knob-scope` and
+  /// `x-mana-data-scope`, and each one
   /// made inside a gesture with `x-mana-gesture`, recording the backend's
   /// `x-mana-actions` receipt — only to [api] on
   /// loopback, and only in builds defined with `MANA_ACTION_TRACE=true`
@@ -48,6 +58,11 @@ final class MomentActionTrace {
           if (scope != null &&
               allows(options.uri, api, backendEnabled: backendEnabled)) {
             options.headers['x-mana-knob-scope'] = scope;
+          }
+          final data = MomentDataScope.current;
+          if (data != null &&
+              allows(options.uri, api, backendEnabled: backendEnabled)) {
+            options.headers['x-mana-data-scope'] = data;
           }
           final trace = current;
           if (trace != null &&
@@ -90,7 +105,9 @@ final class MomentActionTrace {
           value['coverage'] != 'not-established') {
         return;
       }
-      await _emit(value).timeout(const Duration(seconds: 2));
+      final named = verb;
+      await _emit(named == null ? value : {...value, 'verb': named})
+          .timeout(const Duration(seconds: 2));
     } on Object {
       // Observability must not turn an accepted business response into failure.
       // Missing receipts remain missing evidence, never proof of no actions.
