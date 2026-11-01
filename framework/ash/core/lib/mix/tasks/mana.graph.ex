@@ -43,7 +43,7 @@ defmodule Mix.Tasks.Mana.Graph do
       end
 
     cond do
-      opts[:json] or query == [] -> Mix.shell().info(Jason.encode!(answer, pretty: true))
+      opts[:json] == true or query == [] -> Mix.shell().info(Jason.encode!(answer, pretty: true))
       is_list(answer) -> Enum.each(answer, &Mix.shell().info(if(is_binary(&1), do: &1, else: inspect(&1))))
       true -> Mix.shell().info(inspect(answer, pretty: true))
     end
