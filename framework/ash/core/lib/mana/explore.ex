@@ -634,7 +634,7 @@ defmodule Mana.Explore do
     if kind in [:forbidden, :unavailable, :raised] and :offer_honest in ctx.properties do
       violate(state, :offer_honest, resource, verb.name, move.actor, "offered, then #{kind_text(kind)}: #{detail}")
     else
-      bump(state, :inconclusive, {:refused, kind})
+      bump(state, :inconclusive, {:refused, kind, "#{Mana.Entity.type(resource)}.#{verb.name}", String.slice(detail, 0, 120)})
     end
   end
 
@@ -1141,7 +1141,13 @@ defmodule Mana.Explore do
       for {resource, %{never: [_ | _] = never}} <- report.coverage,
           do: "· #{inspect(resource)} never reached: #{Enum.join(never, ", ")}"
 
-    Enum.join([head] ++ if(violations == [], do: ["✓ no property broken"], else: violations) ++ never, "\n")
+    # Offered, then refused by a domain rule or an input: not a broken
+    # promise by itself, but what to look at when a verb is never reached.
+    refused =
+      for {{:refused, kind, verb, detail}, n} <- Enum.sort(report.inconclusive), kind in [:domain, :invalid],
+          do: "· #{verb} offered, refused #{n}× (#{kind}): #{detail}"
+
+    Enum.join([head] ++ if(violations == [], do: ["✓ no property broken"], else: violations) ++ never ++ refused, "\n")
   end
 
   @doc false
