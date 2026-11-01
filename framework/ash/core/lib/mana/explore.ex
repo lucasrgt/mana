@@ -326,8 +326,10 @@ defmodule Mana.Explore do
   # Time moves by an offset, but a record created or changed after the clock
   # moved has a real timestamp: its own clock starts from the offset of the
   # moment it was last seen changing.
+  # Any change counts, not only a timestamp: one with second precision does
+  # not move when two moves land in the same second.
   defp stamp(stamps, record, offset) do
-    written = Map.get(record, :updated_at) || Map.get(record, :inserted_at)
+    written = record |> Map.take(Enum.map(Ash.Resource.Info.attributes(record.__struct__), & &1.name)) |> :erlang.phash2()
 
     case Map.get(stamps, record.id) do
       {^written, _} -> stamps
