@@ -180,9 +180,30 @@ defmodule Mana.Explore do
   defp default_reset(resources, _run) do
     for resource <- resources do
       if Ash.DataLayer.data_layer(resource) == Ash.DataLayer.Ets do
-        Ash.DataLayer.Ets.stop(resource)
+        empty_ets(resource)
       else
         raise ArgumentError, "#{inspect(resource)} is not on ETS; give Mana.Explore a reset: function (e.g. a fresh Mana.Snapshot scope)"
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
+  Empties an ETS resource and waits until its table is gone: `Ash.DataLayer.Ets.stop/1`
+  only signals the table's owner, and a create right after it can still
+  reach the table being deleted.
+  """
+  def empty_ets(resource) do
+    owner = Process.whereis(Module.concat(Ash.DataLayer.Ets.Info.table(resource), Ash.DataLayer.Ets.TableManager))
+    ref = owner && Process.monitor(owner)
+    Ash.DataLayer.Ets.stop(resource)
+
+    if ref do
+      receive do
+        {:DOWN, ^ref, _, _, _} -> :ok
+      after
+        5_000 -> :ok
       end
     end
 
@@ -412,7 +433,21 @@ defmodule Mana.Explore do
           performable?(ctx, resource, verb),
           do: %{kind: :start, actor: name, resource: resource, verb: verb, parent: nil}
 
-    own ++ started
+    own ++ started ++ from_parents(ctx, state, name, actor)
+  end
+
+  # A collection verb `from: {Parent, field}` is offered by the parent; when
+  # the parent is not explored itself, its records still offer the start.
+  defp from_parents(ctx, state, name, actor) do
+    for resource <- ctx.resources,
+        verb <- Mana.Verbs.declared(resource),
+        verb.collection and verb.from != nil,
+        {parent, _field} = verb.from,
+        parent not in ctx.resources,
+        performable?(ctx, resource, verb.name),
+        record <- records(state, parent),
+        "#{Mana.Entity.type(resource)}.#{verb.name}" in safe_offered(record, actor),
+        do: %{kind: :start, actor: name, resource: resource, verb: verb.name, parent: ref_of(state, parent, record.id)}
   end
 
   defp child_start(ctx, state, name, parent, type, verb) do

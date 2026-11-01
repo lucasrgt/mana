@@ -64,7 +64,7 @@ defmodule Mana.ReplayUndoTest do
   @other %{id: "6f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"}
 
   setup do
-    for r <- Ash.Domain.Info.resources(ReplayTest.Domain), do: Ash.DataLayer.Ets.stop(r)
+    for r <- Ash.Domain.Info.resources(ReplayTest.Domain), do: Mana.Explore.empty_ets(r)
     on_exit(fn -> Application.delete_env(:mana_core, :replay_test_bonus) end)
   end
 
@@ -146,7 +146,7 @@ defmodule Mana.ReplayUndoTest do
       assert Mana.Undo.last(frozen, @me, within: {1, :minute})
 
       [entry | _] = ReplayTest.Entry |> Ash.Query.sort(at: :desc) |> Ash.read!(authorize?: false)
-      Ash.DataLayer.Ets.stop(ReplayTest.Entry)
+      Mana.Explore.empty_ets(ReplayTest.Entry)
       Ash.Seed.seed!(ReplayTest.Entry, entry |> Map.from_struct() |> Map.take([:id, :subject_type, :subject_id, :action, :verb, :actor_id, :actor_kind, :params, :before, :after, :outcome, :summary]) |> Map.put(:at, DateTime.add(DateTime.utc_now(), -3600, :second)))
       assert Mana.Undo.last(frozen, @me, within: {1, :minute}) == nil
     end

@@ -335,6 +335,49 @@ defmodule ExploreTest.Serial do
   end
 end
 
+defmodule ExploreTest.Shelf do
+  @moduledoc false
+  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:open, :boolean, default: true, public?: true)
+  end
+
+  actions do
+    defaults([:read, create: [:open]])
+  end
+
+  verbs do
+  end
+end
+
+defmodule ExploreTest.Book do
+  @moduledoc false
+  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:shelf_id, :uuid, public?: true)
+    attribute(:lent, :boolean, default: false, public?: true)
+  end
+
+  relationships do
+    belongs_to(:shelf, ExploreTest.Shelf, define_attribute?: false, source_attribute: :shelf_id)
+  end
+
+  actions do
+    defaults([:read])
+    create(:shelve, accept: [:shelf_id])
+    update(:lend, change: set_attribute(:lent, true))
+  end
+
+  verbs do
+    verb(:shelve, collection: true, from: {ExploreTest.Shelf, :shelf_id}, when: expr(open == true))
+    verb(:lend, when: expr(lent == false))
+  end
+end
+
 defmodule ExploreTest.Domain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false
@@ -352,6 +395,8 @@ defmodule ExploreTest.Domain do
     resource(ExploreTest.Entry)
     resource(ExploreTest.Memo)
     resource(ExploreTest.Serial)
+    resource(ExploreTest.Shelf)
+    resource(ExploreTest.Book)
   end
 end
 
@@ -372,6 +417,17 @@ defmodule Mana.ExploreTest do
     assert report.coverage[ExploreTest.Card].never == []
     assert report.moves > 0
     assert Mana.Explore.verdict("cards", report)["outcome"] == "pass"
+  end
+
+  test "a child is started from a parent that is not explored itself" do
+    setup = fn ->
+      Ash.create!(ExploreTest.Shelf, %{open: true})
+      @actors
+    end
+
+    report = Mana.Explore.run(@domains, resources: [ExploreTest.Book], setup: setup, runs: 10, depth: 4, seed: 3)
+    assert report.violations == [], Mana.Explore.format(report)
+    assert report.coverage[ExploreTest.Book].reached == [:lend, :shelve]
   end
 
   test "the affordance graph names each shape and what each actor was offered there" do
@@ -406,7 +462,7 @@ defmodule Mana.ExploreTest do
     report = explore(ExploreTest.Lamp, runs: 40)
     assert [%{property: :inverse_restores, verb: :hide, detail: detail, trace: trace}] = report.violations
     assert detail =~ "color"
-    assert [%{kind: :start}, %{kind: :verb, verb: :hide, then_inverse: true}] = trace
+    assert [%{kind: :start}, %{kind: :verb, verb: :hide, then_inverse: true}] = Enum.map(trace, &Map.take(&1, [:kind, :verb, :then_inverse]))
   end
 
   test "a reconcile rule broken in a reachable state is an invariant violation" do
@@ -460,7 +516,7 @@ defmodule Mana.ExploreTest do
 
     assert %{"property" => "invariant", "moves" => [_ | _]} = Jason.decode!(File.read!(path))
 
-    for resource <- Ash.Domain.Info.resources(ExploreTest.Domain), do: Ash.DataLayer.Ets.stop(resource)
+    for resource <- Ash.Domain.Info.resources(ExploreTest.Domain), do: Mana.Explore.empty_ets(resource)
     records = Mana.Explore.replay_file(path, @domains, @actors)
     assert Enum.any?(Map.values(records), &match?(%ExploreTest.Ticket{status: :closed}, &1))
 

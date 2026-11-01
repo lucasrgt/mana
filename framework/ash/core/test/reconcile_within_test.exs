@@ -3,7 +3,7 @@ defmodule Mana.ReconcileWithinTest do
 
   setup do
     Application.put_env(:mana_core, :deadline_inserter, fn _ -> :ok end)
-    Ash.DataLayer.Ets.stop(ExploreTest.Hold)
+    Mana.Explore.empty_ets(ExploreTest.Hold)
     on_exit(fn -> Application.delete_env(:mana_core, :deadline_inserter) end)
   end
 

@@ -87,7 +87,7 @@ defmodule Mana.SnapshotTest do
     test = self()
 
     combined = fn run ->
-      for r <- Ash.Domain.Info.resources(ExploreTest.Domain), do: Ash.DataLayer.Ets.stop(r)
+      for r <- Ash.Domain.Info.resources(ExploreTest.Domain), do: Mana.Explore.empty_ets(r)
       reset.(run)
       if run != :done, do: send(test, {:scope, @repo.get_dynamic_repo()})
       :ok
