@@ -106,8 +106,8 @@ defmodule Mana.Explore do
   A `reset:` for apps on Postgres: every run gets a fresh `Mana.Snapshot`
   scope cloned from `from` (the migrated base, or a named snapshot; `opts`
   go to `Mana.Snapshot.open/3`), the
-  previous one is dropped, and this process uses it. Set `config :ash,
-  disable_async?: true` where you explore, so no load escapes the scope.
+  previous one is dropped, and this process uses it (exploration turns Ash's
+  async loads off while it runs, so none escapes the scope).
   """
   def snapshot_reset(repo, from \\ :base, opts \\ []) do
     fn run ->
@@ -212,14 +212,23 @@ defmodule Mana.Explore do
 
   # Deadlines would be scheduled as Oban jobs; exploration runs them itself
   # when it moves the clock.
+  # Async loads would run in other processes, outside the run's data scope
+  # and out of its order: exploration is sequential.
   defp with_quiet_deadlines(fun) do
     previous = Application.get_env(:mana_core, :deadline_inserter)
+    async = Application.fetch_env(:ash, :disable_async?)
     Application.put_env(:mana_core, :deadline_inserter, fn _ -> :ok end)
+    Application.put_env(:ash, :disable_async?, true)
 
     try do
       fun.()
     after
       if previous, do: Application.put_env(:mana_core, :deadline_inserter, previous), else: Application.delete_env(:mana_core, :deadline_inserter)
+
+      case async do
+        {:ok, value} -> Application.put_env(:ash, :disable_async?, value)
+        :error -> Application.delete_env(:ash, :disable_async?)
+      end
     end
   end
 
