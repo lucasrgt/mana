@@ -18,6 +18,8 @@ limits and the Moments that prove each journey. The contract for agents is in
 | [`ash/session`](ash/session/README.md) | short sessions and rotating refresh for Flutter clients |
 | [`ash/runtime`](ash/runtime/README.md) | release configuration, edge, metrics and readiness |
 | `ash/br` | Brazilian validations (CPF, CNPJ, license plate) |
+| [`ash/lint`](ash/lint/README.md) | `mana_lint`: Credo checks for Ash and Mana idioms (effects in transaction hooks, N+1, swallowing rescues, …) |
+| [`ash/upgrade`](ash/upgrade/README.md) | `mana_upgrade`: Sourceror codemods to newer Mana idioms, behind `mana upgrade` |
 | **Flutter** (`flutter/`) | |
 | [`flutter/ash_session`](flutter/ash_session/README.md) | session, recovery and Bearer over the generated client |
 | `flutter/mana_command` | stateful commands (`Query`, `RowAction`, `QuietAfterDispose`) and verb gates |

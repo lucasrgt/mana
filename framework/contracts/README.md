@@ -55,6 +55,18 @@ records the failing stage and does not declare the generation complete. That ana
 catches, for example, an operationId change that keeps the HTTP surface but renames the
 Dart method. The app must already have its dependencies resolved.
 
+The pinned generator's dart-dio output has two faults Mana corrects before compiling,
+on the parsed Dart (`package:analyzer`), each edit touching only the characters it
+changes: an import repeated word for word (an operation answering a free-form object
+imports `json_object` twice) is dropped, and a top-level array response declared
+`BuiltList<T>` but read as `BuiltSet` is read as the list it declares, with its
+`ListBuilder<T>` registered in `serializers.dart` (in file-name order, so the output
+does not depend on directory listing order). A read of another shape is left as
+generated; serializers without the expected cascade fail the generation. Custom
+templates were rejected: they would fork whole generator templates for two edits.
+`cli/test/client_test.dart` checks each edit and the bytes of a fixture client
+(`cli/test/fixtures/client`).
+
 ## Evolution policy
 
 The direction is **the existing client against the server's candidate declaration**.
