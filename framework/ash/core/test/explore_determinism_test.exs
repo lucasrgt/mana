@@ -161,6 +161,61 @@ defmodule Mana.ExploreDeterminismTest do
     assert first =~ "status=listed" or first =~ "\"review\""
   end
 
+  # A note whose fields `a` and `b` are atoms made in `order`: a map with
+  # them as keys lists them in that order. Answers the note's inputs drawn
+  # by one seeded run, by field.
+  defp drawn(order) do
+    tag = "n#{System.unique_integer([:positive])}"
+    Enum.each(order, &String.to_atom("#{tag}_#{&1}"))
+    [a, b] = Enum.map([:a, :b], &String.to_existing_atom("#{tag}_#{&1}"))
+    assert Map.keys(%{a => 1, b => 2}) == Enum.map(order, &:"#{tag}_#{&1}")
+
+    note = Module.concat(ExploreDeterminismTest, Macro.camelize(tag))
+    domain = Module.concat(note, Domain)
+
+    Code.eval_quoted(
+      quote do
+        defmodule unquote(note) do
+          use Ash.Resource,
+            domain: unquote(domain),
+            data_layer: Ash.DataLayer.Ets,
+            extensions: [Mana.Verbs]
+
+          attributes do
+            uuid_primary_key(:id)
+            attribute(unquote(a), :string, allow_nil?: false, public?: true)
+            attribute(unquote(b), :string, allow_nil?: false, public?: true)
+          end
+
+          actions do
+            defaults([:read])
+            create(:write, accept: [unquote(a), unquote(b)])
+          end
+
+          verbs do
+            verb(:write, collection: true)
+          end
+        end
+
+        defmodule unquote(domain) do
+          use Ash.Domain, validate_config_inclusion?: false
+
+          resources do
+            resource(unquote(note))
+          end
+        end
+      end
+    )
+
+    Mana.Explore.run([domain], actors: %{host: nil}, runs: 1, depth: 1, seed: 3, shrink: false)
+    assert [written] = Ash.read!(note)
+    %{a: Map.fetch!(written, a), b: Map.fetch!(written, b)}
+  end
+
+  test "the same seed draws the same inputs, whatever order the VM made the fields' names in" do
+    assert drawn([:a, :b]) == drawn([:b, :a])
+  end
+
   test "a deadline falls on the run's clock, not on a stored timestamp" do
     Mana.Explore.run([Domain],
       resources: [Hold],

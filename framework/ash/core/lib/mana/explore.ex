@@ -16,10 +16,11 @@ defmodule Mana.Explore do
   - a probe: an actor tries a verb its record does *not* offer, which the
     server must refuse.
 
-  Inputs come from `Ash.Generator.action_input/3` (`generators:` overrides
-  them per `{Resource, action}`); a field that points at another record
-  (a `belongs_to` source) gets one that exists. After every move it checks
-  what the declarations promise:
+  Inputs are generated from the action's fields' types
+  (`Ash.Type.generator/2`; `generators:` overrides them per `{Resource,
+  action}`); a field that points at another record (a `belongs_to` source)
+  gets one that exists. After every move it checks what the declarations
+  promise:
 
   | property | from | broken when |
   |---|---|---|
@@ -49,7 +50,8 @@ defmodule Mana.Explore do
   the run met them, and records met together (a setup's, a move's side
   effects) are ordered by what they hold, never by a timestamp or an id; a
   deadline after a wait falls on the run's clock, counted from when the run
-  saw the record change. Generated inputs come from the seed; a
+  saw the record change. Generated inputs come from the seed, field by
+  field in the order of their names, whatever code the VM loaded before; a
   `generators:` function that reads the clock or randomness of its own
   makes the run depend on it.
 
@@ -812,21 +814,106 @@ defmodule Mana.Explore do
 
     {generated, state} =
       try do
-        resource
-        |> Ash.Generator.action_input(
-          action.name,
-          Map.merge(Map.new(fixed, fn {k, _} -> {k, nil} end), overrides)
-        )
-        |> StreamData.resize(size)
-        |> StreamData.seeded(seed)
-        |> Enum.at(0)
-        |> then(&{&1, state})
+        overrides = Map.merge(Map.new(fixed, fn {k, _} -> {k, nil} end), overrides)
+        {draw(resource, action, overrides, seed, size), state}
       rescue
         error ->
           {%{}, skip(state, "generating input for #{inspect(resource)}.#{action.name}", error)}
       end
 
     {Map.merge(generated, fixed), %{state | rand: rand}}
+  end
+
+  # Fields are drawn one after another in the order of their names.
+  # `Ash.Generator.action_input/3` draws them in a map's order, and a map of
+  # atom keys lists them in the order the VM first made those atoms: the
+  # same seed drew other inputs once other code had loaded first (migrations
+  # run in the same command). The fields are Ash's: the accepted attributes
+  # and the public arguments but one a `manage_relationship` takes, which
+  # only `generators:` fills; one that may be nil or has a default is
+  # sometimes left out.
+  @left_out :__mana_explore_left_out__
+
+  defp draw(resource, action, overrides, seed, size) do
+    {names, generators} =
+      resource
+      |> field_generators(action, overrides)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.unzip()
+
+    generators
+    |> StreamData.fixed_list()
+    |> StreamData.resize(size)
+    |> StreamData.seeded(seed)
+    |> Enum.at(0)
+    |> then(&Enum.zip(names, &1))
+    |> Enum.reject(&(elem(&1, 1) == @left_out))
+    |> Map.new()
+  end
+
+  defp field_generators(resource, action, overrides) do
+    managed =
+      for %{change: {Ash.Resource.Change.ManageRelationship, opts}} <-
+            Ash.Resource.Info.action_changes(resource, action),
+          do: opts[:argument]
+
+    accepted =
+      for attribute <- Ash.Resource.Info.attributes(resource),
+          attribute.name in Map.get(action, :accept, []),
+          do: %{attribute | allow_nil?: nil_allowed?(attribute, action)}
+
+    fields = accepted ++ Enum.filter(action.arguments, &(&1.public? and &1.name not in managed))
+    named = Enum.map(fields, & &1.name) ++ Enum.map(action.arguments, & &1.name)
+
+    own =
+      for field <- fields,
+          not Map.has_key?(overrides, field.name),
+          do: {field.name, field_generator(field, default(field, action))}
+
+    own ++ for {name, value} <- overrides, name in named, do: {name, given(value)}
+  end
+
+  defp given(%StreamData{} = generator), do: generator
+  defp given(value), do: StreamData.constant(value)
+
+  defp nil_allowed?(attribute, action) do
+    cond do
+      attribute.name in Map.get(action, :allow_nil_input, []) -> true
+      attribute.name in Map.get(action, :require_attributes, []) -> false
+      true -> attribute.allow_nil?
+    end
+  end
+
+  defp default(field, %{type: :create}), do: field.default
+
+  defp default(%Ash.Resource.Attribute{} = field, %{type: type}) when type in [:update, :destroy],
+    do: field.update_default
+
+  defp default(_field, _action), do: nil
+
+  defp field_generator(field, default) do
+    value = Ash.Type.generator(field.type, field.constraints)
+
+    cond do
+      field.allow_nil? ->
+        StreamData.one_of([
+          StreamData.constant(@left_out),
+          StreamData.one_of([StreamData.constant(nil), value])
+        ])
+
+      not is_nil(default) ->
+        StreamData.one_of([StreamData.constant(@left_out), value])
+
+      true ->
+        StreamData.filter(value, &(not casts_to_nil?(field, &1)))
+    end
+  end
+
+  defp casts_to_nil?(field, value) do
+    case Ash.Type.cast_input(field.type, value, field.constraints) do
+      {:ok, cast} -> Ash.Type.apply_constraints(field.type, cast, field.constraints) == {:ok, nil}
+      _ -> false
+    end
   end
 
   defp references(resource, action) do
