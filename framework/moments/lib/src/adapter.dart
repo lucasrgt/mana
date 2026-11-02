@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show mix;
+import 'package:mana/runtime.dart' show mix;
 import 'package:path/path.dart' as p;
 
 import 'backend_recipes.dart';

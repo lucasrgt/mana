@@ -2,8 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 
-import 'package:mana/mana.dart' show openPrivate, uuidV4;
+import 'package:mana/runtime.dart' show openPrivate, uuidV4;
 import 'package:path/path.dart' as p;
 
 import 'action_evidence.dart';
@@ -15,6 +16,7 @@ import 'flutter_target.dart';
 import 'journey.dart';
 import 'json.dart';
 import 'profile.dart';
+import 'progress.dart';
 import 'projection.dart';
 import 'protocol.dart';
 import 'refresh_check.dart';
@@ -280,6 +282,7 @@ Future<Map<String, Object?>> checkMoment({
   required String? name,
   required Request request,
   int timeout = 12000,
+  int finalLimit = 30000,
   int poll = 50,
   bool refresh = false,
   int refreshTimeout = 80000,
@@ -501,7 +504,8 @@ Future<Map<String, Object?>> checkMoment({
     }
     markPhase('verification');
     final finalChecks = checks.where((c) => c['scope'] != 'step').toList();
-    final settlementStarted = nowMs(), settlementDeadline = settlementStarted + timeout;
+    final settlementStarted = nowMs();
+    final settlement = ProgressWait(idleMs: timeout, limitMs: max(timeout, finalLimit), started: settlementStarted);
     finalObservationStarted = settlementStarted;
     final finalObservation = <String, Object?>{'attempts': 0, 'timeoutMs': timeout, 'status': 'waiting'};
     if (journey) report['finalObservation'] = finalObservation;
@@ -509,6 +513,7 @@ Future<Map<String, Object?>> checkMoment({
       if (journey) {
         finalObservation['attempts'] = (finalObservation['attempts']! as int) + 1;
         look = await request('/moments/look');
+        settlement.observe(look);
         final observed = look['observed'] as Map?;
         if (look['revision'] != revision ||
             (look['state'] as Map?)?['name'] != name ||
@@ -596,8 +601,9 @@ Future<Map<String, Object?>> checkMoment({
       if (!journey) break;
       finalObservation['durationMs'] = nowMs() - settlementStarted;
       finalObservation['status'] = report['status'];
+      finalObservation['progress'] = settlement.receipt();
       if (report['status'] == 'passed') break;
-      if (nowMs() >= settlementDeadline) {
+      if (settlement.expired) {
         report['reason'] = stable
             ? 'Final journey criteria were not reached before the deadline'
             : 'UI did not settle before the final journey deadline';

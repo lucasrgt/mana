@@ -31,40 +31,162 @@ defmodule Moments.Manifest do
     |> lineage()
   end
 
+  @doc """
+  Builds one app's manifest. A domain whose section names no `app` is a
+  whole app by itself. A domain that names one stands for that app: its
+  Moments come from every domain in `opts[:domains]` or in its OTP app's
+  `:ash_domains` (`otp_app:`, else the module's application) that declares
+  Moments for it, and its settings from the one domain that names it with a
+  `route`.
+  """
   def build(module, opts \\ []) do
-    route = route!(Dsl.get_opt(module, [:moments], :route))
-    client_roots = client_roots!(Dsl.get_opt(module, [:moments], :client_roots, []))
-    {fields, scenes} = entities!(module)
+    {owner, contributions} = contributions!(module, opts)
+    route = route!(opt(owner, :route))
+    client_roots = client_roots!(opt(owner, :client_roots, []))
+    fields = fields!(owner)
+
+    if Enum.all?(contributions, fn {_domain, scenes} -> scenes == [] end),
+      do: raise(ArgumentError, "declare at least one moment")
+
     properties = Map.new(fields, &property/1)
     defaults = Map.new(fields, &{to_string(&1.name), &1.default})
     validate!(defaults, properties)
 
+    domains =
+      Enum.uniq(Keyword.get(opts, :domains, [module]) ++ Enum.map(contributions, &elem(&1, 0)))
+
     context = %{
-      module: module,
       opts: opts,
       route: route,
+      base: opt(owner, :base),
       defaults: defaults,
-      properties: properties,
-      verb: &verb!(&1, Keyword.get(opts, :domains, [module]), module)
+      properties: properties
     }
 
-    moments = Map.new(scenes, &moment(&1, context))
-
-    if map_size(moments) != length(scenes),
-      do: raise(ArgumentError, "duplicate normalized moment name")
+    moments =
+      for {domain, scenes} <- contributions, scene <- scenes do
+        verb = &verb!(&1, domains, domain)
+        {domain, moment(scene, Map.merge(context, %{module: domain, verb: verb}))}
+      end
 
     %{
       "version" => 1,
       "generator" => "Moments.Extension",
-      "domain" => inspect(module),
+      "domain" => inspect(owner),
       "properties" => Map.put(properties, "route", %{"enum" => [route]}),
       "clientRoots" => Enum.uniq(client_roots),
-      "watch" => Enum.uniq(client_roots ++ Dsl.get_opt(module, [:moments], :watch, [])),
-      "moments" => moments
+      "watch" => Enum.uniq(client_roots ++ opt(owner, :watch, [])),
+      "moments" => unique!(moments, opt(owner, :app))
     }
     |> then(fn manifest ->
       if Keyword.get(opts, :defer_lineage, false), do: manifest, else: lineage(manifest)
     end)
+  end
+
+  defp opt(domain, key, default \\ nil), do: Dsl.get_opt(domain, [:moments], key, default)
+
+  defp contributions!(module, opts) do
+    case opt(module, :app) do
+      nil ->
+        unless opt(module, :route),
+          do:
+            raise(
+              ArgumentError,
+              "#{inspect(module)} declares no route and names no app: export the domain that owns the app's route"
+            )
+
+        {module, [{module, Enum.filter(scenes(module), &is_nil(&1.app))}]}
+
+      app ->
+        candidates =
+          ([module | Keyword.get(opts, :domains, [])] ++ app_domains(module))
+          |> Enum.uniq()
+          |> Enum.filter(&moments?/1)
+
+        Enum.each(candidates, &settled!/1)
+
+        {owner!(app, candidates),
+         Enum.map(candidates, fn domain ->
+           {domain, Enum.filter(scenes(domain), &(scene_app(domain, &1) == app))}
+         end)}
+    end
+  end
+
+  defp moments?(domain),
+    do:
+      Code.ensure_loaded?(domain) and Spark.Dsl.is?(domain, Ash.Domain) and
+        Moments.Extension in Spark.extensions(domain)
+
+  defp scenes(domain),
+    do: domain |> Dsl.get_entities([:moments]) |> Enum.filter(&is_struct(&1, Moments.Scene))
+
+  defp scene_app(domain, scene), do: scene.app || opt(domain, :app)
+
+  # A domain without a route owns no app, so an app setting or a Moment that
+  # names no app there would vanish from every manifest.
+  defp settled!(domain) do
+    cond do
+      opt(domain, :route) ->
+        :ok
+
+      opt(domain, :base) || opt(domain, :watch, []) != [] || opt(domain, :client_roots, []) != [] ||
+          Enum.any?(Dsl.get_entities(domain, [:moments]), &is_struct(&1, Moments.Field)) ->
+        raise(
+          ArgumentError,
+          "#{inspect(domain)} declares app settings without a route: base, watch, client_roots and fields belong to the domain that owns the app's route"
+        )
+
+      scene = Enum.find(scenes(domain), &is_nil(scene_app(domain, &1))) ->
+        raise(
+          ArgumentError,
+          "#{inspect(domain)}: moment #{inspect(scene.name)} names no app; set app on it or on the section"
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp owner!(app, candidates) do
+    case Enum.filter(candidates, &(opt(&1, :app) == app and opt(&1, :route))) do
+      [owner] ->
+        owner
+
+      [] ->
+        raise(
+          ArgumentError,
+          "app #{inspect(app)} has no owner: one domain declares app #{inspect(app)} with its route (searched #{inspect(candidates)})"
+        )
+
+      owners ->
+        raise(
+          ArgumentError,
+          "app #{inspect(app)} has several owners (#{Enum.map_join(owners, ", ", &inspect/1)}): its route, base, watch, client_roots and fields belong to one domain"
+        )
+    end
+  end
+
+  defp unique!(moments, app) do
+    case Enum.find(
+           Enum.group_by(moments, fn {_domain, {name, _scene}} -> name end, &elem(&1, 0)),
+           &match?({_name, [_, _ | _]}, &1)
+         ) do
+      nil ->
+        Map.new(moments, &elem(&1, 1))
+
+      {name, domains} ->
+        where = if app, do: " in app #{inspect(app)}", else: ""
+
+        raise(
+          ArgumentError,
+          "duplicate normalized moment name #{name}#{where}: #{Enum.map_join(domains, ", ", &inspect/1)}"
+        )
+    end
+  end
+
+  defp app_domains(module) do
+    app = Spark.otp_app(module) || Application.get_application(module)
+    (app && Application.get_env(app, :ash_domains, [])) || []
   end
 
   defp route!(route) do
@@ -85,13 +207,10 @@ defmodule Moments.Manifest do
     client_roots
   end
 
-  defp entities!(module) do
-    entities = Dsl.get_entities(module, [:moments])
-    fields = Enum.filter(entities, &is_struct(&1, Moments.Field))
-    scenes = Enum.filter(entities, &is_struct(&1, Moments.Scene))
-    if scenes == [], do: raise(ArgumentError, "declare at least one moment")
+  defp fields!(module) do
+    fields = module |> Dsl.get_entities([:moments]) |> Enum.filter(&is_struct(&1, Moments.Field))
     if Enum.any?(fields, &(&1.name == :route)), do: raise(ArgumentError, "route is reserved")
-    {fields, scenes}
+    fields
   end
 
   defp property(field), do: {to_string(field.name), restore(rule(field), field.restore)}
@@ -100,7 +219,7 @@ defmodule Moments.Manifest do
   defp restore(rule, _restore), do: rule
 
   defp moment(scene, %{module: module, opts: opts, route: route} = context) do
-    %{defaults: defaults, properties: properties, verb: verb} = context
+    %{defaults: defaults, properties: properties, verb: verb, base: base} = context
     name = scene.name |> to_string() |> dashed!("invalid moment name")
 
     state =
@@ -127,7 +246,7 @@ defmodule Moments.Manifest do
      }
      |> parent(scene.from)
      |> platforms(scene.platforms)
-     |> backend(scene.backend, Dsl.get_opt(module, [:moments], :base))}
+     |> backend(scene.backend, base)}
   end
 
   defp observation?(properties, key), do: properties[to_string(key)]["restore"] == false
@@ -230,8 +349,7 @@ defmodule Moments.Manifest do
     if Code.ensure_loaded?(resource) and Ash.Resource.Info.resource?(resource) do
       resource
     else
-      app = Application.get_application(module)
-      domains = Enum.uniq(domains ++ ((app && Application.get_env(app, :ash_domains, [])) || []))
+      domains = Enum.uniq(domains ++ app_domains(module))
       type = to_string(resource)
 
       matches =

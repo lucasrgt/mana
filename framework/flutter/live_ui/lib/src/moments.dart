@@ -11,7 +11,7 @@ import 'package:mana_primitives/mana_primitives.dart' show MomentAffordances;
 import 'moment_restartable.dart';
 import 'rendered_tree.dart';
 import 'moment_gestures.dart';
-import 'action_trace.dart';
+import 'action_trace.dart' show MomentActivity, MomentActionTrace;
 import 'restart_frames.dart';
 import 'timing.dart';
 
@@ -36,6 +36,7 @@ final class MomentController extends ChangeNotifier {
     http.Client? client,
   }) : _client = client ?? http.Client() {
     MomentAffordances.addListener(_offersChanged);
+    MomentActivity.addListener(_activityChanged);
   }
 
   final void Function(String route) navigate;
@@ -76,6 +77,42 @@ final class MomentController extends ChangeNotifier {
       }
     });
     WidgetsBinding.instance.scheduleFrame();
+  }
+
+  int _activitySequence = 0;
+  bool _activityScheduled = false, _supportsActivity = true;
+
+  // Requests start and finish between frames, so the report goes from a
+  // microtask, one per burst of changes.
+  void _activityChanged() {
+    if (_disposed || _activityScheduled || !_supportsActivity) return;
+    _activityScheduled = true;
+    scheduleMicrotask(() {
+      _activityScheduled = false;
+      unawaited(_reportActivity());
+    });
+  }
+
+  Future<void> _reportActivity() async {
+    final endpoint = _endpoint;
+    if (_disposed || endpoint == null || revision.isEmpty) return;
+    try {
+      final response = await _client.post(
+        endpoint.resolve('/moments/activity'),
+        headers: _headers,
+        body: jsonEncode({
+          'revision': revision,
+          'client': clientId,
+          'sequence': ++_activitySequence,
+          'inFlight': MomentActivity.inFlight,
+        }),
+      );
+      // An older runner does not know the report; stop sending it.
+      if (response.statusCode == 404) _supportsActivity = false;
+    } on Object {
+      // Progress is a hint for the wait, never evidence: a lost report only
+      // shortens the wait back to its idle budget.
+    }
   }
 
   void setBlocker(Object owner, MomentBlockReason? reason) {
@@ -367,6 +404,7 @@ final class MomentController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     MomentAffordances.removeListener(_offersChanged);
+    MomentActivity.removeListener(_activityChanged);
     _pending?.cancel();
     _restartFrames.dispose();
     _frameReaders.clear();

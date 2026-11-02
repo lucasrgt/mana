@@ -14,10 +14,13 @@ defmodule Moments.BackendGraph do
     if length(files) > 20_000, do: raise(ArgumentError, "backend graph file bound exceeded")
     %{paths: paths, files: Map.new(files, &{&1, digest(&1)})}
   rescue
-    _ -> nil
+    # A file removed while it is read, or a project past the bound.
+    error in [File.Error, ArgumentError] ->
+      IO.warn("Moments backend graph has no source snapshot: " <> Exception.message(error), [])
+      nil
   end
 
-  def build(modules, manifest, output, before) do
+  def build(manifest, output, before) do
     unless is_map(before) and before == snapshot(),
       do: raise(ArgumentError, "sources changed during compilation")
 
@@ -34,12 +37,7 @@ defmodule Moments.BackendGraph do
 
     root = output |> Path.expand() |> Path.dirname()
     portable = fn file -> Path.relative_to(Path.expand(file), root, force: true) end
-    domain_roots = Map.new(modules, &domain_roots(&1, graph, portable))
-
-    roots =
-      Map.new(manifest["moments"], fn {name, scene} ->
-        {name, Map.fetch!(domain_roots, scene["source"]["module"])}
-      end)
+    roots = roots(manifest, graph, portable)
 
     files =
       Map.new(graph, fn {file, dependencies} ->
@@ -64,7 +62,10 @@ defmodule Moments.BackendGraph do
       "roots" => roots
     }
   rescue
-    _ -> %{"version" => 1, "status" => "unavailable"}
+    # The graph only sharpens impact planning; without it every Moment is affected.
+    error ->
+      IO.warn("Moments backend graph is unavailable: " <> Exception.message(error), [])
+      %{"version" => 1, "status" => "unavailable"}
   end
 
   defp xref_graph!(temp) do
@@ -77,6 +78,20 @@ defmodule Moments.BackendGraph do
     parse_dot!(File.read!(temp))
   after
     File.rm(temp)
+  end
+
+  @doc "Each Moment's roots: the files of the domain that declares it and of its resources."
+  def roots(manifest, graph, portable) do
+    domains =
+      for {_name, %{"source" => %{"module" => module}}} <- manifest["moments"],
+          uniq: true,
+          do: module
+
+    domain_roots = Map.new(domains, &domain_roots(Module.safe_concat([&1]), graph, portable))
+
+    Map.new(manifest["moments"], fn {name, scene} ->
+      {name, Map.fetch!(domain_roots, scene["source"]["module"])}
+    end)
   end
 
   defp domain_roots(domain, graph, portable) do

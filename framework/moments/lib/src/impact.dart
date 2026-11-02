@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:ffi' show Abi;
 import 'dart:io';
 
-import 'package:mana/mana.dart' show uuidV4;
+import 'package:mana/runtime.dart' show uuidV4;
 import 'package:path/path.dart' as p;
 
 import 'canonical.dart';

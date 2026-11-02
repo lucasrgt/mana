@@ -37,6 +37,7 @@ defmodule Moments.Scene do
     :description,
     :backend,
     :platforms,
+    :app,
     :__identifier__,
     :__spark_metadata__,
     defaults: [],
@@ -70,6 +71,10 @@ defmodule Moments.Extension do
   @moduledoc """
   Development moments on an Ash Domain/Resource. Describes UI projections and
   selects a registered app-owned backend recipe by name.
+
+  A feature's domain can declare Moments for apps whose settings one other
+  domain owns (`app`); `Moments.Manifest` collects each app's Moments from
+  every domain it is given or the OTP app lists in `:ash_domains`.
   """
   @field %Spark.Dsl.Entity{
     name: :field,
@@ -174,14 +179,24 @@ defmodule Moments.Extension do
         doc:
           "Where the situation exists (e.g. `[:web]` for a web-only button); omitted means every platform."
       ],
-      defaults: [type: :keyword_list, default: []]
+      defaults: [type: :keyword_list, default: []],
+      app: [
+        type: :atom,
+        doc:
+          "The app whose manifest lists this Moment, when it is not the section's `app`: a feature's domain declares Moments for several apps."
+      ]
     ]
   }
   @section %Spark.Dsl.Section{
     name: :moments,
     describe: "Named development situations and their explicit restorable UI state.",
     schema: [
-      route: [type: :string, required: true],
+      app: [
+        type: :atom,
+        doc:
+          "Names the app of this section's Moments. With `route`, the domain owns that app's settings (route, base, watch, client_roots, fields); without, it only adds Moments to it."
+      ],
+      route: [type: :string, doc: "Required on the domain that owns the app's settings."],
       base: [type: :atom],
       watch: [type: {:list, :string}, default: []],
       client_roots: [type: {:list, :string}, default: []]

@@ -316,9 +316,7 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
     final scene = _scene(manifest, name);
     final checks = ((scene['checks'] as List?) ?? const []).cast<Map>();
     if (((scene['steps'] as List?)?.length ?? 0) > 0) {
-      return checks.any((c) => c['scope'] != 'step' && criteria.contains(c['kind']))
-          ? 'run'
-          : 'navigate';
+      return checks.any((c) => c['scope'] != 'step' && criteria.contains(c['kind'])) ? 'run' : 'navigate';
     }
     return checks.any((c) => c['scope'] != 'step') ? 'check' : 'navigate';
   }

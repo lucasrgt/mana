@@ -79,6 +79,74 @@ void main() {
     expect((await moment(bridge, 'look?after=${before + 7}&wait=2000'))['observation'], before + 1);
   });
 
+  test('activity from the active runtime wakes look and shows its requests in flight', () async {
+    final root = temporary('moments-activity-');
+    for (final dir in ['moments', 'lib']) {
+      Directory(p.join(root, dir)).createSync();
+    }
+    File(p.join(root, 'MOMENTS.md')).writeAsStringSync(
+      '# Test\nmoments: 0.1\nlayers: client=flutter-draft\n\n## empty\nrun: flutter-draft moments/recipes.json#empty\nOpen the form.\n',
+    );
+    File(p.join(root, 'lib/app.dart')).writeAsStringSync('version one');
+    json(root, 'moments/contract.json', {
+      'routes': ['/sign-up'],
+      'fields': {
+        'email': {'maxLength': 100},
+      },
+      'focus': ['none', 'email'],
+      'watch': ['lib/app.dart'],
+    });
+    json(root, 'moments/recipes.json', {
+      'empty': {
+        'route': '/sign-up',
+        'fields': {'email': ''},
+        'focus': 'email',
+        'selection': [0, 0],
+      },
+    });
+    final bridge = await Bridge.start(project: root, port: 0);
+    addTearDown(bridge.close);
+    final opened = await moment(bridge, 'open', {'name': 'empty'});
+    await moment(bridge, 'changes?since=&client=screen');
+    final revision = opened['revision'];
+    final before = await moment(bridge, 'look');
+    expect(before['activity'], isNull, reason: 'a runtime that never reported has no activity');
+    final woken = Stopwatch()..start();
+    final waiting = moment(bridge, 'look?after=${before['observation']}&wait=2000');
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(
+      (await moment(bridge, 'activity', {
+        'client': 'screen',
+        'revision': revision,
+        'sequence': 1,
+        'inFlight': 2,
+      }))['status'],
+      200,
+    );
+    final answer = await waiting;
+    expect(woken.elapsedMilliseconds, lessThan(1000), reason: 'activity wakes the wait like a report');
+    expect(answer['observation'], before['observation'], reason: 'activity is not a screen report');
+    expect((answer['activity']! as Map)['inFlight'], 2);
+    expect((answer['activity']! as Map)['sequence'], 1);
+    for (final stale in [
+      {'client': 'other', 'revision': revision, 'sequence': 2, 'inFlight': 0},
+      {'client': 'screen', 'revision': 'old', 'sequence': 2, 'inFlight': 0},
+      {'client': 'screen', 'revision': revision, 'sequence': 1, 'inFlight': 0},
+    ]) {
+      expect((await moment(bridge, 'activity', stale))['status'], 409);
+    }
+    for (final invalid in [
+      {'client': 'screen', 'revision': revision, 'sequence': 3, 'inFlight': -1},
+      {'client': 'screen', 'revision': revision, 'sequence': 3, 'inFlight': 1, 'url': '/api/private'},
+      {'client': 'screen', 'revision': revision, 'sequence': 0, 'inFlight': 1},
+    ]) {
+      expect((await moment(bridge, 'activity', invalid))['status'], isNot(200));
+    }
+    expect(((await moment(bridge, 'look'))['activity']! as Map)['inFlight'], 2);
+    await moment(bridge, 'changes?since=&client=restarted');
+    expect((await moment(bridge, 'look'))['activity'], isNull, reason: 'a new runtime starts without activity');
+  });
+
   test('named recipes restore drafts across bridge/runtime restart without capturing secrets', () async {
     final root = temporary('moments-');
     for (final dir in ['moments', 'lib']) {

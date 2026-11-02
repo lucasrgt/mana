@@ -215,12 +215,22 @@ void main() {
       expect((result['protocol']! as Map)['version'], '0.1');
       expect(result['conformance'], 'partial');
       final declared = (result['capabilities']! as Map).cast<String, Object?>();
-      expect(declared['independentFork'], false);
       expect(declared['parentMaterialization'], false);
-      expect(declared['wholeSituationSnapshot'], false);
+      // Each proven by test/situations_test.dart.
+      for (final flag in [
+        'independentFork',
+        'wholeSituationSnapshot',
+        'normalizedVersionComparison',
+        'saveExplorationAsMoment',
+        'traceFromRoot',
+      ]) {
+        expect(declared[flag], true, reason: flag);
+      }
       final profiles = (result['executionProfiles']! as Map).cast<String, Object?>();
       expect((profiles['launcher']! as Map)['parentMaterialization'], false);
-      expect(profiles.keys, ['launcher']);
+      expect((profiles['launcher']! as Map)['independentFork'], false);
+      expect(profiles.keys, ['launcher', 'situations']);
+      expect((profiles['situations']! as Map)['commands'], ['fork', 'diff', 'trace', 'save', 'situations']);
       expect((result['semantics']! as Map)['reset --discard-data'], contains('not protocol reset'));
     },
   );

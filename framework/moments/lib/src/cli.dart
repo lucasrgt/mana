@@ -7,7 +7,9 @@ import 'package:path/path.dart' as p;
 import 'adapter.dart';
 import 'affected.dart';
 import 'check.dart';
+import 'canonical.dart';
 import 'down.dart';
+import 'elixir_recipes.dart' show callRecipe;
 import 'errors.dart';
 import 'flutter_target.dart';
 import 'format.dart';
@@ -16,10 +18,13 @@ import 'inspect_compact.dart';
 import 'instance_state.dart';
 import 'journey.dart';
 import 'impact.dart' show buildImportsTool;
+import 'lifecycle.dart' show sameProcess;
 import 'manifest.dart';
 import 'protocol.dart';
 import 'reset.dart';
 import 'sandbox.dart';
+import 'services.dart' show sourceFingerprint;
+import 'situations.dart';
 import 'suite.dart';
 
 const help = '''Moments — edit, resume and verify Flutter
@@ -42,12 +47,19 @@ const help = '''Moments — edit, resume and verify Flutter
   moments up <name>               Starts the local instance (keeps running)
   moments up <name> --fresh       Prepares data and UI state again, explicitly
   moments up <name> --device linux  Opens the native Linux app with the same journey
+  moments up <name> --device macos  Opens the native macOS app (macOS host)
   moments up <name> --device android:<serial>  Uses an explicit Android device over ADB
+  moments up <name> --device ios:<udid>  Uses a booted iOS simulator (macOS host)
   moments up <name> --retry-preparation  Resumes an interrupted idempotent service preparation
   moments up <name> --backend-only  Only Postgres + backend + bridge, without the dev Flutter
   moments suite [name...] [--workers N] [--debug-build]  Runs Moments in parallel (compiled profile artifact, isolated context per Moment)
   moments suite [name...] --headless  Same suite on the widget runtime (flutter_tester), without a browser
   moments suite --affected [--base REV]  Only the Moments affected since REV (default HEAD)
+  moments fork <name> -n N        N independent copies of the Moment's data situation
+  moments diff <a> <b>            Normalized difference per layer (situation ids or Moment names)
+  moments trace <name>            The path from the root and what each recorded change did
+  moments save <trace.json> <name>  Turns an exploration trace into a map entry (explorations.md)
+  moments situations              The kept situations (forks, evaluations, explorations)
   moments sync                    Exports the Ash DSL
   moments affected [--base HEAD]   Plans the affected Moments; runs no actions
   moments tools                   Compiles the Dart import parser used by affected
@@ -80,7 +92,15 @@ const _commands = {
   'up',
   'sync',
   'affected',
+  'fork',
+  'diff',
+  'trace',
+  'save',
+  'situations',
 };
+
+/// Verbs over data situations; they need the backend of a running `up`.
+const situationCommands = {'fork', 'diff', 'trace', 'save', 'situations'};
 
 final _momentName = RegExp(r'^[a-z][a-z0-9-]*$');
 
@@ -91,7 +111,7 @@ final class CliOptions {
   bool restart = false, full = false, local = false, discardData = false, retryPreparation = false;
   bool fresh = false, backendOnly = false, debugBuild = false, headless = false;
   bool affected = false, wasm = false;
-  int? workers;
+  int? workers, count;
   String? base, device, project;
   String? command, name;
   List<String> names = const [];
@@ -140,6 +160,11 @@ CliOptions parseArgs(List<String> args) {
           _usage('--workers needs a single number from 1 to 8.');
         }
         result.workers = int.parse(args[++i]);
+      case '-n':
+        if (!RegExp(r'^([1-9]|1[0-6])$').hasMatch(next(i) ?? '') || result.count != null) {
+          _usage('-n needs a single number from 1 to 16.');
+        }
+        result.count = int.parse(args[++i]);
       case '--base':
         if (missing(i) || result.base != null) _usage('--base needs a single Git revision.');
         result.base = args[++i];
@@ -171,6 +196,8 @@ CliOptions parseArgs(List<String> args) {
     if (result.base != null && !result.affected) _usage('--base requires suite --affected.');
     return result..names = names;
   }
+  if (result.count != null && command != 'fork') _usage('-n only applies to fork.');
+  if (situationCommands.contains(command)) return _situationArgs(result, words);
   final named = const ['profile', 'open', 'up'].contains(command);
   if (words.length != (named ? 2 : 1) || (named && !_momentName.hasMatch(name!))) {
     _usage('Usage: moments $command${named ? ' <name>' : ''}');
@@ -194,6 +221,36 @@ CliOptions parseArgs(List<String> args) {
     _usage('$command streams logs; use status/inspect --json to observe the session.');
   }
   return result;
+}
+
+CliOptions _situationArgs(CliOptions result, List<String> words) {
+  final command = words.first, rest = words.skip(1).toList();
+  bool moment(String word) => _momentName.hasMatch(word);
+  final valid = switch (command) {
+    'fork' => rest.length == 1 && moment(rest.single) && result.count != null,
+    'trace' => rest.length == 1 && moment(rest.single),
+    'diff' => rest.length == 2 && rest.every((word) => moment(word) || situationId.hasMatch(word)),
+    'save' => rest.length == 2 && moment(rest.last),
+    _ => rest.isEmpty,
+  };
+  if (!valid) {
+    _usage(switch (command) {
+      'fork' => 'Usage: moments fork <name> -n N',
+      'diff' => 'Usage: moments diff <situation|name> <situation|name>',
+      'save' => 'Usage: moments save <exploration.json> <name>',
+      'trace' => 'Usage: moments trace <name>',
+      _ => 'Usage: moments situations',
+    });
+  }
+  if (result.check || result.restart || result.full || result.local || result.fresh || result.base != null) {
+    _usage('$command takes no other options than --json and --project.');
+  }
+  if (result.device != null || result.discardData || result.retryPreparation || result.affected) {
+    _usage('$command takes no other options than --json and --project.');
+  }
+  return result
+    ..name = command == 'save' ? rest.last : rest.firstOrNull
+    ..names = rest;
 }
 
 String findProject(String cwd, String? explicit) {
@@ -238,6 +295,7 @@ String formatResult(Object? raw, CliOptions options) {
   }
   final value = (raw! as Map).cast<String, Object?>();
   String lines(List<Object?> items) => items.whereType<String>().where((line) => line.isNotEmpty).join('\n');
+  if (situationCommands.contains(command)) return _situationText(value, command!);
   if (command == 'capabilities') {
     final protocol = value['protocol']! as Map;
     return [
@@ -447,7 +505,10 @@ Adapter? _adapter(String project) =>
 
 List<Map<String, Object?>> _catalog(String project) {
   final adapter = _adapter(project);
-  if (adapter != null) return adapter.catalog();
+  if (adapter != null) {
+    final explored = Situations(project: project, call: _offline, backendVersion: () => '').explored();
+    return [...adapter.catalog(), ...explored];
+  }
   final map = parseMap(File(p.join(project, 'MOMENTS.md')).readAsStringSync());
   return [
     for (final name in map.order)
@@ -586,6 +647,10 @@ Future<int> runCli(List<String> args, {String? cwd}) async {
       emit(result);
       return _exit(result);
     }
+    if (situationCommands.contains(options.command)) {
+      emit(await _situations(project, options));
+      return 0;
+    }
     final compact = options.command == 'inspect' && !options.full;
     final manifestText = compact ? manifestFile.readAsStringSync() : null;
     var result = await _live(project, options);
@@ -606,6 +671,81 @@ Future<int> runCli(List<String> args, {String? cwd}) async {
     print(args.contains('--json') ? _pretty.convert(result) : 'UNAVAILABLE · $reason');
     return 2;
   }
+}
+
+Future<Map<String, Object?>> _offline(String recipe, String operation, Map<String, Object?> body) =>
+    throw const MomentsError('No backend running; start it with moments up <name> --backend-only');
+
+/// The situations of [project], talking to the backend of its running `up`.
+Situations liveSituations(String project) {
+  final directory = p.join(project, 'moments/.backend');
+  final running = File(p.join(directory, 'running.json')), instanceFile = File(p.join(directory, 'instance.json'));
+  final supervisor = running.existsSync() ? (jsonDecode(running.readAsStringSync()) as Map)['supervisor'] : null;
+  if (!instanceFile.existsSync() || supervisor is! Map || !sameProcess(supervisor.cast())) {
+    return Situations(project: project, call: _offline, backendVersion: () => '');
+  }
+  final instance = (jsonDecode(instanceFile.readAsStringSync()) as Map).cast<String, Object?>();
+  final adapter = Adapter.load(project);
+  return Situations(
+    project: project,
+    call: (recipe, operation, body) => callRecipe(instance, recipe, operation, body),
+    backendVersion: () => hashText(adapter.services().map((s) => sourceFingerprint(s.cwd, s.watch)).join(':')),
+    context: {'apiUrl': instance['apiUrl'], 'webUrl': instance['webUrl']},
+  );
+}
+
+Future<Map<String, Object?>> _situations(String project, CliOptions options) async {
+  final situations = liveSituations(project);
+  final [first, ...rest] = options.names.isEmpty ? [''] : options.names;
+  return switch (options.command) {
+    'fork' => situations.fork(first, options.count!),
+    'diff' => situations.diff(first, rest.single),
+    'trace' => situations.trace(first),
+    'save' => situations.save(p.normalize(p.absolute(first)), rest.single),
+    _ => {'situations': situations.list()},
+  };
+}
+
+String _situationText(Map<String, Object?> value, String command) {
+  String id(Object? record) => '${(record as Map?)?['id']}';
+  switch (command) {
+    case 'fork':
+      return [
+        'Forked ${value['moment']} from ${id(value['origin'])}:',
+        for (final fork in (value['forks']! as List)) '  ${id(fork)}',
+        'Each copy has a database of its own; the UI projection and knob scopes are not forked.',
+      ].join('\n');
+    case 'diff':
+      final layers = value['layers']! as Map, data = layers['data']! as Map;
+      final history = data['history']! as Map;
+      return [
+        '${value['status'] == 'same' ? 'SAME' : 'DIFFERENT'} · ${id(value['a'])} ↔ ${id(value['b'])} · ${value['comparison']}',
+        if (value['redefined'] == true) 'The recipe was redefined: differences are not a change in behaviour.',
+        for (final MapEntry(:key, value: counts) in (data['tables']! as Map).entries)
+          '  table $key: ${(counts as List).join(' → ')} rows',
+        for (final entry in (history['onlyA']! as List)) '  only in a: ${jsonEncode(entry)}',
+        for (final entry in (history['onlyB']! as List)) '  only in b: ${jsonEncode(entry)}',
+        for (final MapEntry(:key, value: pair) in (layers['observe']! as Map).entries)
+          '  observed $key: ${jsonEncode((pair as List).first)} → ${jsonEncode(pair.last)}',
+        'Ids, times and secrets are normalized; --json declares how.',
+      ].join('\n');
+    case 'trace':
+      return [
+        'Path: ${(value['path']! as List).join(' → ')} · from ${value['root']}',
+        for (final step in (value['steps']! as List).cast<Map>())
+          '  ${step['step']}. ${step['subject']} ${step['action']}${step['verb'] != null ? ' (${step['verb']})' : ''} · ${step['outcome']}'
+              '${(step['changes']! as Map).isEmpty ? '' : ' · ${(step['changes']! as Map).keys.join(', ')}'}',
+        if ((value['steps']! as List).isEmpty)
+          '  No recorded change (no Mana.History log is declared, or nothing ran).',
+        'Situation: ${id(value['situation'])}',
+      ].join('\n');
+    case 'save':
+      return 'Saved ${value['moment']} in ${value['map']} (${value['moves']} moves, trace ${value['trace']}); replayed as ${id(value['situation'])}.';
+  }
+  return [
+    for (final record in (value['situations']! as List).cast<Map>())
+      '${record['id']} · ${record['kind']}${record['origin'] != null ? ' of ${record['origin']}' : ''} · ${record['createdAt']}',
+  ].join('\n');
 }
 
 String _mb(Object? bytes) => '${((bytes as num? ?? 0) / 1048576).round()} MB';

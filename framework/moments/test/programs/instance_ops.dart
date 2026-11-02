@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show databaseDocker, findOwnedDatabase;
+import 'package:mana/runtime.dart' show databaseDocker, findOwnedDatabase;
 import 'package:moments/src/errors.dart';
 import 'package:moments/src/instance_state.dart';
 import 'package:moments/src/lifecycle.dart';

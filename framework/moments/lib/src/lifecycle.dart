@@ -2,15 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show identityJson, openPrivate, processIdentity, uuidV4;
+import 'package:mana/runtime.dart' show identityJson, openPrivate, uuidV4;
 import 'package:path/path.dart' as p;
 
 import 'canonical.dart';
 import 'errors.dart';
 import 'services.dart' show ServiceLifecycle;
 import 'flutter_target.dart';
+import 'platform.dart';
 
-export 'package:mana/mana.dart' show momentDockerLabels, processIdentity, sameProcess, signalOwnedProcess;
+export 'package:mana/runtime.dart' show momentDockerLabels;
+export 'platform.dart' show processIdentity, sameProcess, signalOwnedProcess;
 
 final _uuid = RegExp(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$');
 
@@ -27,52 +29,11 @@ void clearFlutterTemporaryFiles(String directory, String runId) {
 
 String workspaceIdentity(String project) => hashText(Directory(project).resolveSymbolicLinksSync());
 
-/// A kernel lock that survives neither process death nor host restart: no
+/// A lock that survives neither process death nor host restart: no
 /// stale-lock TTL or PID-only heuristic can let two down/up operations race on
-/// the database. `flock(1)` holds it in a child that lives until released.
-Future<Future<void> Function()> acquireInstanceLock(String directory) async {
-  if (!Platform.isLinux) throw const MomentsError('Instance lifecycle currently requires Linux /proc and flock');
-  final Process child;
-  try {
-    child = await Process.start('flock', [
-      '--exclusive',
-      '--nonblock',
-      p.join(directory, '.operation.lock'),
-      'sh',
-      '-c',
-      'echo locked; read _ || true',
-    ]);
-  } on ProcessException {
-    throw const MomentsError('Cannot start flock for instance ownership');
-  }
-  final exited = child.exitCode;
-  final locked = Completer<void>();
-  child.stdout.transform(utf8.decoder).listen((chunk) {
-    if (chunk.contains('locked') && !locked.isCompleted) locked.complete();
-  });
-  child.stderr.drain<void>();
-  unawaited(
-    exited.then((_) {
-      if (!locked.isCompleted)
-        locked.completeError(const MomentsError('Another instance lifecycle operation is running'));
-    }),
-  );
-  try {
-    await locked.future;
-  } on Object {
-    await child.stdin.close().catchError((_) {});
-    await exited;
-    rethrow;
-  }
-  var released = false;
-  return () async {
-    if (!released) {
-      released = true;
-      await child.stdin.close().catchError((_) {});
-    }
-    await exited;
-  };
-}
+/// the database (`HostPlatform.lock`).
+Future<Future<void> Function()> acquireInstanceLock(String directory) =>
+    host.lock(p.join(directory, '.operation.lock'));
 
 Future<T> withInstanceLock<T>(String directory, Future<T> Function() operation) async {
   final release = await acquireInstanceLock(directory);
@@ -105,10 +66,22 @@ Map<String, Object?> validateLifecycle(Object? raw, String project) {
       ports.any((port) => port is! int || port < 1 || port > 65535)) {
     throw const MomentsError('Instance has no valid recovery ownership; stop its original launcher before upgrading');
   }
-  final android = value['android'] as Map?;
+  final android = value['android'] as Map?, ios = value['ios'] as Map?;
   if (value['version'] == 2 && value.containsKey('android'))
     throw const MomentsError('Android ownership requires lifecycle version 3');
-  if (value['version'] == 3) {
+  if (value['version'] == 2 && value.containsKey('ios'))
+    throw const MomentsError('iOS simulator ownership requires lifecycle version 3');
+  if (value['version'] == 3 && ios != null) {
+    final iosPorts = ios['ports'];
+    if (android != null ||
+        !simulatorUdid(ios['device']) ||
+        iosPorts is! List ||
+        iosPorts.isEmpty ||
+        iosPorts.toSet().length != iosPorts.length ||
+        iosPorts.any((port) => !ports.contains(port))) {
+      throw const MomentsError('Invalid iOS simulator lifecycle ownership');
+    }
+  } else if (value['version'] == 3) {
     final androidPorts = android?['ports'];
     if (!androidSerial(android?['device']) ||
         androidPorts is! List ||
@@ -136,6 +109,7 @@ final class Lifecycle implements ServiceLifecycle {
     String? instanceId,
     List<int> ports = const [],
     Map<String, Object?>? android,
+    Map<String, Object?>? ios,
   }) {
     if (File(p.join(directory, '.reset.json')).existsSync()) {
       throw const MomentsError('Interrupted reset must finish with moments reset --discard-data before startup');
@@ -145,7 +119,7 @@ final class Lifecycle implements ServiceLifecycle {
     if (supervisor == null) throw const MomentsError('Cannot establish supervisor process identity');
     final id = instanceId ?? uuidV4();
     final state = <String, Object?>{
-      'version': android != null ? 3 : 2,
+      'version': android != null || ios != null ? 3 : 2,
       'runId': uuidV4(),
       'instanceId': id,
       'workspace': workspaceIdentity(project),
@@ -154,6 +128,7 @@ final class Lifecycle implements ServiceLifecycle {
       'databaseStarted': false,
       'processes': <Object?>[],
       'android': ?android,
+      'ios': ?ios,
     };
     validateLifecycle(state, project);
     if (File(file).existsSync())
@@ -193,20 +168,9 @@ final class Lifecycle implements ServiceLifecycle {
 
   void scan() {
     if (_closed || _tracked.isEmpty) return;
-    final processes = <int, Map<String, Object?>>{};
-    final List<FileSystemEntity> entries;
-    try {
-      entries = Directory('/proc').listSync(followLinks: false);
-    } on FileSystemException {
-      // A process can exit while /proc is being listed; the next tick rescans.
-      return;
-    }
-    for (final entry in entries) {
-      final id = int.tryParse(p.basename(entry.path));
-      if (id == null) continue;
-      final value = processIdentity(id);
-      if (value != null) processes[id] = identityJson(value);
-    }
+    final listed = host.processes();
+    if (listed == null) return;
+    final processes = {for (final MapEntry(:key, :value) in listed.entries) key: identityJson(value)};
     var changed = false;
     for (final MapEntry(key: id, value: record) in [..._tracked.entries]) {
       final current = processes[id];

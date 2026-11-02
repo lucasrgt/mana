@@ -1,6 +1,5 @@
 import 'configuration.dart';
 
-
 import 'timing_visibility.dart'
     if (dart.library.js_interop) 'timing_visibility_web.dart';
 

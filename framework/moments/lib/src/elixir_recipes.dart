@@ -1,36 +1,47 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show recipeToken;
+import 'package:mana/runtime.dart' show recipeToken;
 
 import 'backend_recipes.dart';
 import 'errors.dart';
+
+/// One call to the app's `Moments.Recipes` plug: `POST <path>/<name>/<operation>`
+/// with the sandbox's recipe token.
+Future<Map<String, Object?>> callRecipe(
+  Map<String, Object?> instance,
+  String name,
+  String operation,
+  Object body, {
+  String path = '/__moments',
+}) async {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+  try {
+    final request = await client.postUrl(Uri.parse(instance['apiUrl']! as String).resolve('$path/$name/$operation'));
+    request.headers
+      ..set('content-type', 'application/json')
+      ..set('authorization', 'Bearer ${recipeToken(instance)}');
+    request.add(utf8.encode(jsonEncode(body)));
+    final response = await request.close().timeout(const Duration(seconds: 15));
+    final text = await utf8.decoder.bind(response).join().timeout(const Duration(seconds: 15));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw MomentsError('Recipe $name $operation failed (${response.statusCode})');
+    }
+    final value = jsonDecode(text);
+    if (value is! Map) throw MomentsError('Recipe $name returned no object');
+    return value.cast();
+  } finally {
+    client.close(force: true);
+  }
+}
 
 /// Backend recipes implemented by the app itself (`Moments.Recipe` modules
 /// served by `Moments.Recipes`). The engine keeps the returned launch
 /// privately; inspect sends it back with the reported projection and checks
 /// the observed one.
 Map<String, RecipeAdapter> elixirRecipes(Iterable<String> names, {String path = '/__moments'}) {
-  Future<Map<String, Object?>> call(Map<String, Object?> instance, String name, String operation, Object body) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
-    try {
-      final request = await client.postUrl(Uri.parse(instance['apiUrl']! as String).resolve('$path/$name/$operation'));
-      request.headers
-        ..set('content-type', 'application/json')
-        ..set('authorization', 'Bearer ${recipeToken(instance)}');
-      request.add(utf8.encode(jsonEncode(body)));
-      final response = await request.close().timeout(const Duration(seconds: 15));
-      final text = await utf8.decoder.bind(response).join().timeout(const Duration(seconds: 15));
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw MomentsError('Recipe $name $operation failed (${response.statusCode})');
-      }
-      final value = jsonDecode(text);
-      if (value is! Map) throw MomentsError('Recipe $name returned no object');
-      return value.cast();
-    } finally {
-      client.close(force: true);
-    }
-  }
+  Future<Map<String, Object?>> call(Map<String, Object?> instance, String name, String operation, Object body) =>
+      callRecipe(instance, name, operation, body, path: path);
 
   return {
     for (final name in names)

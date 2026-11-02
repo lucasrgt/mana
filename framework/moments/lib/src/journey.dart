@@ -1,8 +1,9 @@
 import 'dart:async';
 
-import 'package:mana/mana.dart' show uuidV4;
+import 'package:mana/runtime.dart' show uuidV4;
 
 import 'json.dart';
+import 'progress.dart';
 
 final class JourneyError implements Exception {
   const JourneyError(this.message, [this.status = 'unavailable']);
@@ -49,7 +50,8 @@ Map<String, Object?> offeredOutcome(Map check, Object? offered) {
     'verb': verb,
     'expected': wanted ? 'offered' : 'not-offered',
     'observed': controls.take(16).toList(),
-    'meaning': 'Verbs the mounted controls (VerbGate) offered in the active UI; not proof the server would accept them.',
+    'meaning':
+        'Verbs the mounted controls (VerbGate) offered in the active UI; not proof the server would accept them.',
   };
 }
 
@@ -115,7 +117,9 @@ typedef Evaluate =
     });
 
 /// Runs the declared steps against an already prepared runtime: never
-/// reseeds, recompiles or retries gestures.
+/// reseeds, recompiles or retries gestures. Each postcondition waits while
+/// the app shows progress ([ProgressWait]): [timeout] after the last sign of
+/// it, [limit] at most.
 Future<void> executeSteps({
   required Map<String, Object?> scene,
   required Request request,
@@ -127,6 +131,7 @@ Future<void> executeSteps({
   required Map<String, Object?> report,
   void Function(Map<String, Object?> inspection)? validateInspection,
   int timeout = 8000,
+  int limit = 30000,
   int poll = 100,
   int wait = 250,
 }) async {
@@ -145,6 +150,8 @@ Future<void> executeSteps({
     };
     receipts.add(receipt);
     double? dispatchedAt;
+    ProgressWait? progress;
+    var lookMs = 0.0, inspectMs = 0.0;
     try {
       final result = await request('/journey/${step['kind']}', {
         'id': id,
@@ -176,29 +183,34 @@ Future<void> executeSteps({
       }
       final until = (step['until'] as List?) ?? const [];
       final checks = checksDeclared.where((c) => until.contains(c['name'])).toList();
-      final deadline = nowMs() + timeout;
       if (checks.isEmpty) {
         receipt['status'] = 'passed';
         receipt['meaning'] = 'Operation dispatched; application effects are checked by later steps and final criteria';
         continue;
       }
+      final waiting = progress = ProgressWait(idleMs: timeout, limitMs: limit, started: dispatchedAt);
       Object? observation;
       while (true) {
+        var sent = nowMs();
         final look = await request(
           observation is int ? '/moments/look?after=$observation&wait=$wait' : '/moments/look',
         );
+        lookMs += nowMs() - sent;
+        waiting.observe(look);
         observation = look['observation'];
         final observed = look['observed'] as Map?;
         if (look['revision'] != revision || observed?['client'] != client || look['codeChanged'] == true) {
           throw const JourneyError('Runtime changed while awaiting the gesture outcome');
         }
+        sent = nowMs();
         final inspection = await request('/moments/inspect');
+        inspectMs += nowMs() - sent;
         validateInspection?.call(inspection);
         final lastReported = ((inspection['screen'] as Map?)?['lastReported']) as Map?;
         if ((inspection['moment'] as Map?)?['revision'] != revision ||
             lastReported?['matchesRevision'] != true ||
             !deepEqual(observed?['projection'], lastReported?['projection'])) {
-          if (nowMs() >= deadline) throw const JourneyError('UI did not settle after gesture');
+          if (waiting.expired) throw JourneyError('UI did not settle after gesture (${_ended(waiting)})');
         } else {
           final others = evaluate(
             checks.where((c) => !_offers(c)).toList(),
@@ -218,8 +230,11 @@ Future<void> executeSteps({
               ? 'failed'
               : 'passed';
           if (receipt['status'] == 'passed') break;
-          if (nowMs() >= deadline) {
-            throw JourneyError('Declared gesture postcondition was not reached', receipt['status']! as String);
+          if (waiting.expired) {
+            throw JourneyError(
+              'Declared gesture postcondition was not reached (${_ended(waiting)})',
+              receipt['status']! as String,
+            );
           }
         }
         // A bridge that cannot wait for the next report answers at once.
@@ -233,6 +248,13 @@ Future<void> executeSteps({
     } finally {
       receipt['durationMs'] = nowMs() - started;
       if (dispatchedAt != null) receipt['postconditionMs'] = nowMs() - dispatchedAt;
+      if (progress != null) receipt['wait'] = {...progress.receipt(), 'lookMs': lookMs, 'inspectMs': inspectMs};
     }
   }
 }
+
+String _ended(ProgressWait wait) => wait.reason == 'limit'
+    ? 'still progressing at the ${_seconds(wait.limitMs)} s limit'
+    : 'no progress for ${_seconds(wait.idleMs)} s';
+
+String _seconds(int ms) => ms % 1000 == 0 ? '${ms ~/ 1000}' : (ms / 1000).toStringAsFixed(2);

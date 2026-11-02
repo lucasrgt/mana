@@ -4,9 +4,11 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'child_process.dart';
 import 'errors.dart';
 import 'json.dart';
 import 'memory.dart';
+import 'platform.dart' show host;
 
 /// What the headless runtime needs from one suite worker.
 abstract interface class HeadlessWorker {
@@ -198,9 +200,9 @@ final class HeadlessRuntime {
   // An uncaught exception ends that worker's test; the exception text is the
   // block flutter_test printed just before marking the entry failed.
   Future<void> _spawn(List<int> indices) async {
-    final child = await Process.start(
-      'flutter',
+    final child = await startGroup(
       [
+        'flutter',
         'test',
         for (final i in indices) _files[i],
         '-j',
@@ -320,13 +322,7 @@ final class HeadlessRuntime {
     }
     await Future.wait([
       for (final child in [..._processes])
-        child.exitCode.timeout(
-          const Duration(seconds: 10),
-          onTimeout: () {
-            child.kill(ProcessSignal.sigterm);
-            return child.exitCode;
-          },
-        ),
+        child.exitCode.timeout(const Duration(seconds: 10), onTimeout: () => stopGroup(child)),
     ]);
     await _output.close();
     await _server.close(force: true);
@@ -338,12 +334,8 @@ final class HeadlessRuntime {
   // (never a process matched by name system-wide) returns its memory to the run.
   void _stopCompiler(int root) {
     for (final pid in descendants(root)) {
-      String command;
-      try {
-        command = File('/proc/$pid/cmdline').readAsStringSync();
-      } on Object {
-        continue;
-      }
+      final command = host.commandLine(pid);
+      if (command == null) continue;
       if (command.contains('frontend_server') && Process.killPid(pid)) _log('released idle compiler $pid');
     }
   }

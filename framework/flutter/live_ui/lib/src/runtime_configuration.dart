@@ -108,8 +108,8 @@ abstract final class MomentRuntime {
     if (!_dynamic) return;
     if (!kIsWeb) {
       _settings ??= MomentRuntimeSettings.parseNativeRoute(
-            WidgetsBinding.instance.platformDispatcher.defaultRouteName,
-          );
+        WidgetsBinding.instance.platformDispatcher.defaultRouteName,
+      );
       return;
     }
     return _initializing ??= _load();
@@ -119,13 +119,15 @@ abstract final class MomentRuntime {
   /// envelope from its supervisor instead of a route or a web origin.
   static void configureHeadless(Map<String, dynamic> input) {
     if (!_dynamic || kIsWeb) {
-      throw StateError('Headless Moments require a runtime-bootstrap test build');
+      throw StateError(
+        'Headless Moments require a runtime-bootstrap test build',
+      );
     }
     final origin = Uri.parse(input['bridgeUrl'] as String);
-    _settings = MomentRuntimeSettings.parse(
-      {...input, 'origin': origin.origin},
-      origin: origin,
-    );
+    _settings = MomentRuntimeSettings.parse({
+      ...input,
+      'origin': origin.origin,
+    }, origin: origin);
   }
 
   static Future<void> _load() async {

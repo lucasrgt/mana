@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show savePrivateState, uuidV4;
+import 'package:mana/runtime.dart' show savePrivateState, uuidV4;
 
 import 'errors.dart';
 import 'journey.dart' show gestureKinds;

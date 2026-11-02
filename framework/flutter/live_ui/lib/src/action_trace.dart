@@ -6,6 +6,29 @@ import 'package:dio/dio.dart';
 import 'configuration.dart';
 import 'moment_launch.dart' show MomentDataScope, MomentKnobScope;
 
+/// The app's requests in flight through [MomentActionTrace.attach]: while
+/// one is out, a journey's step is waiting on the backend, not stuck, so its
+/// postcondition wait goes on (`MomentController` reports it). Never a
+/// criterion.
+final class MomentActivity {
+  MomentActivity._();
+  static var _inFlight = 0;
+  static final _listeners = <void Function()>[];
+
+  static int get inFlight => _inFlight;
+
+  static void addListener(void Function() listener) => _listeners.add(listener);
+  static void removeListener(void Function() listener) =>
+      _listeners.remove(listener);
+
+  static void _change(int delta) {
+    _inFlight += delta;
+    for (final listener in [..._listeners]) {
+      listener();
+    }
+  }
+}
+
 /// Positive observations from gesture-originated HTTP requests, not coverage.
 /// Detached jobs and requests scheduled outside this zone are not attributed.
 final class MomentActionTrace {
@@ -54,6 +77,8 @@ final class MomentActionTrace {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
+          options.extra['mana.activity'] = true;
+          MomentActivity._change(1);
           final scope = MomentKnobScope.current;
           if (scope != null &&
               allows(options.uri, api, backendEnabled: backendEnabled)) {
@@ -73,6 +98,7 @@ final class MomentActionTrace {
           handler.next(options);
         },
         onResponse: (response, handler) async {
+          _settled(response.requestOptions);
           final trace =
               response.requestOptions.extra['mana.actionTrace']
                   as MomentActionTrace?;
@@ -80,6 +106,7 @@ final class MomentActionTrace {
           handler.next(response);
         },
         onError: (error, handler) async {
+          _settled(error.requestOptions);
           final trace =
               error.requestOptions.extra['mana.actionTrace']
                   as MomentActionTrace?;
@@ -90,6 +117,12 @@ final class MomentActionTrace {
         },
       ),
     );
+  }
+
+  static void _settled(RequestOptions options) {
+    if (options.extra.remove('mana.activity') == true) {
+      MomentActivity._change(-1);
+    }
   }
 
   Future<void> record(String? header) async {

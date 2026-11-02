@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart'
+import 'package:mana/runtime.dart'
     show databaseDocker, findOwnedDatabase, savePrivateState, syncDirectory, validateDatabaseIdentity;
 import 'package:path/path.dart' as p;
 

@@ -2,13 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
-import 'package:mana/mana.dart'
-    show identityJson, processIdentity, sameProcess, savePrivateState, syncDirectory, uuidV4;
+import 'package:mana/runtime.dart' show identityJson, savePrivateState, syncDirectory, uuidV4;
 import 'package:path/path.dart' as p;
 
 import 'errors.dart';
 import 'json.dart';
 import 'lifecycle.dart' show withInstanceLock;
+import 'platform.dart' show processIdentity, sameProcess;
 
 final _uuid = RegExp(r'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$');
 final _serial = RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$');

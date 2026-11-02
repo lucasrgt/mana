@@ -2,10 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show uuidV4;
+import 'package:mana/runtime.dart' show uuidV4;
 import 'package:path/path.dart' as p;
 
 import 'canonical.dart';
+import 'child_process.dart';
 import 'errors.dart';
 import 'watch.dart' show WatchedBackend;
 
@@ -200,14 +201,7 @@ final class Services implements WatchedBackend {
     if (child == null) return;
     final exit = _children[child];
     if (exit == null) return;
-    child.kill(ProcessSignal.sigterm);
-    await exit.timeout(
-      const Duration(seconds: 5),
-      onTimeout: () {
-        child.kill(ProcessSignal.sigkill);
-        return exit;
-      },
-    );
+    await stopGroup(child, exit: exit);
   }
 
   Future<Process> _launch(_Service service, List<String> command) async {
@@ -223,9 +217,8 @@ final class Services implements WatchedBackend {
     final log = File(p.join(directory, '${service.definition.name}.log')).openWrite(mode: FileMode.append);
     final Process child;
     try {
-      child = await Process.start(
-        command.first,
-        command.skip(1).toList(),
+      child = await startGroup(
+        command,
         workingDirectory: service.definition.cwd,
         environment: environment,
         includeParentEnvironment: false,
@@ -238,11 +231,13 @@ final class Services implements WatchedBackend {
     lifecycle?.track(child, 'service-${service.definition.name}');
     // Both streams write to one log; piping one would bind the sink and make
     // the other's first write throw.
-    final done = Future.wait([child.stdout.forEach(log.add), child.stderr.forEach(log.add)])
-        .catchError((_) => <void>[])
-        .whenComplete(() => log.close().catchError((_) {}));
+    final done = readUntilExit(
+      child,
+      stdout: log.add,
+      stderr: log.add,
+    ).whenComplete(() => log.close().catchError((_) {}));
     final exit = child.exitCode.then((code) async {
-      await done.catchError((_) => <void>[]);
+      await done;
       _children.remove(child);
       if (service.child == child) service.exited = true;
       return code;

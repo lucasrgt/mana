@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:mana/mana.dart' show uuidV4;
+import 'package:mana/runtime.dart' show uuidV4;
 
 import 'errors.dart';
 

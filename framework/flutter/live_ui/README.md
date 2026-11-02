@@ -66,6 +66,17 @@ order; `verb:<type>.<verb>:<id>` is that record's. A gesture's
 `MomentActionTrace` names its verb (from the target, or from `runVerb` as it
 runs) and forwards it as `verb` with each action receipt.
 
+## Requests in flight
+
+`MomentActionTrace.attach(dio, api)` also counts the app's requests in flight
+through that Dio (`MomentActivity.inFlight`), and `MomentController` reports
+each change to the runner (`/moments/activity`: revision, client, sequence and
+the count, nothing about the requests). A journey's wait reads it as progress:
+while the app waits on the backend, a step's postcondition keeps waiting (see
+[Journeys](../../moments/README.md#journeys)). A runner that does not know the
+report answers 404 and the controller stops sending it; a lost report only
+shortens the wait. It is a hint for the wait, never a criterion.
+
 ## Running actions
 
 The Moments package offers no Command or Result engine. A slice can use

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show uuidV4;
+import 'package:mana/runtime.dart' show uuidV4;
 import 'package:moments/src/action_evidence.dart';
 import 'package:moments/src/check.dart';
 import 'package:moments/src/errors.dart';

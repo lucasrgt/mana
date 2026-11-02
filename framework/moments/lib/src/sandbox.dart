@@ -3,22 +3,25 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:mana/mana.dart' show assertOwned, databaseDocker, findOwnedDatabase, savePrivateState;
+import 'package:mana/runtime.dart' show assertOwned, databaseDocker, findOwnedDatabase, savePrivateState;
 import 'package:path/path.dart' as p;
 
 import 'adapter.dart';
 import 'android_transport.dart';
 import 'backend_recipes.dart';
 import 'bridge.dart';
+import 'child_process.dart';
 import 'down.dart';
 import 'errors.dart';
 import 'flutter_machine.dart';
 import 'flutter_target.dart';
 import 'inspect.dart';
+import 'ios_transport.dart';
 import 'journey_lease.dart';
 import 'json.dart';
 import 'lifecycle.dart';
 import 'manifest.dart';
+import 'platform.dart' show host;
 import 'preparation_retry.dart';
 import 'protocol.dart';
 import 'reset.dart';
@@ -101,12 +104,7 @@ final class _BackendWatch {
 }
 
 final class _Development implements Development {
-  _Development({
-    required this.statusFn,
-    required this.inspect,
-    required this.refresh,
-    required this.stop,
-  });
+  _Development({required this.statusFn, required this.inspect, required this.refresh, required this.stop});
   final Map<String, Object?> Function() statusFn;
   @override
   final Future<Map<String, Object?>> Function()? inspect;
@@ -132,6 +130,9 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
   final backendOnly = options.backendOnly;
   if (backendOnly && !target.web) throw const MomentsError('--backend-only serves web suites; omit --device');
   if (target.device == 'linux' && !Platform.isLinux) throw const MomentsError('The linux device requires a Linux host');
+  if ((target.device == 'macos' || target.ios) && !Platform.isMacOS) {
+    throw const MomentsError('The macos device and the iOS simulator require a macOS host');
+  }
   final directory = p.join(project, 'moments', '.backend');
   Directory(directory).createSync(recursive: true);
   Process.runSync('chmod', ['700', directory]);
@@ -233,6 +234,12 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
               'ports': {apiPort, bridgePort}.toList(),
             }
           : null,
+      ios: target.ios
+          ? {
+              'device': target.id,
+              'ports': {apiPort, bridgePort}.toList(),
+            }
+          : null,
       ports: {apiPort, bridgePort, if (target.web) webPort, for (final s in services0) s.port}.toList(),
     );
   });
@@ -242,6 +249,7 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
   FlutterMachine? machine;
   MomentWatcher? watcher;
   AndroidTransport? android;
+  IosTransport? ios;
   _BackendWatch? backendWatch;
   Future<void>? stopping;
   void persist(Map<String, Object?> next) {
@@ -298,15 +306,7 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
     acquire: () => watcher?.pause() ?? () {},
   );
   Future<void> stopChild(Process? child) async {
-    if (child == null) return;
-    child.kill(ProcessSignal.sigterm);
-    await child.exitCode.timeout(
-      const Duration(seconds: 5),
-      onTimeout: () {
-        child.kill(ProcessSignal.sigkill);
-        return child.exitCode;
-      },
-    );
+    if (child != null) await stopGroup(child);
   }
 
   Future<void> stop() => stopping ??= () async {
@@ -320,6 +320,9 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
     if (android != null &&
         File(p.join(directory, 'android-${lifecycle.state['runId']}', 'transport.json')).existsSync()) {
       await android.close();
+    }
+    if (ios != null && File(p.join(directory, 'ios-${lifecycle.state['runId']}', 'transport.json')).existsSync()) {
+      await ios.close();
     }
     await stopOwnedResources(resources, instance: current, directory: directory);
     lifecycle.finish();
@@ -360,6 +363,15 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
         owner: lifecycle.state['runId']! as String,
       );
       await android.start();
+    }
+    if (target.ios) {
+      ios = IosTransport(
+        directory: p.join(directory, 'ios-${lifecycle.state['runId']}'),
+        device: target.id,
+        ports: ((lifecycle.state['ios']! as Map)['ports']! as List).cast<int>(),
+        owner: lifecycle.state['runId']! as String,
+      );
+      await ios.start();
     }
     if (!backendRecipes.declared(openingName)) throw const MomentsError('This sandbox needs a declared backend recipe');
     if (current == null) {
@@ -575,9 +587,9 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
     stdout.writeln('Ctrl+C stops this instance; database and uploads remain for the next up.');
     final flutterTmp = flutterTemporaryDirectory(directory, lifecycle.state['runId']! as String);
     Directory(flutterTmp).createSync(recursive: true);
-    flutter = await Process.start(
-      'flutter',
+    flutter = await startGroup(
       [
+        'flutter',
         'run',
         if (adapter.entrypoint != null) ...['-t', adapter.entrypoint!],
         '--machine',
@@ -620,7 +632,8 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
         timeout: const Duration(seconds: 120),
       );
       try {
-        await Process.start('xdg-open', ['$webUrl$route'], mode: ProcessStartMode.detached);
+        final open = host.openUrl('$webUrl$route');
+        await Process.start(open.first, open.skip(1).toList(), mode: ProcessStartMode.detached);
       } on ProcessException {
         stderr.writeln('Open $webUrl$route');
       }

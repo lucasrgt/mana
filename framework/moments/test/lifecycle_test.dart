@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show identityJson;
+import 'package:mana/runtime.dart' show identityJson;
 import 'package:moments/src/down.dart';
 import 'package:moments/src/lifecycle.dart';
 import 'package:path/path.dart' as p;

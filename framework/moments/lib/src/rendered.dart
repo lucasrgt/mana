@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show uuidV4;
+import 'package:mana/runtime.dart' show uuidV4;
 
 import 'errors.dart';
 import 'gestures.dart' show ObservedMoments;
@@ -20,10 +20,7 @@ final class _Capture {
 /// owns the Moment. No background tree polling, retained history, UI mutation
 /// or model calls.
 final class RenderedChannel {
-  RenderedChannel({
-    required this.moments,
-    this.timeout = const Duration(milliseconds: 8000),
-  });
+  RenderedChannel({required this.moments, this.timeout = const Duration(milliseconds: 8000)});
 
   final ObservedMoments? moments;
   final Duration timeout;

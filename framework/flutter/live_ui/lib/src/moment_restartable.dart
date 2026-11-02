@@ -41,7 +41,9 @@ final class _MomentRestartableState extends State<MomentRestartable> {
           return;
         }
       } on Object catch (error) {
-        debugPrint('Moments: the app could not take the Moment in place ($error); rebuilding');
+        debugPrint(
+          'Moments: the app could not take the Moment in place ($error); rebuilding',
+        );
       }
     }
     await _load();

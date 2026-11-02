@@ -31,6 +31,69 @@ persistence; the DSL does not detect secrets from a field's content.
 In the Mix project: `mix moments.export MyAppMoments ../manifest.json`.
 From the app: `framework/moments/moments sync`.
 
+## Moments next to their feature
+
+An app's settings (`route`, `base`, `watch`, `client_roots` and its fields)
+live on one domain, which names the app. Any other domain adds Moments to it,
+next to the resources they prove:
+
+```elixir
+defmodule MyApp.Moments.Hosts do
+  use Ash.Domain, extensions: [Moments.Extension], validate_config_inclusion?: false
+
+  resources do
+  end
+
+  moments do
+    app :hosts
+    route "/welcome"
+    client_roots ["lib/app.dart"]
+    field :phase, "anonymous", values: ["anonymous", "authenticated"]
+
+    moment :host_welcome do
+      description "The welcome screen."
+    end
+  end
+end
+
+defmodule MyApp.Operations do
+  use Ash.Domain, extensions: [Moments.Extension]
+
+  resources do
+    resource MyApp.Operations.Booking
+  end
+
+  moments do
+    moment :host_accept do
+      app :hosts
+      from :host_welcome
+      description "The host accepts a requested booking."
+      step :accept, verb: {:booking, :accept}, on: "booking.id"
+    end
+
+    moment :traveler_requested do
+      app :travelers
+      description "The traveler's booking, waiting for the host."
+    end
+  end
+end
+```
+
+`mix moments.export MyApp.Moments.Hosts ../app/moments/manifest.json` then
+collects the `:hosts` Moments of every domain in the project's `:ash_domains`
+(the `otp_app:` of the domain, else its application). The manifest is the one
+the same declarations give on a single domain; only each Moment's `source` and
+backend graph roots name the domain that declares it, and its resources. A
+section's `app` is the default for its Moments; a Moment's own `app` (inside its
+`do` block: Spark takes options or a block, not both) overrides it. `from` and
+verb types resolve across the domains of the app.
+
+The export refuses two domains that name an app with a `route` and an app with
+none; app settings, or a Moment that names no app, on a domain without a route;
+and one name twice in an app, whichever domains declare it. A domain keeps its
+Moment names distinct across apps. A domain whose section names no `app` is a
+whole app by itself and can still add Moments to other apps.
+
 ## Local review of an action
 
 In the Mix project, `mix moments.review MyApp.Resource action output.json`
@@ -199,6 +262,40 @@ adapter's writes: recipes with writes must handle their own atomicity.
 cannot repair the data it is meant to evaluate. `--fresh` only affects the UI
 projection; it is not a request to renew or clean domain data.
 
+## Forks, projections and saved explorations
+
+`Moments.Recipes` also serves what `moments fork`, `diff`, `trace` and `save`
+need, on launches that carry a `dataScope` (`data_scope: true` recipes):
+
+```elixir
+forward "/__moments", Moments.Recipes,
+  token: {MyApp, :moments_token, []},
+  recipes: MyApp.Moments.recipes(),
+  repo: MyApp.Repo,
+  history: [MyApp.History.Entry],
+  explore: [domains: [MyApp.Bookings], setup: {MyApp.Explore, :actors, []}]
+```
+
+- `POST /<recipe>/fork` `{"launch", "n"}` (1–16): captures the scope and
+  clones it `n` times (`Mana.Snapshot`); answers `{"launches"}`, one scope
+  each. A launch without a known scope, with a `knobScope` or an `n` out of
+  range is refused (422).
+- `POST /<recipe>/project` `{"launch"}`: row count per table in the scope
+  (every table, read from the catalog), the `history:` logs' entries in order
+  (subject, action, verb, actor kind, outcome, before, after) and `recipe`,
+  the MD5 of the recipe's compiled module (a `RecipeSet`'s whole module, so
+  any change to it reads as a redefinition).
+- `POST /_explorations/replay` `{"trace"}`: a `Mana.Explore.save/2` trace
+  rebuilt by `Mana.Explore.replay_file/3` in a new scope, after `setup` creates
+  the actors there; answers `{"dataScope"}`. `/_explorations/fork` and
+  `/_explorations/project` take that launch. `_explorations` is therefore not
+  a recipe name.
+
+All of it needs `repo:`, mana_core and `config :mana_core, data_scopes: true`;
+values come back as stored and the runner normalizes ids and times. Focused
+check (Postgres): `mix test test/recipes_situations_test.exs` with
+`MANA_TEST_POSTGRES` set.
+
 ## Shared base declared in Ash
 
 Each screen contract can declare the base its recipes depend on:
@@ -234,7 +331,8 @@ specific recipe.
 ## Moments protocol ancestry
 
 `from(:checkout)` inside a `moment` keeps the parent in the exported catalog.
-References across domains are resolved in `build_many`; missing parents and
+References across domains are resolved in `build_many` and among the domains
+of one app; missing parents and
 cycles fail. A Moment without a parent is a root. `base` stays a shared
 preparation recipe and takes no part in ancestry. With relations, the export
 format is 3, Moments protocol 0.1, profile `mana-ash-flutter`; without relations,

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show assertOwned, uuidV4;
+import 'package:mana/runtime.dart' show assertOwned, uuidV4;
 import 'package:path/path.dart' as p;
 
 import 'adapter.dart';

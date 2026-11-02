@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show openPrivate, uuidV4;
+import 'package:mana/runtime.dart' show openPrivate, uuidV4;
 import 'package:path/path.dart' as p;
 
 import 'canonical.dart';
@@ -147,6 +147,10 @@ final class Moments implements WatchedMoments, GestureMoments {
   _Frame? _frame;
   Map<String, Object?>? _blocker;
   int _blockerSequence = 0, _lastCaptureSequence = 0;
+
+  /// The active runtime's requests in flight (`MomentActivity` in live_ui):
+  /// what a journey's wait reads as progress. Never persisted or a criterion.
+  ({int inFlight, int sequence, double at})? _activity;
   double? _moveStarted;
   bool _preparing = false, _opening = false;
   late final RestartHandoff _restart;
@@ -263,10 +267,7 @@ final class Moments implements WatchedMoments, GestureMoments {
     };
   }
 
-  Map<String, Object?> _snapshot() => {
-    'revision': _revision,
-    'state': _state,
-  };
+  Map<String, Object?> _snapshot() => {'revision': _revision, 'state': _state};
 
   Map<String, Object?>? _frameControl(String? client) {
     final frame = _frame;
@@ -304,7 +305,8 @@ final class Moments implements WatchedMoments, GestureMoments {
   /// restarted one would; the caller falls back to a full restart on failure.
   Future<void> remount({Duration timeout = const Duration(seconds: 15)}) async {
     final old = _remount?.client ?? _activeClient;
-    if (old == null || (_remount == null && !canRemount())) throw const MomentsError('The runtime cannot rebuild itself');
+    if (old == null || (_remount == null && !canRemount()))
+      throw const MomentsError('The runtime cannot rebuild itself');
     final id = _remount?.id ?? _armRemount();
     final deadline = DateTime.now().add(timeout);
     final clock = Stopwatch()..start();
@@ -313,12 +315,16 @@ final class Moments implements WatchedMoments, GestureMoments {
       while (DateTime.now().isBefore(deadline)) {
         if (_activeClient != old) claimed ??= clock.elapsedMilliseconds;
         if (_activeClient != old && _observed?['revision'] == _revision) {
-          stderr.writeln('Moments: rebuilt in ${clock.elapsedMilliseconds} ms (claimed at ${claimed} ms) ${jsonEncode(_rebuildSpans(_observed?['timing']))}');
+          stderr.writeln(
+            'Moments: rebuilt in ${clock.elapsedMilliseconds} ms (claimed at ${claimed} ms) ${jsonEncode(_rebuildSpans(_observed?['timing']))}',
+          );
           return;
         }
         await Future<void>.delayed(const Duration(milliseconds: 30));
       }
-      stderr.writeln('Moments: rebuild timed out (claimed at ${claimed ?? '-'} ms, observed ${_observed?['revision'] == _revision})');
+      stderr.writeln(
+        'Moments: rebuild timed out (claimed at ${claimed ?? '-'} ms, observed ${_observed?['revision'] == _revision})',
+      );
       throw const MomentsError('The rebuilt app did not report the Moment');
     } finally {
       if (_remount?.id == id) _remount = null;
@@ -622,6 +628,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         _frame = null;
         _blocker = null;
         _blockerSequence = 0;
+        _activity = null;
         _supportsFrame = url.queryParameters['frame'] == '1';
         _supportsCaptureFrame = url.queryParameters['captureFrame'] == '1';
         _supportsRemount = url.queryParameters['remount'] == '1';
@@ -685,6 +692,24 @@ final class Moments implements WatchedMoments, GestureMoments {
         frame?.observed = null;
       }
       reply(response, 200, {'accepted': true});
+    } else if (method == 'POST' && op == 'activity') {
+      final data = await body();
+      final inFlight = data['inFlight'], sequence = data['sequence'];
+      if (data.keys.any((key) => !const ['revision', 'client', 'sequence', 'inFlight'].contains(key)) ||
+          inFlight is! int ||
+          inFlight < 0 ||
+          inFlight > 1024 ||
+          sequence is! int ||
+          sequence < 1) {
+        throw const MomentsError('Invalid runtime activity');
+      }
+      if (data['client'] != _activeClient || data['revision'] != _revision || sequence <= (_activity?.sequence ?? 0)) {
+        reply(response, 409, {'accepted': false});
+        return true;
+      }
+      _activity = (inFlight: inFlight, sequence: sequence, at: nowMs());
+      _wake();
+      reply(response, 200, {'accepted': true});
     } else if (method == 'POST' && op == 'frame-ack') {
       final data = await body();
       final frame = _frame;
@@ -745,8 +770,8 @@ final class Moments implements WatchedMoments, GestureMoments {
           {...entry, 'saved': _states.containsKey(entry['name']), 'active': _state?['name'] == entry['name']},
       ]);
     } else if (method == 'GET' && op == 'look') {
-      // `after` + `wait` hold the answer until the next UI report, so a
-      // journey wakes on the report instead of sleeping between reads.
+      // `after` + `wait` hold the answer until the next UI or activity
+      // report, so a journey wakes on it instead of sleeping between reads.
       final after = int.tryParse(url.queryParameters['after'] ?? '');
       final wait = (int.tryParse(url.queryParameters['wait'] ?? '') ?? 0).clamp(0, 2000);
       if (after != null && after == _observation && wait > 0) {
@@ -758,6 +783,14 @@ final class Moments implements WatchedMoments, GestureMoments {
         'observation': _observation,
         'observed': _observed,
         'blocker': _blocker,
+        'activity': switch (_activity) {
+          (:final inFlight, :final sequence, :final at) => {
+            'inFlight': inFlight,
+            'sequence': sequence,
+            'ageMs': nowMs() - at,
+          },
+          null => null,
+        },
         'dart': dart,
         'status': _state == null
             ? 'idle'
@@ -820,6 +853,11 @@ final class Moments implements WatchedMoments, GestureMoments {
   void _setObserved(Map<String, Object?>? value) {
     _observed = value;
     _observation++;
+    _wake();
+  }
+
+  /// Answers the `look` held for the next report.
+  void _wake() {
     final reached = _nextObservation;
     _nextObservation = Completer<void>();
     reached.complete();

@@ -18,8 +18,14 @@ in `lib/src/protocol.dart`. Changing that text requires reconciling the
 declared capabilities; this identity check does not certify conformance.
 `moments capabilities --json` works outside a project and exposes the engine's
 capabilities and limits. It reads no private data and proves no journey.
-Discovery declares `executionProfiles.launcher`; no command flattens a child
-into a root.
+Discovery declares `executionProfiles.launcher` and
+`executionProfiles.situations` (below); no command flattens a child into a
+root. `independentFork`, `wholeSituationSnapshot`,
+`normalizedVersionComparison`, `saveExplorationAsMoment` and `traceFromRoot`
+are declared for the data layer only, each with its conformance test in
+`test/situations_test.dart` (the backend half in
+`ash/moments/test/recipes_situations_test.exs`); the rest stay `false` and
+conformance stays `partial`.
 
 The Ash DSL accepts `from(:parent_name)` on a Moment. The exporter resolves
 ancestry after collecting every domain and refuses missing parents and cycles.
@@ -55,6 +61,55 @@ consumer, exports the fixture to an explicit path and refuses cycles and
 missing parents. Pass the exported file in `MANA_LINEAGE_MANIFEST` to the Dart
 test to also compare the real Ash export with the Markdown map. Without it, that
 case is skipped explicitly; the others use protocol fixtures.
+
+## Situations: fork, diff, trace and save
+
+The protocol's instance verbs work on a Moment's **data situation**: what its
+recipe prepares in a database of its own (`recipe :x, "...", data_scope:
+true`, `Mana.Snapshot`). They need the backend of a running `up` (or `up
+--backend-only`); they never touch the shared database, the UI session or a
+journey's ownership.
+
+```sh
+moments fork booking-paid -n 3      # prepared once, cloned 3 times: booking-paid@1 (origin), @2..@4
+moments diff booking-paid@2 booking-paid@3   # situation ids, or Moment names evaluated now
+moments diff booking-paid booking-paid       # two evaluations under the same code: SAME
+moments trace booking-paid          # declared path from the root + every Mana.History entry in order
+moments save explore/refusal_enforced-booking-pay.json cancelled-yet-paid
+moments situations                  # what is kept, without launches
+```
+
+- `fork` prepares the Moment once, captures its scope and clones it N times
+  (1–16, `Mana.Snapshot.capture/fork`); every copy is a database of its own,
+  so writes to one never reach another. The UI projection and knob scopes are
+  not forked (a recipe returning `knobScope` is refused).
+- `diff` compares per layer: `data` (row count per table, history entries one
+  has and the other not) and `observe` (the recipe's `observe/2`). Ids
+  (UUIDs anywhere in a value), ISO-8601 times and values under secret-looking
+  keys are normalized; `--json` declares the normalization. A situation still
+  open is projected live, one whose scope is gone by the projection it had
+  when made. Each situation keeps the backend sources it was made under and
+  its recipe's digest (the MD5 of the recipe's compiled module, a whole
+  `RecipeSet`'s): `comparison` is `same-version`, `across-versions` or
+  `across-moments`, and `redefined: true` says the recipe changed, so a
+  redefinition is never read as changed behaviour. The digest is
+  conservative: any change to that module counts.
+- `trace` evaluates the Moment from the migrated, empty base and lists every
+  entry of the `history:` logs in order: subject, action, verb, actor kind,
+  outcome and each changed field before → after. `path` is the declared
+  ancestry from the root; a child is refused like `up` refuses it. The
+  journey's UI steps are not part of it.
+- `save` takes a trace `Mana.Explore.save/2` wrote, replays it in a scope of
+  its own (`Moments.Recipes` `explore:`) and only then appends an entry to
+  `moments/explorations.md` (the `MOMENTS.md` format: `run: mana-explore
+  moments/explorations/<name>.json`, a `check:` naming the broken property and
+  a description of every move) and copies the trace there. `moments list`
+  shows these entries; `fork`, `diff` and `trace` take their names. They are
+  not added to the Ash declaration, so `up`/`open` cannot open them in the UI.
+
+Launches stay in the private `moments/.backend/situations.json` (the last 64);
+output names situations by id. The backend keeps the 16 most recent scopes, so
+an older situation compares by its captured projection.
 
 ## Short CLI
 
@@ -220,14 +275,28 @@ use instance, run, workspace and role labels. Custom Docker adapters use
 not put secrets in labels. External resources created without this contract
 cannot be cleaned up by name or port.
 
-The operation uses `/proc` and `flock` on Linux. The kernel lock serialises
-down/up and is released when the process dies, with no TTL or manual file
-removal. Flutter and its runtime use `TMPDIR=.backend/tmp/flutter-<runId>`, so
+Process identity, the operation lock and process groups go through a
+platform layer (`lib/src/platform.dart`) chosen at runtime. On Linux it reads
+`/proc` (start tick, `boot_id`) and holds `flock(1)`, as before. On macOS it
+reads `ps -o ppid=,stat=,lstart=` (UTC, C locale) and `sysctl
+kern.bootsessionuuid` (or one derived from `kern.boottime`), and holds an
+fcntl lock (`RandomAccessFile.lock`), refusing a second acquisition from the
+same process as `flock` does. Either lock serialises down/up and is released
+when the process dies, with no TTL or manual file removal. Flutter and its runtime use `TMPDIR=.backend/tmp/flutter-<runId>`, so
 compilation and DevFS stay inside the instance. A port held by an unidentified
 process, a legacy/corrupt journal or a container with a divergent identity make
 the command refuse to finish and keep the evidence. There is no `--force`.
-macOS/Windows hosts still need an identity/lock adapter; this does not limit
-the targets Flutter compiles to.
+Windows is refused. The macOS implementation is unit-tested against recorded
+`ps`/`sysctl` output on Linux (its lock and its process-group launcher run for
+real there); it has not run on a Mac.
+
+Every child the runner starts (services, `flutter run`, `flutter test`) leads
+a process group of its own (`setsid` on Linux, Perl's `setpgrp` on macOS).
+Stopping one signals the group (SIGTERM, SIGKILL after 5 s, then SIGKILL to
+what outlived the leader), and its output is read only until 0.5 s after it
+exits: a descendant that keeps the pipe open never holds shutdown. A
+descendant that leaves the group (its own `setsid`) is not reached; the
+lifecycle's process records are what `moments down` stops.
 
 ### Incomplete initial preparation and explicit discard
 
@@ -406,7 +475,19 @@ cannot bypass those paths nor be combined with `--retry-preparation`.
 A journey requires steps declared in the Ash DSL. It prepares and opens the
 situation once, fires real events through Flutter's gesture system and waits for
 the postconditions of each step that declares `until`. After the last step, it
-waits for the final criteria for up to 12 s, repeating only observations. The
+waits for the final criteria, repeating only observations.
+
+Both waits follow progress, not a fixed budget: they last while the app shows
+it — a screen report that changed what it shows or offers, requests in flight
+(`MomentActivity`, counted by `MomentActionTrace.attach`), a request finishing
+— and end 8 s (12 s for the final criteria) after the last sign, 30 s at
+most. A slow backend under parallel load therefore extends the wait while the
+app waits on it, and a stuck screen still fails at its idle budget. An app
+whose live_ui does not report activity gets the idle budget after its last
+changed report. Each step's receipt records `wait`: the budgets, samples,
+progress signs, the time requests were in flight (`busyMs`), the time spent
+reading the screen (`lookMs`) and the backend (`inspectMs`); the final one is
+`finalObservation.progress`. The
 declaration does not need to duplicate the final criteria in the last step's
 `until`. Intermediate taps still need `until` to order the transition before the
 next gesture.
@@ -972,10 +1053,11 @@ Apps read `MANA_API_URL`; the launcher provides `MANA_MOMENTS=true` and
 app parameters. Bridge tokens stay in a private file and only connect in
 debug/loopback.
 
-## Execution target: web, Linux or Android
+## Execution target: web, Linux, macOS, Android or iOS
 
-`moments up <name> --device linux` starts native Flutter through the same machine
-protocol used for the web. `--device web-server` is the default. Stop the
+`moments up <name> --device linux` (or `macos` on a Mac) starts native Flutter
+through the same machine protocol used for the web. `--device web-server` is
+the default. Stop the
 instance before switching targets; two UIs never compete for one session.
 `open`, `suite` and `refresh --check` keep the same names and
 declarations. `status --json` exposes `target: {requested, connected}` and only
@@ -1016,6 +1098,21 @@ deletes emulators. Android ownership is published in lifecycle **version 3
 before allocation**; web/Linux stay on version 2, and older readers refuse the
 new version instead of stopping a run while ignoring resources. `moments down`
 closes the transport on normal shutdown and recovers it after the launcher dies.
+
+### iOS simulator transport
+
+`up <moment> --device ios:<simulator-udid>` (macOS host) runs the app on a
+booted iOS simulator, selected like Android. The simulator shares the Mac's
+network, so the app reaches the API and bridge on loopback with no forwarding;
+`ios_transport.dart` owns the rest: it checks with `xcrun simctl list devices
+--json` that the exact UDID is booted on an iOS runtime, journals the run in a
+private per-run directory and holds a per-simulator claim in
+`~/.cache/mana/ios-simulators` (published with an exclusive hard link) that
+excludes other Mana runs, even after a supervisor's death. A claim from an
+earlier boot of the simulator (`lastBootedAt`) no longer holds it. It never
+boots, erases or installs. Ownership is lifecycle version 3 (`ios` instead of
+`android`); `moments down` releases it on shutdown and after the launcher
+died. Verified only with a fake `simctl` on Linux.
 
 ### Additive evolution of the saved presentation
 

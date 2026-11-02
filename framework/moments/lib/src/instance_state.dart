@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show findOwnedDatabase;
+import 'package:mana/runtime.dart' show findOwnedDatabase;
 import 'package:path/path.dart' as p;
 
 import 'errors.dart';

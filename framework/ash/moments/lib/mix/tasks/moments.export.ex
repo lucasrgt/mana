@@ -1,5 +1,10 @@
 defmodule Mix.Tasks.Moments.Export do
-  @moduledoc "Usage: `mix moments.export MyApp.Domain[,MyApp.Other] output.json`."
+  @moduledoc """
+  Usage: `mix moments.export MyApp.Domain[,MyApp.Other] output.json`.
+
+  A domain that names an `app` exports that app's Moments from every domain
+  of the project's `:ash_domains` (see `Moments.Manifest.build/2`).
+  """
   use Mix.Task
   @shortdoc "Export an Ash Moments declaration for the local Flutter bridge"
   def run([module, output]) do
@@ -18,7 +23,7 @@ defmodule Mix.Tasks.Moments.Export do
       Map.put(
         manifest,
         "backendGraph",
-        Moments.BackendGraph.build(modules, manifest, output, before)
+        Moments.BackendGraph.build(manifest, output, before)
       )
 
     contents = Jason.encode!(manifest, pretty: true) <> "\n"

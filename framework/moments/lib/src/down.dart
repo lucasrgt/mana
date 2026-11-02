@@ -1,11 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show assertOwned, findOwnedDatabase;
+import 'package:mana/runtime.dart' show assertOwned, findOwnedDatabase;
 import 'package:path/path.dart' as p;
 
 import 'android_transport.dart';
 import 'errors.dart';
+import 'ios_transport.dart';
 import 'json.dart';
 import 'lifecycle.dart';
 import 'services.dart';
@@ -81,6 +82,22 @@ Future<void> stopOwnedResources(
       }
     }
   }
+  String? iosDirectory;
+  final ios = state['ios'] as Map?;
+  if (ios != null) {
+    if (state['version'] != 3 || directory == null)
+      throw const MomentsError('iOS simulator recovery needs its owning lifecycle directory');
+    iosDirectory = p.join(directory, 'ios-${state['runId']}');
+    final file = p.join(iosDirectory, 'transport.json');
+    if (File(file).existsSync()) {
+      final transport = _read(file);
+      if (transport['owner'] != state['runId'] ||
+          transport['device'] != ios['device'] ||
+          !jsonEqual(transport['ports'], ios['ports'])) {
+        throw const MomentsError('iOS simulator journal differs from lifecycle ownership');
+      }
+    }
+  }
   // Validate every known container before sending a signal to any process.
   if (state['databaseStarted'] == true && instance == null) {
     throw const MomentsError(
@@ -118,6 +135,9 @@ Future<void> stopOwnedResources(
     throw const MomentsError('An owned process is still running; ownership record retained');
   if (androidDirectory != null && File(p.join(androidDirectory, 'transport.json')).existsSync()) {
     await recoverAndroidTransport(androidDirectory);
+  }
+  if (iosDirectory != null && File(p.join(iosDirectory, 'transport.json')).existsSync()) {
+    await recoverIosTransport(iosDirectory);
   }
   for (final container in containers) {
     final id = container['Id']! as String;

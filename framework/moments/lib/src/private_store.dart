@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:mana/mana.dart' show savePrivateState;
+import 'package:mana/runtime.dart' show savePrivateState;
 
 import 'errors.dart';
 import 'http_server.dart';

@@ -29,17 +29,24 @@ Map<String, Object?> capabilities() {
       'declaredCheckpointComposition': false,
       'recordedPreparationRecovery': false,
       'parentMaterialization': false,
-      'independentFork': false,
-      'wholeSituationSnapshot': false,
-      'normalizedVersionComparison': false,
-      'saveExplorationAsMoment': false,
-      'traceFromRoot': false,
+      'independentFork': true,
+      'wholeSituationSnapshot': true,
+      'normalizedVersionComparison': true,
+      'saveExplorationAsMoment': true,
+      'traceFromRoot': true,
     },
     'executionProfiles': {
       'launcher': {
         'commands': ['up', 'open', 'suite', 'profile'],
         'parentMaterialization': false,
         'independentFork': false,
+      },
+      'situations': {
+        'commands': ['fork', 'diff', 'trace', 'save', 'situations'],
+        'layers': ['data', 'observe'],
+        'requires': 'A running backend (up or up --backend-only) and recipes declared with data_scope: true',
+        'independentFork': true,
+        'parentMaterialization': false,
       },
     },
     'gestures': {
@@ -108,7 +115,7 @@ Map<String, Object?> capabilities() {
       'postconditions': {
         'step': 'until: [:check, ...] with check(..., scope: :step)',
         'does':
-            'After a gesture, waits (8 s) for the next screen reports and backend observations until every named criterion holds; a step never retries its gesture',
+            'After a gesture, waits for the next screen reports and backend observations until every named criterion holds: 8 s after the last progress the app reports (a changed screen, requests in flight or finishing), 30 s at most; a step never retries its gesture',
       },
     },
     'surfaces': {
@@ -163,6 +170,14 @@ Map<String, Object?> capabilities() {
       'profile':
           'Execute one root journey once and observe engine phase latency plus bounded request-context Ash/Ecto telemetry; not CPU, heap, load or parent materialization',
       'graph': 'Declared ancestry only; no materialization, traversal or verification evidence',
+      'fork':
+          "Prepares the Moment once in a database of its own and clones that whole database N times (Mana.Snapshot); not the UI projection, knob scopes or external effects",
+      'diff':
+          'Row counts per table, history entries and the recipe observation, normalized (ids, times, secrets); flags a redefined recipe and a comparison across backend versions',
+      'trace':
+          'The declared path from the root, and the Moment evaluated from the empty migrated database with every Mana.History entry in order; not the UI steps of a journey',
+      'save':
+          'An exploration trace (Mana.Explore.save/2) becomes an entry of moments/explorations.md once it replays in its own database; it is not added to the Ash declaration',
     },
   };
 }

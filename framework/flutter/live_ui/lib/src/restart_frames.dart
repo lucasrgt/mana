@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'configuration.dart';
+
 import 'package:flutter/scheduler.dart';
 
 /// Stops the old web runtime sending frames while its engine view is torn down.

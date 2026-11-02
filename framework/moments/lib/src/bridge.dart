@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:mana/mana.dart' show openPrivate;
+import 'package:mana/runtime.dart' show openPrivate;
 import 'package:path/path.dart' as p;
 
 import 'errors.dart';
