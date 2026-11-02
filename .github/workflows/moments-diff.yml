@@ -1,0 +1,87 @@
+name: Moments behaviour diff
+
+# Reusable: a project that keeps Mana as its mana/ submodule calls it from its
+# own pull_request workflow (framework/moments/README.md, "Behaviour diff").
+# The job runs `moments diff --base <the pull request's base>` for one app and
+# keeps one comment on the pull request up to date with the report.
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: The app folder (with moments/backend.json), relative to the repository root.
+        required: true
+        type: string
+      affected:
+        description: Only the Moments the change affects (moments affected); false compares them all.
+        default: true
+        type: boolean
+      setup:
+        description: Installs the head's dependencies; moments diff sets the base checkout up itself.
+        default: mana/framework/cli/mana setup --runtime-only
+        type: string
+      flutter-version:
+        default: 3.47.4
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    name: Behaviour diff · ${{ inputs.project }}
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # The base is checked out from this clone (a git worktree), so it needs the history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ inputs.flutter-version }}
+          cache: true
+      - name: Set up the head
+        env:
+          SETUP: ${{ inputs.setup }}
+        run: bash -c "$SETUP"
+      - name: moments diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          PROJECT: ${{ inputs.project }}
+          AFFECTED: ${{ inputs.affected }}
+        run: |
+          if [ "$AFFECTED" = true ]; then set -- --affected; fi
+          mana/framework/moments/moments diff --base "$BASE" "$@" --out "$RUNNER_TEMP/moments-diff" --project "$PROJECT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: moments-diff
+          path: ${{ runner.temp }}/moments-diff/behaviour-diff.*
+          if-no-files-found: ignore
+      # One comment per app, found by its marker and edited in place on every push.
+      # A pull request from a fork gets a read-only token: the report stays in the artifact.
+      - name: Comment on the pull request
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          PROJECT: ${{ inputs.project }}
+        run: |
+          marker="<!-- moments-behaviour-diff:$PROJECT -->"
+          body="$RUNNER_TEMP/moments-diff/comment.md"
+          { echo "$marker"; cat "$RUNNER_TEMP/moments-diff/behaviour-diff.md"; } > "$body"
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$body" > /dev/null
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -F "body=@$body" > /dev/null
+          fi

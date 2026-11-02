@@ -28,6 +28,7 @@ defmodule Moments.Manifest do
       "moments" => Map.new(scenes),
       "watch" => manifests |> Enum.flat_map(& &1["watch"]) |> Enum.uniq()
     }
+    |> explorations(Enum.flat_map(manifests, &Map.get(&1, "explorations", [])))
     |> lineage()
   end
 
@@ -78,6 +79,7 @@ defmodule Moments.Manifest do
       "watch" => Enum.uniq(client_roots ++ opt(owner, :watch, [])),
       "moments" => unique!(moments, opt(owner, :app))
     }
+    |> explorations(directories(contributions, opts))
     |> then(fn manifest ->
       if Keyword.get(opts, :defer_lineage, false), do: manifest, else: lineage(manifest)
     end)
@@ -118,7 +120,82 @@ defmodule Moments.Manifest do
         Moments.Extension in Spark.extensions(domain)
 
   defp scenes(domain),
-    do: domain |> Dsl.get_entities([:moments]) |> Enum.filter(&is_struct(&1, Moments.Scene))
+    do:
+      Enum.filter(Dsl.get_entities(domain, [:moments]), &is_struct(&1, Moments.Scene)) ++
+        explored(domain)
+
+  # Each saved Mana.Explore trace in the section's `explorations` directory
+  # is a Moment named after its file. A directory nothing was saved to yet
+  # declares none.
+  defp explored(domain) do
+    case opt(domain, :explorations) do
+      nil ->
+        []
+
+      dir ->
+        dir
+        |> Path.expand()
+        |> Path.join("*.json")
+        |> Path.wildcard()
+        |> Enum.sort()
+        |> Enum.map(&exploration_scene/1)
+    end
+  end
+
+  defp exploration_scene(path) do
+    name = Path.basename(path, ".json")
+
+    unless Regex.match?(~r/^[a-z][a-z0-9-]*$/, name),
+      do: raise(ArgumentError, "#{path}: an exploration's file is named after its Moment")
+
+    bytes = File.read!(path)
+
+    trace =
+      case Jason.decode(bytes) do
+        {:ok, %{"property" => property, "moves" => moves} = trace}
+        when is_binary(property) and is_list(moves) ->
+          trace
+
+        _ ->
+          raise ArgumentError, "#{path} is not a Mana.Explore trace (mix mana.explore --save)"
+      end
+
+    %Moments.Scene{
+      name: name,
+      description: explored_description(trace),
+      exploration: %{
+        path: path,
+        trace: trace,
+        sha256: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+      }
+    }
+  end
+
+  defp explored_description(trace) do
+    subject =
+      [trace["resource"], trace["verb"]] |> Enum.filter(&is_binary/1) |> Enum.join(".")
+
+    actor = if is_binary(trace["actor"]), do: " as #{trace["actor"]}", else: ""
+    detail = if is_binary(trace["detail"]), do: ": #{trace["detail"]}", else: ""
+    where = if subject == "", do: "", else: " for #{subject}"
+    "Found by Mana.Explore: #{trace["property"]} breaks#{where}#{actor}#{detail}"
+  end
+
+  defp directories(contributions, opts) do
+    root = Keyword.get(opts, :source_root, File.cwd!())
+
+    for {domain, _scenes} <- contributions, dir = opt(domain, :explorations) do
+      %{
+        "domain" => inspect(domain),
+        "directory" => Path.relative_to(Path.expand(dir), Path.expand(root), force: true),
+        "resources" => domain |> Ash.Domain.Info.resources() |> Enum.map(&inspect/1)
+      }
+    end
+  end
+
+  # Where `moments save` writes a trace so that the declaration lists it.
+  defp explorations(manifest, []), do: manifest
+  defp explorations(manifest, directories), do: Map.put(manifest, "explorations", directories)
 
   defp scene_app(domain, scene), do: scene.app || opt(domain, :app)
 
@@ -246,7 +323,24 @@ defmodule Moments.Manifest do
      }
      |> parent(scene.from)
      |> platforms(scene.platforms)
-     |> backend(scene.backend, base)}
+     |> recipe(scene, base, Keyword.get(opts, :source_root, File.cwd!()))}
+  end
+
+  # A saved exploration's recipe is its trace: the runner sends it back to
+  # `/_explorations/check`, which replays it and checks the property it
+  # broke, the Moment's one criterion.
+  defp recipe(entry, %{exploration: nil} = scene, base, _root),
+    do: backend(entry, scene.backend, base)
+
+  defp recipe(entry, %{exploration: exploration}, _base, root) do
+    Map.merge(entry, %{
+      "checks" => [%{"name" => exploration.trace["property"], "kind" => "property"}],
+      "exploration" => %{
+        "file" => Path.relative_to(Path.expand(exploration.path), Path.expand(root), force: true),
+        "sha256" => exploration.sha256,
+        "trace" => exploration.trace
+      }
+    })
   end
 
   defp observation?(properties, key), do: properties[to_string(key)]["restore"] == false
@@ -306,7 +400,12 @@ defmodule Moments.Manifest do
   # Use the entity location captured by Spark instead of guessing from its name.
   # Export paths relative to the manifest, never the compiler/container checkout.
   defp source(scene, module, root) do
-    case Spark.Dsl.Entity.anno(scene) do
+    anno =
+      if scene.exploration,
+        do: Dsl.get_opt_anno(module, [:moments], :explorations),
+        else: Spark.Dsl.Entity.anno(scene)
+
+    case anno do
       nil ->
         nil
 

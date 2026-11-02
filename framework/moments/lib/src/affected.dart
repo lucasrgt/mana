@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import 'canonical.dart';
 import 'declaration_sources.dart';
+import 'effects.dart';
 import 'errors.dart';
 import 'impact.dart';
 import 'journey.dart' show criteria;
@@ -91,6 +92,16 @@ List<String> _validNames(Map<String, Object?> manifest) {
 Map<String, Object?> _scene(Map<String, Object?> manifest, String name) =>
     ((manifest['moments']! as Map)[name]! as Map).cast();
 
+// One Moment selected for two kinds of evidence: Dart with Elixir is a
+// union; the compiled file graph is the wider of the two Elixir reasons.
+String _combined(String a, String b) {
+  if (a == b) return a;
+  if ({a, b}.any((r) => r.startsWith('dart-')) || {a, b}.contains('dart-and-elixir-dependency')) {
+    return 'dart-and-elixir-dependency';
+  }
+  return {a, b}.contains('elixir-compiled-dependency') ? 'elixir-compiled-dependency' : 'elixir-action-effect';
+}
+
 /// Read-only selection. A plan is never a test result or permission to
 /// replay. Dart narrowing requires stable declared roots and a current import
 /// graph. Elixir narrowing requires fresh compiled evidence with unchanged
@@ -168,18 +179,28 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
   }
   final reasons = <Map<String, Object?>>[];
   final selected = <String, String>{};
+  // Why each Moment is selected, in words: import, compiled dependency,
+  // effect: <Resource.action>, no receipt, or the widening reason.
+  final why = <String, Set<String>>{};
   void all(String code, [List<String> files = const []]) {
     reasons.add({'code': code, 'paths': files});
     for (final name in names) {
       selected[name] = code;
+      why.putIfAbsent(name, () => {}).add(code);
     }
+  }
+
+  void mark(String name, String reason, Iterable<String> labels) {
+    final existing = selected[name];
+    selected[name] = existing == null ? reason : _combined(existing, reason);
+    why.putIfAbsent(name, () => {}).addAll(labels);
   }
 
   if (issues.isNotEmpty) all('sync-required');
   if (previous == null) all('catalog-missing-at-base', [manifestPath]);
   final runtimePaths = paths.where((path) => path != manifestPath && !declarations.contains(path)).toList();
-  Map<String, Object?>? dartGraph, backendGraph;
-  Map<String, Object?>? include(Impact graph, List<String> files, String reason) {
+  Map<String, Object?>? dartGraph, backendGraph, effectGraph;
+  Map<String, Object?>? include(Impact graph, List<String> files, String reason, String label) {
     final unmapped = files.where((path) => !graph.owners.containsKey(path)).toList();
     if (unmapped.isNotEmpty) {
       all('runtime-or-unmapped-change', unmapped);
@@ -190,12 +211,54 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
     if (reasons.isEmpty) {
       for (final path in files) {
         for (final name in graph.owners[path]!) {
-          final existing = selected[name];
-          selected[name] = existing != null && existing != reason ? 'dart-and-elixir-dependency' : reason;
+          mark(name, reason, [label]);
         }
       }
     }
     return impactJson(graph, files);
+  }
+
+  // A file only backend mutations reach selects the Moments whose evidence
+  // names one of them, and every Moment whose evidence is incomplete.
+  Map<String, Object?> byEffect(ActionMap map, List<String> files) {
+    final reached = {for (final path in files) ...map.effects[path]!};
+    final evidence = effectEvidence(
+      manifest,
+      map,
+      latestReceipts(project),
+      reached,
+      preparations: latestPreparations(project),
+    );
+    if (reasons.isEmpty) {
+      for (final name in names) {
+        final (:hits, :missing) = evidence[name]!;
+        if (hits.isNotEmpty) {
+          mark(name, 'elixir-action-effect', [for (final action in hits.toList()..sort()) 'effect: $action']);
+        } else if (missing != null) {
+          mark(name, 'elixir-effect-evidence-missing', [missing]);
+        }
+      }
+    }
+    return {
+      'status': 'available',
+      'scope':
+          'Files only create, update and destroy actions reach, matched with the actions named by each Moment\'s step verbs, recipe preparations (observed, else statically reached resources), exploration traces and latest passed receipts',
+      'matches': [
+        for (final path in files)
+          {
+            'path': path,
+            'actions': map.effects[path],
+            'moments': [
+              for (final name in names)
+                if (evidence[name]!.hits.any(map.effects[path]!.contains)) name,
+            ],
+          },
+      ],
+      'evidenceMissing': {
+        for (final name in names)
+          if (evidence[name]!.hits.isEmpty && evidence[name]!.missing != null) name: evidence[name]!.missing,
+      },
+    };
   }
 
   if (runtimePaths.isNotEmpty) {
@@ -232,6 +295,7 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
             await dartImpact(project, root, entries, (manifest['watch']! as List).cast<String>()),
             dartPaths,
             'dart-import-dependency',
+            'import',
           );
         } on Object {
           all('dart-impact-unavailable', dartPaths);
@@ -245,11 +309,32 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
           previous != null &&
           stableBackendGraph(manifest['backendGraph'], previous['backendGraph'])) {
         try {
-          backendGraph = include(
-            backendImpact(project, root, manifestFile, manifest, previous),
-            backendPaths,
-            'elixir-compiled-dependency',
+          final graph = (manifest['backendGraph']! as Map).cast<String, Object?>();
+          final impact = backendImpact(project, root, manifestFile, manifest, previous);
+          final effects = actionMap(
+            graph,
+            ((graph['files']! as Map).keys.cast<String>()).toSet(),
+            (file) => p.relative(p.normalize(p.join(p.dirname(manifestFile), file)), from: root),
           );
+          final effectPaths = [
+            if (effects != null)
+              for (final path in backendPaths)
+                if (effects.effects.containsKey(path)) path,
+          ];
+          backendGraph = include(
+            impact,
+            [
+              for (final path in backendPaths)
+                if (!effectPaths.contains(path)) path,
+            ],
+            'elixir-compiled-dependency',
+            'compiled dependency',
+          );
+          effectGraph = effects == null
+              ? {'status': 'unavailable', 'reason': 'No action map in the backend graph; run moments sync'}
+              : effectPaths.isEmpty
+              ? null
+              : byEffect(effects, effectPaths);
         } on Object {
           all('backend-impact-unavailable', backendPaths);
         }
@@ -298,7 +383,8 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
           canonical(_identity(manifest, _scene(manifest, name))),
         );
     for (final name in names) {
-      if (!sameIdentity(name) && !selected.containsKey(name)) selected[name] = 'exported-declaration-change';
+      if (!sameIdentity(name) && !selected.containsKey(name))
+        mark(name, 'exported-declaration-change', ['declaration']);
     }
     // A changed declaration whose export did not change can contain helper
     // behaviour. Without a dependency graph its impact is unknown, not empty.
@@ -337,6 +423,8 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
         ? 'dart-and-elixir'
         : dartGraph != null
         ? 'dart-imports'
+        : backendGraph != null && effectGraph?['status'] == 'available'
+        ? 'elixir-effects'
         : backendGraph != null
         ? 'elixir-compiled'
         : selected.isNotEmpty
@@ -344,19 +432,20 @@ Future<Map<String, Object?>> affectedMoments(String project, {String base = 'HEA
         : 'unchanged',
     'dartGraph': ?dartGraph,
     'backendGraph': ?backendGraph,
+    'effectGraph': ?effectGraph,
     'changed': paths,
     'reasons': reasons,
     'issues': issues,
     'removed': removed,
     'selected': [
       for (final name in selected.keys.toList()..sort())
-        {'name': name, 'operation': operation(name), 'reason': selected[name]},
+        {'name': name, 'operation': operation(name), 'reason': selected[name], 'why': why[name]!.toList()},
     ],
     'omitted': [
       for (final name in names)
         if (!selected.containsKey(name)) name,
     ],
     'limitation':
-        'Dart selection follows static imports from explicitly declared client roots, not dynamic calls. Elixir selection uses compiled file dependencies and reflected Ash resources with fresh hashes and unchanged topology. Dynamic dispatch is outside both graphs. Shared packages, metadata, unavailable graphs and unmapped changes widen selection. Run/check/navigate still validate current sources and runtime independently; navigation is not verification.',
+        'Dart selection follows static imports from explicitly declared client roots, not dynamic calls. Elixir selection uses compiled file dependencies and reflected Ash resources with fresh hashes and unchanged topology; a file only create/update/destroy actions reach selects the Moments whose step verbs, recipes or latest passed receipts name those actions, and every Moment without that evidence. Receipts cover gesture requests only, not screen loads or jobs. Dynamic dispatch is outside both graphs. Shared packages, metadata, unavailable graphs and unmapped changes widen selection. Run/check/navigate still validate current sources and runtime independently; navigation is not verification.',
   };
 }

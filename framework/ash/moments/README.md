@@ -88,6 +88,13 @@ section's `app` is the default for its Moments; a Moment's own `app` (inside its
 `do` block: Spark takes options or a block, not both) overrides it. `from` and
 verb types resolve across the domains of the app.
 
+The backend graph also carries `actions` (`Moments.ActionGraph`): the files
+only create, update and destroy actions reach, each mapped to those actions,
+the action behind each step verb and the resources each `Moments.RecipeSet`
+recipe reaches, from `Ash.Resource.Info` and the xref graph. `moments affected`
+uses it to choose Moments by effect; an error marks it `unavailable` (the
+reason is printed) without blocking the export.
+
 The export refuses two domains that name an app with a `route` and an app with
 none; app settings, or a Moment that names no app, on a domain without a route;
 and one name twice in an app, whichever domains declare it. A domain keeps its
@@ -160,11 +167,19 @@ already observed by the tracer is not duplicated by the handler.
 
 The tracer uses one ETS table per request; it never puts actions or queries
 behind a global process. It keeps up to 16 events, marking truncation, and
-destroys the table when the receipt closes. Jobs, work after the response,
+destroys the table when the receipt closes. Past the limit a read gives way to
+a create, update or destroy; a truncated receipt says in `writesComplete`
+whether every write is still listed. Jobs, work after the response,
 requests outside the zone and paths without a tracer are not covered. Records
 hold only resource, action, domain, span kind, the `authorize?` flag when given
 and the reported end or error; never arguments, actor, tenant, tokens or error
 messages.
+
+A recipe's `prepare` is traced the same way, with no gesture: when
+`Moments.ActionTrace` is Ash's tracer, `Moments.Recipes` answers in
+`x-mana-preparation` the distinct `Resource.action` names it ran (up to 1024
+events, `truncated` past them or past a header's size), and the launch stays
+the recipe's own. `moments affected` matches a recipe by them.
 
 The bridge only accepts receipts for gestures dispatched in that
 runtime/revision while the journey's ownership is still active. It refuses extra
@@ -285,16 +300,67 @@ forward "/__moments", Moments.Recipes,
   (subject, action, verb, actor kind, outcome, before, after) and `recipe`,
   the MD5 of the recipe's compiled module (a `RecipeSet`'s whole module, so
   any change to it reads as a redefinition).
-- `POST /_explorations/replay` `{"trace"}`: a `Mana.Explore.save/2` trace
+- `POST /<recipe>/describe` `{"snapshot"}` (optional): `{"dataScope",
+  "recipe", "snapshot"}`, whether the recipe prepares in a scope of its own,
+  its digest and whether the named snapshot exists, asked before anything
+  runs.
+- `POST /<recipe>/capture` `{"launch", "snapshot"}`: freezes the launch's
+  scope as that snapshot (`Mana.Snapshot.capture/3`): a parent Moment's
+  checkpoint.
+- `POST /<recipe>/prepare` with `"from" => %{"snapshot" => name}`: a child's
+  `data_scope: true` recipe runs in a clone of its parent's snapshot instead
+  of the migrated base; the runner passes the parent's launch as
+  `context["parent"]`. A recipe on the shared database, an unknown snapshot
+  or a bad name is refused (422).
+- `POST /_explorations/replay` `{"trace"}`: a `Mana.Explore.save/3` trace
   rebuilt by `Mana.Explore.replay_file/3` in a new scope, after `setup` creates
   the actors there; answers `{"dataScope"}`. `/_explorations/fork` and
   `/_explorations/project` take that launch. `_explorations` is therefore not
   a recipe name.
+- `POST /_explorations/check` `{"trace"}`: how an exploration Moment runs
+  ([below](#saved-explorations-are-moments)). The trace replays in a scope of
+  its own, dropped afterwards, checking only the property it broke
+  (`Mana.Explore.check/3`; the rest of `explore:`, such as `skip_rules`, are
+  its options): `{"status": "failed", "violation"}` while the bug is there,
+  `{"status": "passed"}` once it is fixed. A trace naming a resource, verb,
+  actor or rule the app no longer has raises: an error, never a pass.
 
 All of it needs `repo:`, mana_core and `config :mana_core, data_scopes: true`;
 values come back as stored and the runner normalizes ids and times. Focused
-check (Postgres): `mix test test/recipes_situations_test.exs` with
-`MANA_TEST_POSTGRES` set.
+check (Postgres): `mix test test/recipes_situations_test.exs
+test/recipes_checkpoints_test.exs` with `MANA_TEST_POSTGRES` set.
+
+## Saved explorations are Moments
+
+A counterexample `Mana.Explore` finds and shrinks becomes a Moment without
+anyone writing it. A section names the directory its traces are saved to:
+
+```elixir
+moments do
+  app :hosts
+  explorations "priv/moments/explorations"
+end
+```
+
+`mix mana.explore --save cancelled-yet-paid` writes
+`priv/moments/explorations/cancelled-yet-paid.json`, and the next export
+declares the Moment `cancelled-yet-paid` in the section's app: its
+description says what broke, its one check (`kind: "property"`) is the
+property the trace broke, and `exploration` carries the trace (`file`
+relative to the manifest, `sha256`, `trace`) instead of a backend recipe; the
+app's `base` does not apply to it. Its `source` is the section's
+`explorations` line, so `affected` roots it at that domain and its resources
+like any other Moment. The top-level `explorations` list (domain, directory
+from the manifest, its resources) tells `moments save` where to write a
+trace. The directory is read from the Mix project root when the manifest is
+exported; one nothing was saved to yet declares no Moment. A file not named
+like a Moment, one that is no trace, or a name another Moment has is refused.
+
+The runner checks it through `/_explorations/check`: `moments suite <name>`
+fails while the property breaks and passes once it holds; fork, diff and
+trace evaluate its data. It has no screen, so `up`, `open` and `profile`
+refuse it. Focused check: `mix test test/exploration_moments_test.exs`
+(with `MANA_TEST_POSTGRES` for the run itself).
 
 ## Shared base declared in Ash
 
@@ -336,7 +402,10 @@ of one app; missing parents and
 cycles fail. A Moment without a parent is a root. `base` stays a shared
 preparation recipe and takes no part in ancestry. With relations, the export
 format is 3, Moments protocol 0.1, profile `mana-ash-flutter`; without relations,
-1/2 stays valid. See the [contract and capabilities](../../moments/README.md#protocol-profile).
+1/2 stays valid. The runner prepares a child on its parent: the child's recipe
+reads the parent's launch in `context["parent"]` and, for `data_scope: true`
+recipes, runs in a clone of the parent's captured snapshot (`capture`,
+`prepare` with `from`, above). See the [contract and capabilities](../../moments/README.md#protocol-profile).
 
 In a production artifact, the tracer, handler and Plug are inactive and the HTTP/CORS
 headers are absent. The library modules may remain in the artifact; this excludes the

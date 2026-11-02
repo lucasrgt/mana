@@ -23,7 +23,6 @@ import 'lifecycle.dart';
 import 'manifest.dart';
 import 'platform.dart' show host;
 import 'preparation_retry.dart';
-import 'protocol.dart';
 import 'reset.dart';
 import 'runtime.dart';
 import 'services.dart';
@@ -169,7 +168,7 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
   }
   if (operation != 'up') throw const MomentsError('Expected up, look or reset');
   final initialMoment = options.initialMoment ?? adapter.initialMoment;
-  validatePreparationRetry(
+  final recovering = validatePreparationRetry(
     instance,
     retryPreparation: options.retryPreparation,
     initialMoment: initialMoment,
@@ -188,7 +187,6 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
   final openingName = (interrupted?['name'] as String?) ?? initialMoment;
   void preflightSavedOpening() {
     final contract = readManifest(adapter.manifestFile);
-    assertMaterializable(((contract['moments']! as Map)[openingName] as Map?)?.cast());
     validateSavedOpening(
       contract,
       p.join(directory, 'ui-session.json'),
@@ -203,18 +201,21 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
   if (interrupted != null && options.fresh) {
     throw const MomentsError('An interrupted journey must be inspected and recovered before preparing fresh data');
   }
-  final declaredBackend =
-      (((readManifest(adapter.manifestFile)['moments']! as Map)[openingName] as Map?)?['backend'] as Map?)
-          ?.cast<String, Object?>();
   final resuming =
       interrupted == null &&
       !options.fresh &&
       !options.retryPreparation &&
-      preparedRecipeMatches(instance, openingName, declaredBackend);
+      preparedMomentMatches(
+        instance,
+        preparedIdentity(readManifest(adapter.manifestFile)['moments']! as Map, openingName),
+      );
+  // Services prepared before the interruption are not prepared again.
+  final servicesPrepared = recovering && (instance!['preparation']! as Map)['servicesPrepared'] == true;
   if (instance?['launch'] != null &&
       instance?['phase'] == 'ready' &&
       interrupted == null &&
       !resuming &&
+      !recovering &&
       !options.fresh &&
       !options.retryPreparation) {
     throw MomentsError(
@@ -258,19 +259,14 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
   }
 
   void checkpointPreparation(String stage) {
-    final preparation = current?['preparation'] as Map?;
-    if (preparation != null)
-      persist({
-        ...current!,
-        'preparation': {...preparation, 'stage': stage},
-      });
+    if (current?['preparation'] != null) persist(preparationAt(current!, stage));
   }
 
   final services = Services(
     definitions: services0,
     directory: directory,
     lifecycle: lifecycle,
-    prepareOnStart: interrupted == null && !resuming,
+    prepareOnStart: interrupted == null && !resuming && !servicesPrepared,
   );
   Future<void> assertAvailable() async {
     if (stopping != null || (assertOwned(current!)['State'] as Map?)?['Running'] != true) {
@@ -302,6 +298,9 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
       checkpointPreparation('services');
       await services.ensure();
       checkpointPreparation('recipe');
+    },
+    onTransition: (moment, isolated) {
+      if (current?['preparation'] != null) persist(preparationTransition(current!, moment, isolated));
     },
     acquire: () => watcher?.pause() ?? () {},
   );
@@ -458,6 +457,11 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
       );
     }
     persist({...current!, 'databasePhase': 'ready'});
+    if (recovering) {
+      stdout.writeln(
+        'Moments: recovering the interrupted preparation of $openingName; nothing it wrote reached the shared database, so it is prepared again.',
+      );
+    }
     if (interrupted == null && !resuming) {
       persist({
         ...current!,
@@ -465,6 +469,7 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
           'moment': openingName,
           'stage': 'startup',
           'startedAt': DateTime.now().toUtc().toIso8601String(),
+          if (servicesPrepared) 'servicesPrepared': true,
         },
       });
     }
@@ -480,6 +485,11 @@ Future<void> runSandbox(Adapter adapter, String operation, {SandboxOptions optio
     } else {
       preflightSavedOpening();
       await backendRecipes.prepare(openingName);
+      if (backendRecipes.lastPath.length > 1) {
+        stdout.writeln(
+          'Moments: ${[for (final link in backendRecipes.lastPath) '${link['moment']} (${link['mode']})'].join(' → ')}',
+        );
+      }
       await backendRecipes.inspect(openingName);
       persist({...current!, 'preparation': null});
     }

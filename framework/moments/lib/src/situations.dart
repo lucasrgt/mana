@@ -4,11 +4,12 @@ import 'dart:io';
 import 'package:mana/runtime.dart' show savePrivateState;
 import 'package:path/path.dart' as p;
 
+import 'backend_recipes.dart' show preparedIdentity;
 import 'canonical.dart';
+import 'checkpoints.dart';
 import 'errors.dart';
-import 'format.dart';
+import 'explorations.dart';
 import 'manifest.dart';
-import 'protocol.dart' show assertMaterializable;
 
 /// One call to the app's recipes plug: `recipe` (or `_explorations`),
 /// `operation` and its JSON body.
@@ -121,10 +122,22 @@ String describeMove(Map<String, Object?> move) {
 /// it was made and the code it was made under. Launches stay in the private
 /// `situations.json`; commands name situations by id (`<moment>@<n>`).
 final class Situations {
-  Situations({required this.project, required this.call, required this.backendVersion, this.context = const {}});
+  Situations({
+    required this.project,
+    required this.call,
+    required this.backendVersion,
+    this.context = const {},
+    this.sync = _noSync,
+  });
 
   final String project;
   final RecipeCall call;
+
+  /// Exports the Ash declaration again (`moments sync`), so a trace `save`
+  /// wrote becomes a Moment of the manifest.
+  final Future<void> Function() sync;
+
+  static Future<void> _noSync() => throw const MomentsError('This project has no Moments compiler');
 
   /// What a recipe's `prepare` receives as `context` (the API and web URLs).
   final Map<String, Object?> context;
@@ -167,15 +180,8 @@ final class Situations {
     return (scene as Map).cast();
   }
 
-  MomentMap? _explored() => File(mapFile).existsSync() ? parseMap(File(mapFile).readAsStringSync()) : null;
-
-  bool _isExploration(String name) => _explored()?.states.containsKey(name) ?? false;
-
-  String _tracePath(String name) => p.join(project, 'moments/explorations/$name.json');
-
   /// The declared ancestry of [moment], root first.
   List<String> path(String moment) {
-    if (_isExploration(moment)) return [moment];
     final moments = readManifest(_manifestFile)['moments']! as Map;
     final out = <String>[];
     for (String? current = moment; current != null; current = (moments[current] as Map?)?['from'] as String?) {
@@ -232,23 +238,51 @@ final class Situations {
     'recipe': (record['projection'] as Map?)?['recipe'],
   };
 
+  Transition _transition(String recipe) => Transition(
+    prepare: ({parent, snapshot}) => call(recipe, 'prepare', {
+      'context': {...context, 'parent': ?parent},
+      if (snapshot != null) 'from': {'snapshot': snapshot},
+    }),
+    describe: ({snapshot}) async {
+      final answer = await call(recipe, 'describe', {'snapshot': ?snapshot});
+      return (
+        isolated: answer['dataScope'] == true,
+        digest: answer['recipe'] as String?,
+        snapshot: answer['snapshot'] == true,
+      );
+    },
+    capture: (launch, snapshot) => call(recipe, 'capture', {'launch': launch, 'snapshot': snapshot}),
+  );
+
   /// [moment] evaluated now, in a data scope of its own: its recipe's
-  /// `prepare`, or a saved exploration's replay.
+  /// `prepare` (a child's on its parent's checkpoint, [composeChain]), or a
+  /// saved exploration's replay.
   Future<Map<String, Object?>> prepare(String moment) async {
     final String recipe;
     final Map<String, Object?> launch;
-    if (_isExploration(moment)) {
+    if (explorationOf(_scene(moment)) case final exploration?) {
       recipe = explorations;
-      launch = await call(explorations, 'replay', {'trace': jsonDecode(File(_tracePath(moment)).readAsStringSync())});
+      launch = await call(explorations, 'replay', {'trace': exploration['trace']});
     } else {
-      final scene = _scene(moment);
-      assertMaterializable(scene);
-      final backend = scene['backend'];
+      final backend = _scene(moment)['backend'];
       if (backend is! Map || backend['recipe'] is! String) {
         throw MomentsError('$moment has no backend recipe to evaluate');
       }
       recipe = backend['recipe']! as String;
-      launch = await call(recipe, 'prepare', {'context': context});
+      final moments = readManifest(_manifestFile)['moments']! as Map;
+      final composed = await composeChain([
+        for (final name in path(moment))
+          (
+            moment: name,
+            identity: preparedIdentity(moments, name) ?? const {},
+            transition: switch (((moments[name] as Map)['backend'] as Map?)?['recipe']) {
+              final String own => _transition(own),
+              _ => null,
+            },
+            parent: moments.values.any((scene) => (scene as Map)['from'] == name),
+          ),
+      ], CheckpointStore(p.join(project, 'moments/.backend/checkpoints.json')));
+      launch = composed.launch ?? const {};
     }
     if (launch['dataScope'] is! String) {
       throw MomentsError(
@@ -398,12 +432,15 @@ final class Situations {
     };
   }
 
-  /// `save <trace> <name>`: an exploration trace (`Mana.Explore.save/2`)
-  /// becomes a map entry in `moments/explorations.md`, once it replays.
+  /// `save <trace> <name>`: an exploration trace (`Mana.Explore.save/3`),
+  /// once it replays, is written where the Ash declaration lists
+  /// explorations ([explorationDirectory]) and exported ([sync]): a Moment
+  /// of the manifest, which the suite checks.
   Future<Map<String, Object?>> save(String file, String name) async {
     if (!_name.hasMatch(name)) throw const MomentsError('A Moment name is lowercase letters, digits and -');
-    final known = (readManifest(_manifestFile)['moments']! as Map).containsKey(name) || _isExploration(name);
-    if (known) throw MomentsError('$name already names a Moment');
+    if ((readManifest(_manifestFile)['moments']! as Map).containsKey(name)) {
+      throw MomentsError('$name already names a Moment');
+    }
     final Object? trace;
     try {
       trace = jsonDecode(File(file).readAsStringSync());
@@ -414,30 +451,18 @@ final class Situations {
         trace['moves'] is! List ||
         trace['property'] is! String ||
         (trace['moves'] as List).any((move) => move is! Map || move['kind'] is! String)) {
-      throw const MomentsError('Not an exploration trace (Mana.Explore.save/2 writes one)');
+      throw const MomentsError('Not an exploration trace (Mana.Explore.save/3 writes one)');
     }
+    final cast = trace.cast<String, Object?>();
+    final directory = explorationDirectory(project, _manifestFile, cast);
     final launch = await call(explorations, 'replay', {'trace': trace});
     if (launch['dataScope'] is! String) throw const MomentsError('The backend did not replay the exploration');
-    final moves = (trace['moves'] as List).cast<Map>().map((m) => m.cast<String, Object?>()).toList();
-    final target = _tracePath(name);
-    Directory(p.dirname(target)).createSync(recursive: true);
-    File(target).writeAsStringSync('${const JsonEncoder.withIndent('  ').convert(trace)}\n');
-    final header = File(mapFile).existsSync() ? '' : '# Saved explorations\nmoments: 0.1\nlayers: db=postgres\n';
-    final subject = [trace['resource'], trace['verb']].whereType<String>().join(' ');
-    File(mapFile).writeAsStringSync(
-      header +
-          stateSection(
-            name: name,
-            run: (executor: 'mana-explore', ref: 'moments/explorations/$name.json'),
-            checks: ['${trace['property']} breaks${subject.isEmpty ? '' : ' for $subject'} (found by Mana.Explore)'],
-            describe: [
-              if (trace['detail'] case final String detail) detail,
-              'To get here: from an empty database with the exploration\'s people, '
-                  '${moves.isEmpty ? 'nothing else happens' : moves.map(describeMove).join(', then ')}.',
-            ].join('\n'),
-          ),
-      mode: FileMode.append,
-    );
+    final target = writeExploration(directory, name, cast);
+    await sync();
+    if (explorationOf((readManifest(_manifestFile)['moments']! as Map)[name]) == null) {
+      throw MomentsError('$target is written, but the exported declaration does not list $name as an exploration');
+    }
+    writeExplorationMap(project);
     final projection = await _projection(explorations, launch);
     final situations = _read();
     final record = _record(
@@ -451,10 +476,10 @@ final class Situations {
     _write(situations);
     return {
       'moment': name,
-      'map': p.relative(mapFile, from: project),
       'trace': p.relative(target, from: project),
+      'map': p.relative(mapFile, from: project),
       'situation': _public(record),
-      'moves': moves.length,
+      'moves': (trace['moves'] as List).length,
     };
   }
 
@@ -463,10 +488,4 @@ final class Situations {
     final records = _read().values.toList()..sort((a, b) => '${a['createdAt']}'.compareTo('${b['createdAt']}'));
     return [for (final record in records) _public(record)];
   }
-
-  /// The saved explorations, for `moments list`.
-  List<Map<String, Object?>> explored() => [
-    for (final name in _explored()?.order ?? const <String>[])
-      {'name': name, 'from': null, 'description': _explored()!.states[name]!.describe, 'executor': 'mana-explore'},
-  ];
 }

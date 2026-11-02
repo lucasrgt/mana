@@ -18,17 +18,17 @@ Map<String, Object?> capabilities() {
   return {
     'version': 1,
     'protocol': {...protocol, 'specificationSha256': _specificationSha256},
-    'conformance': 'partial',
+    'conformance': 'full',
     'scope': 'Engine declarations; not evidence that a particular instance or journey passed',
     'capabilities': {
       'declaredLineage': true,
       'uiResume': true,
       'appOwnedPreparation': true,
       'linearVerifiedJourney': true,
-      'linearNavigationWithoutCriteria': false,
-      'declaredCheckpointComposition': false,
-      'recordedPreparationRecovery': false,
-      'parentMaterialization': false,
+      'linearNavigationWithoutCriteria': true,
+      'declaredCheckpointComposition': true,
+      'recordedPreparationRecovery': true,
+      'parentMaterialization': true,
       'independentFork': true,
       'wholeSituationSnapshot': true,
       'normalizedVersionComparison': true,
@@ -38,15 +38,18 @@ Map<String, Object?> capabilities() {
     'executionProfiles': {
       'launcher': {
         'commands': ['up', 'open', 'suite', 'profile'],
-        'parentMaterialization': false,
+        'parentMaterialization': true,
+        'materialization':
+            "A data_scope: true parent from its snapshot; a parent on the shared database by replaying its chain's recipes",
         'independentFork': false,
+        'fork': 'One UI instance per app; independent continuations of a situation are the situations profile (fork)',
       },
       'situations': {
         'commands': ['fork', 'diff', 'trace', 'save', 'situations'],
         'layers': ['data', 'observe'],
         'requires': 'A running backend (up or up --backend-only) and recipes declared with data_scope: true',
         'independentFork': true,
-        'parentMaterialization': false,
+        'parentMaterialization': true,
       },
     },
     'gestures': {
@@ -168,27 +171,24 @@ Map<String, Object?> capabilities() {
       'reset --discard-data': 'Discard the stopped local database; not protocol reset-to-origin',
       'suite': 'Prepare and verify each linear journey; not exploration of all branches',
       'profile':
-          'Execute one root journey once and observe engine phase latency plus bounded request-context Ash/Ecto telemetry; not CPU, heap, load or parent materialization',
+          'Execute one journey once and observe engine phase latency plus bounded request-context Ash/Ecto telemetry; not CPU, heap or load',
       'graph': 'Declared ancestry only; no materialization, traversal or verification evidence',
+      'navigation':
+          'A journey that declares no criteria runs its steps once, in order, each after the screen settles (1 s without a changed report or a request in flight), and ends navigated (exit 0) with the projection it arrived at; it judges nothing',
+      'from':
+          "A child prepares on its parent's checkpoint: the deepest current one in its chain is materialized and only the recipes after it run, each given its parent's launch (context.parent); a child's launch is its own over its parent's",
+      'checkpoints':
+          'A data_scope: true parent is captured (Mana.Snapshot) right after it prepares, recorded with its recipe digest in .backend/checkpoints.json, and its children prepare in clones of that snapshot until the digest changes; a chain on the shared database replays from the root',
+      'up recovery':
+          'An up interrupted before its recipes wrote, or inside recipes that all wrote to databases of their own (data_scope: true, a child cloned from its parent), prepares again on the next up from what the instance recorded; an interrupted base, services or shared-database recipe still needs inspection',
       'fork':
           "Prepares the Moment once in a database of its own and clones that whole database N times (Mana.Snapshot); not the UI projection, knob scopes or external effects",
       'diff':
           'Row counts per table, history entries and the recipe observation, normalized (ids, times, secrets); flags a redefined recipe and a comparison across backend versions',
       'trace':
-          'The declared path from the root, and the Moment evaluated from the empty migrated database with every Mana.History entry in order; not the UI steps of a journey',
+          "The declared path from the root, and the Moment evaluated from the empty migrated database (a child on its parent's checkpoint) with every Mana.History entry in order; not the UI steps of a journey",
       'save':
-          'An exploration trace (Mana.Explore.save/2) becomes an entry of moments/explorations.md once it replays in its own database; it is not added to the Ash declaration',
+          'An exploration trace (Mana.Explore.save/3) is written where the Ash declaration lists explorations and exported by sync: a Moment whose suite run replays it in its own database and checks the property it broke',
     },
   };
-}
-
-/// Never flatten a transition into an independent recipe. Kept at mutation
-/// seams, not just the CLI, so alternate clients cannot bypass capability
-/// negotiation.
-void assertMaterializable(Map<String, Object?>? scene) {
-  if (scene?['from'] != null) {
-    throw const MomentsError(
-      'A Moment with from: cannot open: the launcher does not flatten a child into a root. Share setup through a backend base recipe instead (backend :recipe, base: :base)',
-    );
-  }
 }

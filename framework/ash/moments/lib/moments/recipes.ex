@@ -37,6 +37,12 @@ defmodule Moments.Recipes do
   Every call needs the sandbox's bearer token (at least 32 bytes, compared in
   constant time). Mount it only when the app is built for development.
 
+  With `config :ash, :tracer, [Moments.ActionTrace]`, a `prepare` answers
+  in `x-mana-preparation` (base64url JSON: `version`, `actions` as
+  `Resource.action`, `truncated`) which Ash actions it ran; the runner keeps
+  it so `moments affected` matches a recipe by what it ran, not by what its
+  module can reach.
+
   Besides `prepare` and `observe`, a prepared launch that carries a
   `dataScope` (a `data_scope: true` recipe) can be:
 
@@ -53,12 +59,30 @@ defmodule Moments.Recipes do
     redefined recipe from changed behaviour. Values are as stored:
     normalizing ids and times is the runner's.
 
-  `POST /_explorations/replay` (`{"trace"}`, a `Mana.Explore.save/2` file's
+  A child Moment builds on its parent's checkpoint: once a `data_scope: true`
+  recipe has prepared, its scope can be `capture`d (`{"launch", "snapshot"}`,
+  `Mana.Snapshot.capture/3`), and `prepare` with `"from" => %{"snapshot" =>
+  name}` runs another `data_scope: true` recipe in a clone of that snapshot
+  instead of the migrated base, the parent's recipe not running again.
+  `describe` (`{"snapshot"}` optional) answers whether a recipe prepares in a
+  scope of its own (`dataScope`), its `recipe` digest and whether the named
+  snapshot still exists, so the runner can tell an isolated preparation, and a
+  checkpoint whose recipe has changed, before anything runs.
+
+  `POST /_explorations/replay` (`{"trace"}`, a `Mana.Explore.save/3` file's
   contents) rebuilds an exploration in a scope of its own: `explore:` names
   the domains and the `setup` that creates its actors there
   (`Mana.Explore.replay_file/3`); it answers `{"dataScope"}`, a launch that
   `/_explorations/fork` and `/_explorations/project` take (with no recipe
   digest).
+
+  `POST /_explorations/check` (`{"trace"}`) is how an exploration Moment
+  runs: the trace replays in a scope of its own, dropped afterwards, and
+  only the property it broke is checked (`Mana.Explore.check/3`, with the
+  rest of `explore:` as its options). It answers `{"status": "failed"}`
+  with the violation found (property, resource, verb, actor, detail) while
+  the bug is there, `{"status": "passed"}` once it is fixed. A trace naming
+  what the app no longer has raises: an error to the runner, never a pass.
   """
   import Plug.Conn
   require Logger
@@ -70,11 +94,12 @@ defmodule Moments.Recipes do
   @compile {:no_warn_undefined, [Mana.Snapshot, Mana.Explore]}
 
   @max_forks 16
+  @prepare_events 1024
 
   def init(options), do: Map.new(options)
 
   def call(%{method: "POST", path_info: ["_explorations", operation]} = conn, options)
-      when operation in ["replay", "fork", "project"] do
+      when operation in ["replay", "check", "fork", "project"] do
     if authorized?(conn, options.token) do
       result = explorations(operation, conn.body_params, options)
       respond(conn, "_explorations", operation, result)
@@ -84,10 +109,14 @@ defmodule Moments.Recipes do
   end
 
   def call(%{method: "POST", path_info: [name, operation]} = conn, options)
-      when operation in ["prepare", "observe", "fork", "project"] do
+      when operation in ["prepare", "observe", "fork", "project", "capture", "describe"] do
     with {:ok, module} <- Map.fetch(options.recipes, name),
          true <- authorized?(conn, options.token) do
-      result = run(module, operation, conn.body_params, repo(Map.get(options, :repo)), options)
+      {result, conn} =
+        observed(conn, operation, fn ->
+          run(module, operation, conn.body_params, repo(Map.get(options, :repo)), options)
+        end)
+
       respond(conn, name, operation, result)
     else
       _ -> reply(conn, 404, %{error: "not_found"})
@@ -96,7 +125,58 @@ defmodule Moments.Recipes do
 
   def call(conn, _options), do: reply(conn, 404, %{error: "not_found"})
 
+  # What a preparation ran, for `moments affected`: its Ash actions, names
+  # only, in `x-mana-preparation`, so the launch stays the recipe's own. Only
+  # with `Moments.ActionTrace` as Ash's tracer; otherwise nothing is claimed.
+  defp observed(conn, "prepare", run) do
+    if Moments.ActionTrace in List.wrap(Application.get_env(:ash, :tracer)) do
+      Moments.ActionTrace.begin_request("prepare", @prepare_events)
+
+      try do
+        result = run.()
+        {result, preparation(conn, Moments.ActionTrace.finish_request())}
+      after
+        Moments.ActionTrace.discard()
+      end
+    else
+      {run.(), conn}
+    end
+  end
+
+  defp observed(conn, _operation, run), do: {run.(), conn}
+
+  defp preparation(conn, nil), do: conn
+
+  defp preparation(conn, trace) do
+    actions =
+      for event <- trace.actions ++ Map.get(trace, :changes, []),
+          uniq: true,
+          do: "#{event.resource}.#{event.action}"
+
+    encode = &(&1 |> Jason.encode!() |> Base.url_encode64(padding: false))
+
+    # Past the capture's limit reads give way to writes; `writesComplete`
+    # says whether every write is still listed.
+    answer = %{"version" => 1, "truncated" => trace.truncated, "actions" => Enum.sort(actions)}
+
+    full =
+      encode.(
+        if trace.truncated,
+          do: Map.put(answer, "writesComplete", trace.writesComplete),
+          else: answer
+      )
+
+    # Past a header's size the trace is incomplete, never silently short.
+    value =
+      if byte_size(full) <= 7000,
+        do: full,
+        else: encode.(%{"version" => 1, "truncated" => true, "actions" => []})
+
+    put_resp_header(conn, "x-mana-preparation", value)
+  end
+
   defp explorations("replay", params, options), do: replay(params, options)
+  defp explorations("check", params, options), do: check(params, options)
 
   defp explorations(operation, params, options),
     do: run(nil, operation, params, repo(Map.get(options, :repo)), options)
@@ -126,13 +206,36 @@ defmodule Moments.Recipes do
     end
   end
 
+  defp run(module, "describe", params, {repo, _open_opts}, _options) do
+    {:ok,
+     %{
+       "dataScope" => data_scope?(module),
+       "recipe" => digest(module),
+       "snapshot" => snapshot?(repo, params["snapshot"])
+     }}
+  end
+
+  defp run(module, "capture", params, {repo, _open_opts}, _options) do
+    with true <- data_scope?(module) || {:error, :not_data_scoped},
+         {:ok, scope} <- launch_scope(params["launch"], repo),
+         {:ok, name} <- snapshot_name(params["snapshot"]) do
+      Snapshot.capture(repo, scope, name)
+      {:ok, %{"snapshot" => name}}
+    end
+  end
+
   defp run(module, operation, params, repo, _options), do: run(module, operation, params, repo)
 
   defp run({set, key}, "prepare", params, {repo, open_opts}) do
-    in_data_scope(set.__recipe__(:data_scope?, key), repo, open_opts, fn ->
-      set.__recipe__(:prepare, key, params["context"] || %{})
-    end)
+    with {:ok, source} <- source(params["from"], set.__recipe__(:data_scope?, key), repo) do
+      in_data_scope(source, repo, open_opts, fn ->
+        set.__recipe__(:prepare, key, params["context"] || %{})
+      end)
+    end
   end
+
+  defp run(_module, "prepare", %{"from" => from}, _repo) when not is_nil(from),
+    do: {:error, :not_data_scoped}
 
   defp run({set, key}, "observe", params, {repo, _open_opts}) do
     scoped(params["launch"], repo, fn ->
@@ -155,6 +258,32 @@ defmodule Moments.Recipes do
   end
 
   defp launch_scope(_launch, _repo), do: {:error, :no_data_scope}
+
+  defp data_scope?({set, key}), do: set.__recipe__(:data_scope?, key) == true
+  defp data_scope?(_module), do: false
+
+  # Where a recipe prepares: the shared database (false), a clone of the
+  # migrated base, or a clone of the parent's captured snapshot.
+  defp source(nil, data_scope?, _repo), do: {:ok, data_scope? == true && :base}
+
+  defp source(%{"snapshot" => name}, true, repo) do
+    with {:ok, name} <- snapshot_name(name),
+         true <- snapshot?(repo, name) || {:error, :unknown_snapshot},
+         do: {:ok, name}
+  end
+
+  defp source(_from, _data_scope?, _repo), do: {:error, :not_data_scoped}
+
+  defp snapshot_name(name) do
+    if is_binary(name) and Regex.match?(~r/^[a-z][a-z0-9_-]{0,30}$/, name),
+      do: {:ok, name},
+      else: {:error, :invalid_snapshot}
+  end
+
+  defp snapshot?(repo, name),
+    do:
+      scopes_enabled?(repo) and match?({:ok, _}, snapshot_name(name)) and
+        Snapshot.snapshot?(repo, name)
 
   defp forkable(%{"knobScope" => _}, _n), do: {:error, :knob_scope_not_forkable}
   defp forkable(_launch, n) when is_integer(n) and n in 1..@max_forks, do: :ok
@@ -216,16 +345,7 @@ defmodule Moments.Recipes do
   end
 
   defp replay(%{"trace" => %{"moves" => moves} = trace}, options) when is_list(moves) do
-    {repo, open_opts} = repo(Map.get(options, :repo))
-    explore = Map.get(options, :explore)
-
-    unless scopes_enabled?(repo) and Code.ensure_loaded?(Mana.Explore) and explore,
-      do:
-        raise(
-          ArgumentError,
-          "replaying an exploration needs repo:, explore: [domains:, setup:] and config :mana_core, data_scopes: true"
-        )
-
+    {repo, open_opts, explore} = explore!(options)
     scope = Snapshot.open(repo, :base, open_opts)
     forget_old_scopes(repo, scope)
     path = Path.join(System.tmp_dir!(), "moments-exploration-#{scope}.json")
@@ -254,6 +374,52 @@ defmodule Moments.Recipes do
   end
 
   defp replay(_params, _options), do: {:error, :invalid_exploration}
+
+  defp check(%{"trace" => %{"property" => property, "moves" => moves} = trace}, options)
+       when is_binary(property) and is_list(moves) do
+    {repo, open_opts, explore} = explore!(options)
+    {module, function, args} = Keyword.fetch!(explore, :setup)
+    scope = Snapshot.open(repo, :base, open_opts)
+
+    opts =
+      explore
+      |> Keyword.drop([:domains, :setup])
+      |> Keyword.merge(setup: fn -> apply(module, function, args) end, reset: fn _ -> :ok end)
+
+    try do
+      Snapshot.with_scope(repo, scope, fn ->
+        case Mana.Explore.check(trace, Keyword.fetch!(explore, :domains), opts) do
+          :passed ->
+            {:ok, %{"status" => "passed", "property" => property}}
+
+          {:failed, violation} ->
+            {:ok,
+             %{
+               "status" => "failed",
+               "violation" => violation |> Mana.Explore.to_json() |> Map.drop(["moves"])
+             }}
+        end
+      end)
+    after
+      Snapshot.drop(repo, scope)
+    end
+  end
+
+  defp check(_params, _options), do: {:error, :invalid_exploration}
+
+  defp explore!(options) do
+    {repo, open_opts} = repo(Map.get(options, :repo))
+    explore = Map.get(options, :explore)
+
+    unless scopes_enabled?(repo) and Code.ensure_loaded?(Mana.Explore) and explore,
+      do:
+        raise(
+          ArgumentError,
+          "replaying an exploration needs repo:, explore: [domains:, setup:] and config :mana_core, data_scopes: true"
+        )
+
+    {repo, open_opts, explore}
+  end
 
   defp scopes_enabled?(repo),
     do:
@@ -295,7 +461,7 @@ defmodule Moments.Recipes do
 
   defp in_data_scope(false, _repo, _opts, prepare), do: prepare.()
 
-  defp in_data_scope(true, repo, opts, prepare) do
+  defp in_data_scope(source, repo, opts, prepare) do
     unless scopes_enabled?(repo),
       do:
         raise(
@@ -303,7 +469,7 @@ defmodule Moments.Recipes do
           "a data_scope recipe needs repo: on Moments.Recipes and config :mana_core, data_scopes: true"
         )
 
-    scope = Snapshot.open(repo, :base, opts)
+    scope = Snapshot.open(repo, source, opts)
     forget_old_scopes(repo, scope)
 
     case RecipeSet.wrap(Snapshot.with_scope(repo, scope, prepare)) do

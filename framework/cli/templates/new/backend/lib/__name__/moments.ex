@@ -33,6 +33,8 @@ defmodule __Name__.Moments.App do
   moments do
     route("/")
     client_roots(["lib/app.dart"])
+    # Counterexamples saved by mix mana.explore --save (or moments save) are Moments.
+    explorations("priv/moments/explorations")
 
     field(:notes, 0, min: 0, max: 1000, restore: false)
     field(:fixture, "none", max_length: 80, restore: false)

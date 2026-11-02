@@ -1,5 +1,9 @@
 defmodule Moments.BackendGraph do
-  @moduledoc "Optional, portable compiled dependency evidence for conservative impact planning."
+  @moduledoc """
+  Optional, portable compiled dependency evidence for conservative impact
+  planning: the xref file graph, each Moment's roots and, under `actions`,
+  which Ash actions each file can change (`Moments.ActionGraph`).
+  """
   alias Ash.Domain.Info
 
   def snapshot do
@@ -38,6 +42,7 @@ defmodule Moments.BackendGraph do
     root = output |> Path.expand() |> Path.dirname()
     portable = fn file -> Path.relative_to(Path.expand(file), root, force: true) end
     roots = roots(manifest, graph, portable)
+    actions = Moments.ActionGraph.build(manifest, graph, portable)
 
     files =
       Map.new(graph, fn {file, dependencies} ->
@@ -59,7 +64,8 @@ defmodule Moments.BackendGraph do
       "project" => portable.("."),
       "sourcePaths" => before.paths,
       "files" => files,
-      "roots" => roots
+      "roots" => roots,
+      "actions" => actions
     }
   rescue
     # The graph only sharpens impact planning; without it every Moment is affected.

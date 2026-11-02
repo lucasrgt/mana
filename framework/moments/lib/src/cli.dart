@@ -6,11 +6,13 @@ import 'package:path/path.dart' as p;
 
 import 'adapter.dart';
 import 'affected.dart';
+import 'behaviour_diff.dart';
 import 'check.dart';
 import 'canonical.dart';
 import 'down.dart';
 import 'elixir_recipes.dart' show callRecipe;
 import 'errors.dart';
+import 'explorations.dart' show refuseExplorationUi, writeExplorationMap;
 import 'flutter_target.dart';
 import 'format.dart';
 import 'graph.dart';
@@ -57,8 +59,9 @@ const help = '''Moments — edit, resume and verify Flutter
   moments suite --affected [--base REV]  Only the Moments affected since REV (default HEAD)
   moments fork <name> -n N        N independent copies of the Moment's data situation
   moments diff <a> <b>            Normalized difference per layer (situation ids or Moment names)
+  moments diff --base REV [--affected] [--out DIR]  Behaviour diff: Moments at REV and at the working tree (Markdown + JSON)
   moments trace <name>            The path from the root and what each recorded change did
-  moments save <trace.json> <name>  Turns an exploration trace into a map entry (explorations.md)
+  moments save <trace.json> <name>  Saves an exploration trace where the Ash declaration lists explorations: a Moment
   moments situations              The kept situations (forks, evaluations, explorations)
   moments sync                    Exports the Ash DSL
   moments affected [--base HEAD]   Plans the affected Moments; runs no actions
@@ -112,7 +115,7 @@ final class CliOptions {
   bool fresh = false, backendOnly = false, debugBuild = false, headless = false;
   bool affected = false, wasm = false;
   int? workers, count;
-  String? base, device, project;
+  String? base, device, project, out;
   String? command, name;
   List<String> names = const [];
 }
@@ -171,6 +174,9 @@ CliOptions parseArgs(List<String> args) {
       case '--device':
         if (missing(i)) _usage('--device needs a device.');
         result.device = flutterTarget(args[++i]).device;
+      case '--out':
+        if (missing(i) || result.out != null) _usage('--out needs a single directory.');
+        result.out = args[++i];
       case '--project':
         if (missing(i)) _usage('--project needs a directory.');
         result.project = args[++i];
@@ -189,6 +195,7 @@ CliOptions parseArgs(List<String> args) {
   }
   if ((result.debugBuild || result.wasm) && result.headless) _usage('--headless does not use a web build.');
   if (result.debugBuild && result.wasm) _usage('Choose --debug-build or --wasm.');
+  if (result.out != null && (command != 'diff' || result.base == null)) _usage('--out only applies to diff --base.');
   result.command = command;
   if (command == 'suite') {
     final names = words.skip(1).toList();
@@ -197,6 +204,7 @@ CliOptions parseArgs(List<String> args) {
     return result..names = names;
   }
   if (result.count != null && command != 'fork') _usage('-n only applies to fork.');
+  if (command == 'diff' && result.base != null) return _behaviourDiffArgs(result, words);
   if (situationCommands.contains(command)) return _situationArgs(result, words);
   final named = const ['profile', 'open', 'up'].contains(command);
   if (words.length != (named ? 2 : 1) || (named && !_momentName.hasMatch(name!))) {
@@ -215,10 +223,22 @@ CliOptions parseArgs(List<String> args) {
   if (result.fresh && result.retryPreparation) _usage('--fresh cannot be combined with --retry-preparation.');
   if (result.full && command != 'inspect') _usage('--full only applies to inspect.');
   if (result.local && command != 'status') _usage('--local only applies to status.');
-  if (result.base != null && command != 'affected') _usage('--base only applies to affected and suite --affected.');
+  if (result.base != null && command != 'affected')
+    _usage('--base only applies to affected, suite --affected and diff.');
   if (result.affected) _usage('--affected only applies to suite.');
   if (result.json && const ['up', 'sync'].contains(command)) {
     _usage('$command streams logs; use status/inspect --json to observe the session.');
+  }
+  return result;
+}
+
+CliOptions _behaviourDiffArgs(CliOptions result, List<String> words) {
+  if (words.length != 1) _usage('Usage: moments diff --base <rev> [--affected] [--out <dir>]');
+  if (result.check || result.restart || result.full || result.local || result.fresh || result.device != null) {
+    _usage('diff --base takes no other options than --affected, --out, --json and --project.');
+  }
+  if (result.discardData || result.retryPreparation) {
+    _usage('diff --base takes no other options than --affected, --out, --json and --project.');
   }
   return result;
 }
@@ -276,6 +296,7 @@ String findProject(String cwd, String? explicit) {
 
 const _label = {
   'captured': 'CAPTURED (no final verification)',
+  'navigated': 'NAVIGATED (no criteria declared; nothing verified)',
   'passed': 'PASSED',
   'failed': 'FAILED',
   'unavailable': 'UNAVAILABLE',
@@ -299,7 +320,7 @@ String formatResult(Object? raw, CliOptions options) {
   if (command == 'capabilities') {
     final protocol = value['protocol']! as Map;
     return [
-      'Moments ${protocol['version']} · ${protocol['profile']} · partial conformance',
+      'Moments ${protocol['version']} · ${protocol['profile']} · ${value['conformance']} conformance',
       for (final MapEntry(:key, value: supported) in (value['capabilities']! as Map).entries)
         '  ${supported == true ? 'available' : 'missing'}: $key',
       'Engine declaration; does not prove a materialized situation or a verified journey.',
@@ -335,7 +356,7 @@ String formatResult(Object? raw, CliOptions options) {
           'run' => 'Journey',
           'navigate' => 'Navigation without final verification',
           _ => 'Verification',
-        }}: ${item['name']} · ${item['reason']}',
+        }}: ${item['name']} · ${(item['why'] as List?)?.join(', ') ?? item['reason']}',
       if ((value['issues']! as List).isNotEmpty) 'Missing or stale declarations: run moments sync.',
       'Plan only; no criterion or gesture run. Unknown impact or a stale graph selects the whole catalog.',
     ].join('\n');
@@ -505,10 +526,7 @@ Adapter? _adapter(String project) =>
 
 List<Map<String, Object?>> _catalog(String project) {
   final adapter = _adapter(project);
-  if (adapter != null) {
-    final explored = Situations(project: project, call: _offline, backendVersion: () => '').explored();
-    return [...adapter.catalog(), ...explored];
-  }
+  if (adapter != null) return adapter.catalog();
   final map = parseMap(File(p.join(project, 'MOMENTS.md')).readAsStringSync());
   return [
     for (final name in map.order)
@@ -527,6 +545,9 @@ Future<void> _upSandbox(String project, String name, SandboxOptions options) asy
 Future<Object?> _live(String project, CliOptions options) async {
   final request = bridgeRequest(project);
   final runtime = File(p.join(project, 'moments/.backend/.runtime.json'));
+  if (const ['profile', 'open', 'up'].contains(options.command)) {
+    refuseExplorationUi(p.join(project, 'moments/manifest.json'), options.name);
+  }
   switch (options.command) {
     case 'profile':
       return checkMoment(project: project, name: options.name, request: request, profile: true);
@@ -588,6 +609,7 @@ Future<Object?> _live(String project, CliOptions options) async {
       final adapter = _adapter(project);
       if (adapter == null) throw const MomentsError('This project has no Moments compiler');
       await adapter.sync();
+      writeExplorationMap(project);
       return null;
   }
   throw MomentsError('Unknown command: ${options.command}');
@@ -647,6 +669,22 @@ Future<int> runCli(List<String> args, {String? cwd}) async {
       emit(result);
       return _exit(result);
     }
+    if (options.command == 'diff' && options.base != null) {
+      final report = await behaviourDiff(
+        project: project,
+        base: options.base!,
+        affected: options.affected,
+        out: options.out,
+        evaluate: liveEvaluation(liveSituations, progress: options.json ? null : print),
+        progress: options.json ? null : print,
+      );
+      print(
+        options.json
+            ? _pretty.convert(report)
+            : '${behaviourMarkdown(report)}\nReport: ${(report['files']! as Map)['markdown']}',
+      );
+      return 0;
+    }
     if (situationCommands.contains(options.command)) {
       emit(await _situations(project, options));
       return 0;
@@ -691,6 +729,7 @@ Situations liveSituations(String project) {
     call: (recipe, operation, body) => callRecipe(instance, recipe, operation, body),
     backendVersion: () => hashText(adapter.services().map((s) => sourceFingerprint(s.cwd, s.watch)).join(':')),
     context: {'apiUrl': instance['apiUrl'], 'webUrl': instance['webUrl']},
+    sync: adapter.sync,
   );
 }
 
@@ -740,7 +779,7 @@ String _situationText(Map<String, Object?> value, String command) {
         'Situation: ${id(value['situation'])}',
       ].join('\n');
     case 'save':
-      return 'Saved ${value['moment']} in ${value['map']} (${value['moves']} moves, trace ${value['trace']}); replayed as ${id(value['situation'])}.';
+      return 'Saved Moment ${value['moment']}: ${value['trace']} (${value['moves']} moves), exported and listed in ${value['map']}; replayed as ${id(value['situation'])}. moments suite ${value['moment']} checks it.';
   }
   return [
     for (final record in (value['situations']! as List).cast<Map>())
@@ -778,6 +817,8 @@ Future<int> _suite(String project, CliOptions options) async {
           print('Suite: compiling the ${event['mode']} web artifact (once per code version)…');
         case 'headless':
           print('Suite: starting headless workers (flutter_tester, compiles the app once)…');
+        case 'explorations':
+          print('Suite: ${event['moments']} exploration Moments, each replayed in a database of its own…');
         case 'run':
           print(
             'Suite: ${event['moments']} Moments on ${event['workers']} workers ${event['runtime'] == 'headless' ? 'headless' : '· browser · port ${event['port']}'}',
@@ -793,6 +834,11 @@ Future<int> _suite(String project, CliOptions options) async {
   );
   if (options.json) {
     print(_pretty.convert(result));
+  } else if (result['runtime'] == 'backend') {
+    print(
+      'Suite: ${_status(result['status'])} · ${result['moments']} exploration Moments · ${_duration(result['wallMs'])} '
+      '(no app built)\nSummary: ${result['directory']}/summary.json',
+    );
   } else {
     final headless = result['runtime'] == 'headless';
     final memory = (result['peakMemory'] as Map?) ?? const {};

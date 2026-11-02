@@ -144,8 +144,11 @@ suite or approval ritual. `mix moments.review Resource action output.json`
 can plan a review from compiled Ash metadata for an explicitly selected action;
 see `ash/moments/README.md`. Its pending questions are not findings or approvals,
 and its domain candidates are not proven action coverage. Never treat this
-editable local report as a current-source or deployment attestation. Automatic selection
-from a diff and complete effect/caller analysis remain future capabilities.
+editable local report as a current-source or deployment attestation.
+`moments affected` selects from a diff: a backend file only mutations reach
+selects the Moments whose verbs, recipes or receipts name those actions (see
+`moments/README.md`, "By effect"); receipts are observed calls, not complete
+caller analysis, which remains a future capability.
 
 Moments follow the common protocol (`moments/protocol-v0.1.md`): `from` is the source of ancestry;
 plans select declared paths and observed events supply execution evidence.

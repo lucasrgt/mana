@@ -19,6 +19,7 @@ Matcher throwing(String text) => throwsA(predicate((e) => '$e'.contains(text), '
 /// times, as a real recipe does.
 final class Backend {
   final scopes = <String, ({Map<String, int> tables, List<Map<String, Object?>> history})>{};
+  final snapshots = <String, ({Map<String, int> tables, List<Map<String, Object?>> history})>{};
   final calls = <String>[];
   var digest = 'aaaa', replays = 0;
   var failReplay = false;
@@ -43,13 +44,31 @@ final class Backend {
     current.history.add(_entry('later'));
   }
 
+  ({Map<String, int> tables, List<Map<String, Object?>> history}) _copy(
+    ({Map<String, int> tables, List<Map<String, Object?>> history}) origin,
+  ) => (
+    tables: {...origin.tables},
+    history: [for (final entry in origin.history) jsonDecode(jsonEncode(entry)) as Map<String, Object?>],
+  );
+
   Future<Map<String, Object?>> call(String recipe, String operation, Map<String, Object?> body) async {
     calls.add('$recipe/$operation');
     final scope = (body['launch'] as Map?)?['dataScope'] as String?;
     switch (operation) {
+      case 'describe':
+        return {'dataScope': recipe != 'shared', 'recipe': digest, 'snapshot': snapshots.containsKey(body['snapshot'])};
+      case 'capture':
+        snapshots[body['snapshot']! as String] = _copy(scopes[scope]!);
+        return {'snapshot': body['snapshot']};
       case 'prepare':
         if (recipe == 'shared') return {'route': '/'};
         final id = _scope();
+        if ((body['from'] as Map?)?['snapshot'] case final String snapshot) {
+          // A child: its parent's situation, one more note on top.
+          scopes[id] = _copy(snapshots[snapshot]!);
+          write(id);
+          return {'route': '/notes/archived', 'dataScope': id};
+        }
         scopes[id] = (tables: {'notes': 1, 'users': 2}, history: [_entry('first')]);
         return {
           'route': '/notes',
@@ -161,6 +180,77 @@ String exploration(String root, {List<Object?>? moves}) {
   return file;
 }
 
+/// A backend beside the app whose Ash declaration lists explorations in
+/// [directory] (from the manifest): `sync` exports every trace saved there as
+/// a Moment, as `mix moments.export` does.
+({String backend, Situations situations, int Function() exports}) declareExplorations(
+  ({
+    String project,
+    Backend backend,
+    Situations situations,
+    String Function() version,
+    void Function(String) setVersion,
+  })
+  f, {
+  String? directory,
+}) {
+  final backend = '${f.project}-backend';
+  Directory(backend).createSync(recursive: true);
+  addTearDown(() {
+    if (Directory(backend).existsSync()) Directory(backend).deleteSync(recursive: true);
+  });
+  writeJson(p.join(f.project, 'moments/sources.json'), {
+    'version': 1,
+    'roots': [
+      {'name': 'server', 'path': '../${p.basename(backend)}'},
+    ],
+  });
+  final manifestFile = p.join(f.project, 'moments/manifest.json');
+  final relative = directory ?? '../../${p.basename(backend)}/priv/moments/explorations';
+  final manifest = (readJson(manifestFile)! as Map).cast<String, Object?>();
+  writeJson(manifestFile, {
+    ...manifest,
+    'explorations': [
+      {
+        'domain': 'MyApp.Bookings',
+        'directory': relative,
+        'resources': ['MyApp.Booking'],
+      },
+    ],
+  });
+  var exports = 0;
+  Future<void> sync() async {
+    exports++;
+    final current = (readJson(manifestFile)! as Map).cast<String, Object?>();
+    final folder = Directory(p.normalize(p.join(p.dirname(manifestFile), relative)));
+    writeJson(manifestFile, {
+      ...current,
+      'moments': {
+        ...(current['moments']! as Map),
+        for (final file in folder.listSync().whereType<File>())
+          p.basenameWithoutExtension(file.path): {
+            'description': 'Found by Mana.Explore',
+            'checks': [
+              {'name': 'refusal_enforced', 'kind': 'property'},
+            ],
+            'steps': <Object?>[],
+            'exploration': {
+              'file': p.relative(file.path, from: p.dirname(manifestFile)),
+              'sha256': '0' * 64,
+              'trace': readJson(file.path),
+            },
+          },
+      },
+    });
+  }
+
+  return (
+    backend: backend,
+    situations: Situations(project: f.project, call: f.backend.call, backendVersion: f.version, sync: sync),
+    exports: () => exports,
+  );
+}
+
 void main() {
   test('normalization hides generated ids, times and secrets, numbering ids by first appearance', () {
     const a = '0b5f8c1e-1111-4111-8111-111111111111', b = '0b5f8c1e-2222-4222-8222-222222222222';
@@ -204,10 +294,9 @@ void main() {
       expect(jsonEncode(result), isNot(contains('password')), reason: 'launches stay in the private file');
     });
 
-    test('a Moment prepared on the shared database, a child or a bad count is refused', () async {
+    test('a Moment prepared on the shared database or a bad count is refused', () async {
       final f = fixture();
       await expectLater(f.situations.fork('shared', 2), throwing('data_scope: true'));
-      await expectLater(f.situations.fork('archived', 2), throwing('cannot open'));
       await expectLater(f.situations.fork('notes', 17), throwing('1 to 16'));
       expect(parseArgs(['fork', 'notes', '-n', '3']).count, 3);
       for (final args in [
@@ -290,49 +379,92 @@ void main() {
       expect((steps.single['changes']! as Map)['text'], [null, 'first']);
       expect((steps.single['changes']! as Map)['inserted_at'], [null, '<time>']);
       expect(trace['tables'], {'notes': 1, 'users': 2});
-      await expectLater(f.situations.trace('archived'), throwing('cannot open'));
+      expect((await f.situations.trace('archived'))['path'], ['notes', 'archived']);
     });
   });
 
+  group('parentMaterialization', () {
+    test(
+      "a child's situation is cloned from its parent's snapshot; forks of it never prepare the parent again",
+      () async {
+        final f = fixture();
+        final forked = await f.situations.fork('archived', 2);
+        final ids = [for (final fork in (forked['forks']! as List).cast<Map>()) fork['id']! as String];
+        expect(f.backend.calls.where((c) => c == 'notes/capture'), hasLength(1));
+        expect(f.backend.scopes[scopeOf(f.project, ids.first)]!.tables, {'notes': 2, 'users': 2});
+        final trace = await f.situations.trace('archived');
+        expect(
+          [for (final step in (trace['steps']! as List).cast<Map>()) (step['changes']! as Map)['text']?.last],
+          ['first', 'later'],
+          reason: "the parent's history first, then the child's",
+        );
+        expect(
+          f.backend.calls.where((c) => c == 'notes/prepare'),
+          hasLength(3),
+          reason: 'the parent once; the child twice, each from the snapshot',
+        );
+      },
+    );
+  });
+
   group('saveExplorationAsMoment', () {
-    test('a replayed exploration trace becomes an entry of the map that the text alone explains', () async {
+    test('a replayed trace is written where the Ash declaration lists explorations and exported as a Moment', () async {
       final f = fixture();
-      final saved = await f.situations.save(exploration(f.project), 'cancelled-yet-paid');
-      expect(saved['map'], 'moments/explorations.md');
+      final saving = declareExplorations(f);
+      final saved = await saving.situations.save(exploration(f.project), 'cancelled-yet-paid');
+      expect(saved['trace'], '../${p.basename(saving.backend)}/priv/moments/explorations/cancelled-yet-paid.json');
       expect(saved['moves'], 3);
+      expect(saving.exports(), 1, reason: 'the declaration is exported again once the trace is written');
+      expect(readJson(p.join(saving.backend, 'priv/moments/explorations/cancelled-yet-paid.json')), {
+        ...readJson(exploration(f.project))! as Map,
+      });
+      final declared = ((readJson(p.join(f.project, 'moments/manifest.json'))! as Map)['moments']! as Map);
+      expect((declared['cancelled-yet-paid']! as Map)['exploration'], isA<Map>());
+      expect((saved['situation']! as Map)['kind'], 'exploration');
+
       final map = parseMap(File(p.join(f.project, 'moments/explorations.md')).readAsStringSync());
       final state = map.states['cancelled-yet-paid']!;
       expect(map.meta['moments'], '0.1');
       expect(state.from, isNull, reason: 'replay starts from the empty database');
-      expect(state.run, (executor: 'mana-explore', ref: 'moments/explorations/cancelled-yet-paid.json'));
-      expect(state.checks.single, contains('refusal_enforced breaks for MyApp.Booking pay'));
+      expect(state.run!.ref, saved['trace']);
+      expect(state.checks.single, contains('refusal_enforced holds for MyApp.Booking pay'));
       expect(state.describe, contains('traveler performs cancel on MyApp.Booking #0'));
       expect(state.describe, contains('the clock moves 16 minute'));
-      expect(File(p.join(f.project, 'moments/explorations/cancelled-yet-paid.json')).existsSync(), isTrue);
-      expect((saved['situation']! as Map)['kind'], 'exploration');
-      expect(f.situations.explored().single['name'], 'cancelled-yet-paid');
-      final forked = await f.situations.fork('cancelled-yet-paid', 1);
-      expect(f.backend.replays, 2, reason: 'opening the saved entry replays the trace again');
+
+      final forked = await saving.situations.fork('cancelled-yet-paid', 1);
+      expect(f.backend.replays, 2, reason: 'evaluating the Moment replays the trace its declaration carries');
       expect((forked['forks']! as List), hasLength(1));
-      final second = await f.situations.save(exploration(f.project, moves: const []), 'empty-case');
+      final second = await saving.situations.save(exploration(f.project, moves: const []), 'empty-case');
       expect(second['moves'], 0);
       expect(parseMap(File(p.join(f.project, 'moments/explorations.md')).readAsStringSync()).order, [
         'cancelled-yet-paid',
         'empty-case',
       ]);
+      await expectLater(
+        saving.situations.save(exploration(f.project), 'cancelled-yet-paid'),
+        throwing('already names'),
+      );
     });
 
-    test('a name in use, a file that is no trace or a failed replay writes nothing', () async {
-      final f = fixture();
-      await expectLater(f.situations.save(exploration(f.project), 'notes'), throwing('already names'));
-      final junk = p.join(f.project, 'junk.json');
-      File(junk).writeAsStringSync('{"moves": "none"}');
-      await expectLater(f.situations.save(junk, 'junk'), throwing('Not an exploration trace'));
-      f.backend.failReplay = true;
-      await expectLater(f.situations.save(exploration(f.project), 'broken'), throwsA(isA<StateError>()));
-      expect(File(p.join(f.project, 'moments/explorations.md')).existsSync(), isFalse);
-      expect(Directory(p.join(f.project, 'moments/explorations')).existsSync(), isFalse);
-    });
+    test(
+      'a name in use, no trace, no declared directory, one outside the roots or a failed replay writes nothing',
+      () async {
+        final f = fixture();
+        await expectLater(f.situations.save(exploration(f.project), 'notes'), throwing('already names'));
+        final junk = p.join(f.project, 'junk.json');
+        File(junk).writeAsStringSync('{"moves": "none"}');
+        await expectLater(f.situations.save(junk, 'junk'), throwing('Not an exploration trace'));
+        await expectLater(f.situations.save(exploration(f.project), 'undeclared'), throwing('declares explorations'));
+        final saving = declareExplorations(f, directory: '../../elsewhere');
+        await expectLater(saving.situations.save(exploration(f.project), 'outside'), throwing('outside the app'));
+        final declared = declareExplorations(f);
+        f.backend.failReplay = true;
+        await expectLater(declared.situations.save(exploration(f.project), 'broken'), throwsA(isA<StateError>()));
+        expect(declared.exports(), 0);
+        expect(File(p.join(f.project, 'moments/explorations.md')).existsSync(), isFalse);
+        expect(Directory(p.join(declared.backend, 'priv/moments/explorations')).existsSync(), isFalse);
+      },
+    );
   });
 
   group('CLI', () {

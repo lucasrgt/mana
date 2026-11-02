@@ -2,8 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:moments/src/backend_recipes.dart';
-import 'package:moments/src/check.dart';
-import 'package:moments/src/errors.dart';
 import 'package:moments/src/graph.dart';
 import 'package:moments/src/manifest.dart';
 import 'package:moments/src/profile.dart';
@@ -213,30 +211,23 @@ void main() {
       expect(result, capabilities());
       expect(result['version'], 1);
       expect((result['protocol']! as Map)['version'], '0.1');
-      expect(result['conformance'], 'partial');
+      expect(result['conformance'], 'full');
       final declared = (result['capabilities']! as Map).cast<String, Object?>();
-      expect(declared['parentMaterialization'], false);
-      // Each proven by test/situations_test.dart.
-      for (final flag in [
-        'independentFork',
-        'wholeSituationSnapshot',
-        'normalizedVersionComparison',
-        'saveExplorationAsMoment',
-        'traceFromRoot',
-      ]) {
-        expect(declared[flag], true, reason: flag);
-      }
+      expect(declared.values.every((supported) => supported == true), isTrue, reason: '$declared');
+      // Each flag has its group in test/situations_test.dart or test/conformance_test.dart.
+      expect(declared.keys, containsAll(['linearNavigationWithoutCriteria', 'parentMaterialization', 'traceFromRoot']));
       final profiles = (result['executionProfiles']! as Map).cast<String, Object?>();
-      expect((profiles['launcher']! as Map)['parentMaterialization'], false);
-      expect((profiles['launcher']! as Map)['independentFork'], false);
+      expect((profiles['launcher']! as Map)['parentMaterialization'], true);
+      expect((profiles['situations']! as Map)['parentMaterialization'], true);
+      expect((profiles['launcher']! as Map)['independentFork'], false, reason: 'one UI instance per app');
       expect(profiles.keys, ['launcher', 'situations']);
       expect((profiles['situations']! as Map)['commands'], ['fork', 'diff', 'trace', 'save', 'situations']);
       expect((result['semantics']! as Map)['reset --discard-data'], contains('not protocol reset'));
     },
   );
 
-  test('child preparation fails before acquiring ownership, seeding, invoking recipes or committing', () async {
-    final (project: _, :file, manifest: _) = fixture();
+  test('a child is prepared, opened and run through its chain, not refused (test/conformance_test.dart)', () async {
+    final (:project, :file, manifest: _) = fixture();
     final effects = <String>[];
     final backend = BackendRecipes(
       manifestFile: file,
@@ -251,42 +242,13 @@ void main() {
       },
       instance: () => {},
       assertAvailable: () async => effects.add('available'),
-      acquire: () {
-        effects.add('lease');
-        return () {};
-      },
       commit: (_, {base, preparedMoment}) async => effects.add('commit'),
-      startBase: (_) async => effects.add('base'),
-      beforePrepare: (_) async => effects.add('checkpoint'),
     );
-    await expectLater(backend.prepare('approved'), throwing('cannot open'));
-    expect(effects, isEmpty);
-  });
-
-  test('direct Flutter runtime cannot flatten a child or change saved UI when opening it', () {
-    final (:project, :file, manifest: _) = fixture();
+    await backend.prepare('approved');
+    expect(effects, ['available', 'recipe', 'recipe', 'available'], reason: 'checkout, then approved on top of it');
     final runtime = Moments.create(project, MomentsOptions(manifestFile: file, initialName: 'checkout'))!;
     addTearDown(runtime.close);
-    final before = File(p.join(project, 'moments/.session.json')).readAsStringSync();
-    expect(() => runtime.open('approved'), throwing('cannot open'));
-    expect(File(p.join(project, 'moments/.session.json')).readAsStringSync(), before);
-    expect((runtime.inspect()['state']! as Map)['name'], 'checkout');
-  });
-
-  test('journey runner rejects an unsupported child before any runtime or gesture request', () async {
-    final (:project, file: _, manifest: _) = fixture();
-    final calls = <String>[];
-    final result = await checkMoment(
-      project: project,
-      name: 'approved',
-      journey: true,
-      request: (path, [data]) async {
-        calls.add(path);
-        throw const MomentsError('must not request');
-      },
-    );
-    expect(result['status'], 'unavailable');
-    expect(calls, isEmpty);
+    expect((runtime.open('approved')['state']! as Map)['name'], 'approved');
   });
 
   test('parallel and nested timings remain separate observations, not an additive wall-time breakdown', () {

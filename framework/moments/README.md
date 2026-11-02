@@ -19,13 +19,49 @@ declared capabilities; this identity check does not certify conformance.
 `moments capabilities --json` works outside a project and exposes the engine's
 capabilities and limits. It reads no private data and proves no journey.
 Discovery declares `executionProfiles.launcher` and
-`executionProfiles.situations` (below); no command flattens a child into a
-root. `independentFork`, `wholeSituationSnapshot`,
-`normalizedVersionComparison`, `saveExplorationAsMoment` and `traceFromRoot`
-are declared for the data layer only, each with its conformance test in
-`test/situations_test.dart` (the backend half in
-`ash/moments/test/recipes_situations_test.exs`); the rest stay `false` and
-conformance stays `partial`.
+`executionProfiles.situations` (below). Every capability it lists is
+declared, so conformance is `full`; each flag has its conformance test:
+`independentFork`, `wholeSituationSnapshot`, `normalizedVersionComparison`,
+`saveExplorationAsMoment`, `traceFromRoot` and the situations half of
+`parentMaterialization` in `test/situations_test.dart`;
+`linearNavigationWithoutCriteria`, `declaredCheckpointComposition`,
+`parentMaterialization` and `recordedPreparationRecovery` in
+`test/conformance_test.dart`; the backend half in
+`ash/moments/test/recipes_situations_test.exs` and
+`recipes_checkpoints_test.exs`. The data verbs work on the data layer only,
+and the launcher runs one UI instance per app, so
+`executionProfiles.launcher.independentFork` stays `false`: independent
+continuations of a situation are `fork`'s.
+
+- **Navigation without criteria.** A journey whose Moment declares no
+  criteria at all is a navigation: `suite` and `profile` run its steps once,
+  in order, each after the screen settles (1 s without a changed report or a
+  request in flight, 30 s at most), and it ends `navigated` (exit 0) with
+  each step's projection and the one it `arrived` at. It has no verdict and
+  proves nothing.
+- **Checkpoint composition.** A child (`from`) is prepared on its parent's
+  checkpoint: its recipe receives the parent's launch as `context["parent"]`
+  and runs on the parent's data; its launch is its own over the parent's
+  (account and inputs it does not answer stay the parent's). A child without
+  a recipe opens on its parent's data. `up`, `open`, `suite`, `profile` and
+  the data verbs all prepare a child this way; the receipt
+  (`preparedMoment.from`) names the chain. A chain's recipes are all
+  `data_scope: true` or all on the shared database, on one base.
+- **Parent materialization.** A `data_scope: true` Moment that is a parent is
+  captured right after it prepares (`Mana.Snapshot`, the plug's `capture`)
+  and recorded with its recipe's digest in `moments/.backend/checkpoints.json`.
+  A child then prepares in a clone of the deepest current checkpoint of its
+  chain (`prepare` with `from.snapshot`): the ancestors' recipes do not run
+  again, in this process or the next, until the digest changes or the
+  snapshot is gone. A chain on the shared database has no snapshot and
+  replays its recipes from the root, the protocol's other mode.
+- **Recorded preparation recovery.** `up` records how far its preparation got
+  and whether every recipe it ran wrote only to a database of its own. One
+  interrupted before anything was written (`startup`), or inside such
+  recipes, is prepared again on the next `up` (a child from its recorded
+  checkpoint); services already prepared are not prepared again. A base,
+  services or shared-database recipe that was interrupted still waits for
+  inspection.
 
 The Ash DSL accepts `from(:parent_name)` on a Moment. The exporter resolves
 ancestry after collecting every domain and refuses missing parents and cycles.
@@ -42,8 +78,8 @@ ancestry from routes, step order, shared recipes or test results.
 `graphFromMap` accepts an authored `MOMENTS.md` and produces the same
 representation. There is no second dependency file.
 
-A child is never opened, prepared or run: `from` records lineage for the map.
-Share setup between Moments through a backend `base` recipe instead.
+`from` is the parent a Moment is prepared on (see checkpoint composition
+above); `base` stays shared setup for every Moment of the instance.
 
 `open --fresh` resets presentation; `up --fresh` runs the app's preparation;
 `reset --discard-data` discards the stopped database. None of them is the
@@ -75,7 +111,7 @@ moments fork booking-paid -n 3      # prepared once, cloned 3 times: booking-pai
 moments diff booking-paid@2 booking-paid@3   # situation ids, or Moment names evaluated now
 moments diff booking-paid booking-paid       # two evaluations under the same code: SAME
 moments trace booking-paid          # declared path from the root + every Mana.History entry in order
-moments save explore/refusal_enforced-booking-pay.json cancelled-yet-paid
+moments save refusal_enforced-booking-pay.json cancelled-yet-paid   # a Mana.Explore trace becomes a Moment
 moments situations                  # what is kept, without launches
 ```
 
@@ -97,19 +133,91 @@ moments situations                  # what is kept, without launches
 - `trace` evaluates the Moment from the migrated, empty base and lists every
   entry of the `history:` logs in order: subject, action, verb, actor kind,
   outcome and each changed field before → after. `path` is the declared
-  ancestry from the root; a child is refused like `up` refuses it. The
-  journey's UI steps are not part of it.
-- `save` takes a trace `Mana.Explore.save/2` wrote, replays it in a scope of
-  its own (`Moments.Recipes` `explore:`) and only then appends an entry to
-  `moments/explorations.md` (the `MOMENTS.md` format: `run: mana-explore
-  moments/explorations/<name>.json`, a `check:` naming the broken property and
-  a description of every move) and copies the trace there. `moments list`
-  shows these entries; `fork`, `diff` and `trace` take their names. They are
-  not added to the Ash declaration, so `up`/`open` cannot open them in the UI.
+  ancestry from the root; a child is evaluated on its parent's checkpoint, so
+  its history starts with the parent's. The journey's UI steps are not part
+  of it.
+- `save` takes a trace `Mana.Explore.save/3` wrote, replays it in a scope of
+  its own (`Moments.Recipes` `explore:`) and only then writes it where a
+  `moments` section declares `explorations` (the manifest's `explorations`
+  list: the section whose domain has the trace's resource, or the only one;
+  inside the app or a root of `moments/sources.json`) and runs `moments
+  sync`. The trace is then a Moment of the Ash declaration (`mix
+  mana.explore --save <name>` writes it the same way), listed by `moments
+  list`; `fork`, `diff` and `trace` take its name, and `moments suite`
+  checks it ([below](#exploration-moments-in-the-suite)). It has no screen:
+  `up`, `open` and `profile` refuse it. `moments sync` also writes
+  `moments/explorations.md`, the map of these Moments in the `MOMENTS.md`
+  format (`run: mana-explore <trace>`, a `check:` naming the property that
+  must hold, a description of every move).
 
 Launches stay in the private `moments/.backend/situations.json` (the last 64);
 output names situations by id. The backend keeps the 16 most recent scopes, so
 an older situation compares by its captured projection.
+
+## Behaviour diff: `moments diff --base`
+
+Moment × version = situation: a pull request is reviewed by what its Moments
+do at the base and at the head, not by its lines.
+
+```sh
+moments diff --base origin/main --affected --out moments-diff --project apps/shop
+```
+
+- The base is a `git worktree` of the revision in the system temp folder,
+  with each submodule at the commit the base records (a worktree of the
+  head's own clone of it when that has the commit, else `git submodule
+  update`). A checkout has no ignored dependencies, so a project with
+  `mana.toml` is set up there with `mana setup --runtime-only` (its own
+  `mana/framework/cli/mana`).
+- Each version runs its own `up --backend-only` in turn (the suite's
+  `TemporaryBackend`), on the ports `backend.json` declares, so an `up` of
+  the app must not be running. The base's database is discarded afterwards;
+  the checkout is removed.
+- The Moments are the affected ones (`--affected`, the `moments affected`
+  plan from the base; a whole catalog when it is unavailable) or every Moment
+  of both versions. Each is evaluated twice per version, in two halves:
+  - its data situation, prepared through its recipes in a data scope of its
+    own (Moments with the same recipes from the root share it), with the
+    projections of `diff <a> <b>`, normalized the same way: `rows` (row count
+    per table), `history` (Mana.History entries, paired by subject, action
+    and verb, compared field by field) and `observed` (the recipe's
+    `observe/2`);
+  - its journey, run as `suite --headless` runs it (2 workers) on that
+    backend's shared database, a fresh fixture each time: `screen` (the
+    last screen report's declared projection, with the journey's outcome as
+    `journey`) and `offered` (the verbs that screen offered).
+
+  A Moment on the shared database is still compared by its screen. A field
+  that differs between the two evaluations of one version is unreproducible:
+  it is left out and listed in `unreproducible` instead of being read as a
+  change.
+- `behaviour-diff.json` has an entry only for a Moment that behaves
+  differently or whose recipe changed: per projection the field and its
+  `base` and `head` values, and `redefined: true` when the recipe changed
+  (its name or digest). `added`, `removed`, `notCompared` (neither half
+  could run, with the reasons) and `layersNotCompared` (one half could not:
+  a recipe without `data_scope: true`, a Moment for the web only) list the
+  rest. `behaviour-diff.md` says the same for a reviewer, one section per
+  group of Moments that changed alike. Default `--out`: `moments/.diff`.
+- The screen is what the app declares in its projection (`fields`), not
+  every text drawn: a value a reviewer should see change, like a total,
+  belongs there. Exit 0 with a report, 2 when unavailable.
+
+In CI, a project calls the reusable workflow
+`.github/workflows/moments-diff.yml` of the Mana commit its submodule pins;
+it runs the diff against the pull request's base and keeps one comment per
+app up to date (a pull request from a fork gets the report as an artifact
+only):
+
+```yaml
+on: pull_request
+jobs:
+  behaviour:
+    permissions: {contents: read, pull-requests: write}
+    uses: <owner>/mana/.github/workflows/moments-diff.yml@<commit>
+    with:
+      project: apps/shop          # affected: true, setup: mana setup --runtime-only by default
+```
 
 ## Short CLI
 
@@ -309,7 +417,8 @@ recorded identity.
 Before running the app's preparation, the instance writes a checkpoint with the
 Moment and the stage (`startup`, `base`, `services` or `recipe`). It is removed
 only when preparation and its inspection finish. If the process dies in that
-window, the next `up` refuses to repeat the writes.
+window, the next `up` refuses to repeat the writes, unless they all stayed in
+databases of their own (recorded preparation recovery, above).
 
 `moments status --local` inspects identity, processes, database and stage
 without loading the app's adapter, without the bridge and without showing
@@ -411,6 +520,40 @@ external services. An unknown xref format marks the evidence unavailable without
 blocking the DSL export. Hashes are verified again before the plan finishes;
 the runtime still requires its own proof of applied code and postconditions.
 
+#### By effect
+
+The export also writes `backendGraph.actions` (`Moments.ActionGraph`): each
+file that only create, update and destroy actions reach (their changes,
+validations, manual implementations, notifiers and the modules those call),
+mapped to those actions; the action each step verb runs; and the resources
+each `Moments.RecipeSet` recipe's module reaches. A change to such a file
+selects the Moments whose evidence names one of its actions, over the Moment
+and its ancestors: a step's verb; a recipe, by the actions its last complete
+preparation ran, else by the resources its module reaches; an exploration
+Moment's trace, by the resources it touches; or the latest passed journey's
+receipts in `moments/.proofs` (their actions and changes). A Moment whose
+evidence is incomplete stays selected: a step with no receipt for the current
+steps, a truncated receipt, a recipe or verb the export does not map, a trace
+naming no resource. Precision is `elixir-effects`; `effectGraph` lists each
+path, its actions and the Moments that name them.
+
+With `Moments.ActionTrace` as Ash's tracer, every `prepare` answers which
+actions it ran (`x-mana-preparation`); the runner keeps the latest per recipe
+in `moments/.proofs/preparations/<recipe>.json`. A truncated one counts as
+none, so the module's static reach decides again. A truncated receipt or
+preparation still counts when it says `writesComplete`: only writes have
+effects, and past its limit a capture drops reads before writes.
+
+A file a resource's own definition, a read, a generic action, a calculation,
+a policy check, a recipe or any other module reaches keeps the file graph.
+Receipts cover gesture requests only: an action a screen calls while loading
+is not evidence. Without an available action map the file graph decides; a
+malformed one, or one that differs from the Git base, widens like the graph.
+
+Each selected Moment carries `why`: `import`, `compiled dependency`,
+`effect: MyApp.Booking.pay`, `no receipt`, `declaration` or the widening
+reason.
+
 A step's postconditions are kept in `steps[].checks`, with timings, even when
 the journey fails. The backend identity before the run is kept in
 `code.backendAtStart`. Code, process, target or observation invalidated while
@@ -490,7 +633,8 @@ reading the screen (`lookMs`) and the backend (`inspectMs`); the final one is
 `finalObservation.progress`. The
 declaration does not need to duplicate the final criteria in the last step's
 `until`. Intermediate taps still need `until` to order the transition before the
-next gesture.
+next gesture, except in a navigation (no criteria declared), where each step
+waits for the screen to settle.
 
 The driver taps, long-presses and swipes widgets with a stable key that are
 visible and reachable by hit testing, fills and submits text fields through
@@ -792,6 +936,20 @@ no gain (software rasterisation saturates the CPU first). Each headless worker
 uses ~350–430 MB (RSS). A new profile build takes ~31 s; wasm ~54 s; headless
 startup ~12 s uncached, ~3 s cached.
 
+### Exploration Moments in the suite
+
+A Moment whose manifest entry carries `exploration` (a saved `Mana.Explore`
+trace, [declared in Ash](../ash/moments/README.md#saved-explorations-are-moments))
+has no screen. The suite sends its trace to the backend's
+`/_explorations/check`, as many at once as there are workers, before any app is built:
+the trace replays in a database of its own and only the property it broke is
+checked. `FAILED` (with the violation in the result) while the bug is there,
+`PASSED` once it is fixed; a backend that cannot replay it is `UNAVAILABLE`,
+never a pass. A suite of exploration Moments only builds and opens nothing
+(`runtime: "backend"` in the summary); in a mixed one their results join the
+others. `affected` roots them, like other Moments, at the domain that
+declares `explorations` and its resources.
+
 ## Recipes in Elixir: `Moments.RecipeSet`
 
 An app's recipes live in sets that share helpers and the observation; each
@@ -840,7 +998,7 @@ Moments may declare a shared `base :name`. Each recipe gets a `backend.base`
 dependency in the manifest. The app registers the base's preparation in
 `BackendRecipes(bases: ...)`; the engine resolves the base before the specific recipe,
 persists `baseRecipe` and reuses the reference on later `open`s and restarts.
-There is no DAG: an instance has one base. Invalid references, unregistered
+An instance has one base; a child and its ancestors share it. Invalid references, unregistered
 bases and an attempt to use another base in the same instance fail before
 preparing data. An interrupted initial preparation keeps its checkpoint and
 needs an explicit reset. A specific recipe that fails keeps the ready base.

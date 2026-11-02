@@ -40,5 +40,10 @@ Manifest readManifest(String file) {
 
 List<Map<String, Object?>> manifestCatalog(String file) => [
   for (final MapEntry(key: name, value: scene) in (readManifest(file)['moments']! as Map).entries)
-    {'name': name, 'from': (scene as Map)['from'], 'description': scene['description'], 'executor': 'backend-sandbox'},
+    {
+      'name': name,
+      'from': (scene as Map)['from'],
+      'description': scene['description'],
+      'executor': scene['exploration'] is Map ? 'mana-explore' : 'backend-sandbox',
+    },
 ];

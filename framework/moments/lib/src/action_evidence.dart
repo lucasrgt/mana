@@ -43,6 +43,7 @@ Map<String, Object?> actionReceipt(Object? value) {
     if (profiled) 'profile',
     if (changed) 'changes',
     'verb',
+    'writesComplete',
   ])) {
     _invalid('Invalid action evidence');
   }
@@ -52,6 +53,7 @@ Map<String, Object?> actionReceipt(Object? value) {
       receipt['request'] is! String ||
       !RegExp(r'^[a-f0-9]{32}$').hasMatch(receipt['request']! as String) ||
       receipt['truncated'] is! bool ||
+      (receipt['writesComplete'] != null && receipt['writesComplete'] is! bool) ||
       receipt['scope'] != 'request-actions-only' ||
       receipt['coverage'] != 'not-established' ||
       receipt['actions'] is! List ||

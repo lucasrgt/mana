@@ -55,6 +55,12 @@ Map<String, Object?> offeredOutcome(Map check, Object? offered) {
   };
 }
 
+/// A journey that declares no criteria at all is a navigation: a Moment
+/// without verification is still useful (the protocol's first rule), so its
+/// steps run in order, each after the screen settles, and nothing is judged.
+bool isNavigation(Map<String, Object?> scene) =>
+    ((scene['checks'] as List?)?.isEmpty ?? true) && ((scene['steps'] as List?)?.isNotEmpty ?? false);
+
 void validateSteps(Map<String, Object?> scene) {
   final checks = scene['checks'] ?? const [];
   if (checks is! List) throw const JourneyError('Invalid check declaration');
@@ -64,7 +70,8 @@ void validateSteps(Map<String, Object?> scene) {
   }
   final declared = checks.cast<Map>();
   final stepList = steps.cast<Map>();
-  if (!declared.any((c) => c['scope'] != 'step' && criteria.contains(c['kind']))) {
+  final navigation = declared.isEmpty;
+  if (!navigation && !declared.any((c) => c['scope'] != 'step' && criteria.contains(c['kind']))) {
     throw const JourneyError('A journey requires an observed UI or backend criterion');
   }
   for (final check in declared.where((c) => c['scope'] == 'step')) {
@@ -89,7 +96,7 @@ void validateSteps(Map<String, Object?> scene) {
         ((kind == 'fill' || inputRef != null) && !_target.hasMatch('${inputRef ?? ''}')) ||
         (verb != null && (kind != 'tap' || !isVerb(verb) || step['target'] != 'verb:$verb')) ||
         until is! List ||
-        (kind == 'tap' && until.isEmpty && index != stepList.length - 1) ||
+        (!navigation && kind == 'tap' && until.isEmpty && index != stepList.length - 1) ||
         until.length > 32 ||
         !until.every((name) => declared.any((c) => c['name'] == name && criteria.contains(c['kind'])));
     if (invalid) throw const JourneyError('Invalid journey target, input reference or postcondition');
@@ -119,7 +126,10 @@ typedef Evaluate =
 /// Runs the declared steps against an already prepared runtime: never
 /// reseeds, recompiles or retries gestures. Each postcondition waits while
 /// the app shows progress ([ProgressWait]): [timeout] after the last sign of
-/// it, [limit] at most.
+/// it, [limit] at most. With [settle] (a navigation), a step without
+/// postconditions waits instead for the screen to settle: [settleMs] without
+/// a changed report or a request in flight; its receipt keeps the projection
+/// it settled on.
 Future<void> executeSteps({
   required Map<String, Object?> scene,
   required Request request,
@@ -134,6 +144,8 @@ Future<void> executeSteps({
   int limit = 30000,
   int poll = 100,
   int wait = 250,
+  bool settle = false,
+  int settleMs = 1000,
 }) async {
   final receipts = <Map<String, Object?>>[];
   report['steps'] = receipts;
@@ -183,12 +195,16 @@ Future<void> executeSteps({
       }
       final until = (step['until'] as List?) ?? const [];
       final checks = checksDeclared.where((c) => until.contains(c['name'])).toList();
-      if (checks.isEmpty) {
+      if (checks.isEmpty && !settle) {
         receipt['status'] = 'passed';
         receipt['meaning'] = 'Operation dispatched; application effects are checked by later steps and final criteria';
         continue;
       }
-      final waiting = progress = ProgressWait(idleMs: timeout, limitMs: limit, started: dispatchedAt);
+      final waiting = progress = ProgressWait(
+        idleMs: checks.isEmpty ? settleMs : timeout,
+        limitMs: limit,
+        started: dispatchedAt,
+      );
       Object? observation;
       while (true) {
         var sent = nowMs();
@@ -201,6 +217,19 @@ Future<void> executeSteps({
         final observed = look['observed'] as Map?;
         if (look['revision'] != revision || observed?['client'] != client || look['codeChanged'] == true) {
           throw const JourneyError('Runtime changed while awaiting the gesture outcome');
+        }
+        if (checks.isEmpty) {
+          if (!waiting.expired) {
+            if (observation is! int) await Future<void>.delayed(Duration(milliseconds: poll));
+            continue;
+          }
+          if (waiting.reason == 'limit') {
+            throw JourneyError('The screen did not settle after the gesture (${_ended(waiting)})');
+          }
+          receipt['status'] = 'settled';
+          receipt['projection'] = observed?['projection'];
+          receipt['meaning'] = 'Gesture dispatched and the screen settled; a navigation step proves nothing';
+          break;
         }
         sent = nowMs();
         final inspection = await request('/moments/inspect');

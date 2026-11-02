@@ -168,7 +168,7 @@ final class Adapter {
     return elixirRecipes({
       for (final scene in moments)
         if ((scene['backend'] as Map?)?['recipe'] case final String recipe) recipe,
-    });
+    }, preparations: p.join(p.dirname(manifestFile), '.proofs', 'preparations'));
   }
 
   String Function(Map<String, Object?> instance, String reference)? get resolveInput =>

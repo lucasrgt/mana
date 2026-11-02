@@ -14,7 +14,9 @@ import 'check.dart';
 import 'chromium.dart';
 import 'dart_sources.dart';
 import 'down.dart';
+import 'elixir_recipes.dart' show callRecipe;
 import 'errors.dart';
+import 'explorations.dart';
 import 'headless_runtime.dart';
 import 'inspect.dart';
 import 'json.dart';
@@ -96,7 +98,9 @@ final class _Worker implements HeadlessWorker {
 /// one static server, headless browsers, a fresh context per Moment. Headless
 /// runtime: the app under flutter_tester. Fixtures come from the same backend
 /// recipes and every Moment still goes through [checkMoment], so criteria,
-/// source identity and proofs are the same as `moments run`.
+/// source identity and proofs are the same as `moments run`. With
+/// [observe], each result also keeps the screen's last report after the
+/// check (`observation`: its projection and offered verbs).
 Future<Map<String, Object?>> runSuite({
   required String project,
   List<String>? names,
@@ -106,6 +110,7 @@ Future<Map<String, Object?>> runSuite({
   String runtime = 'browser',
   String? affectedBase,
   void Function(Map<String, Object?> event)? onEvent,
+  bool observe = false,
 }) async {
   final emit = onEvent ?? (_) {};
   if (!const ['profile', 'debug', 'wasm'].contains(mode))
@@ -164,7 +169,7 @@ Future<Map<String, Object?>> runSuite({
 
   final directory = p.join(project, 'moments/.backend');
   final instanceFile = p.join(directory, 'instance.json'), runtimeFile = p.join(directory, '.runtime.json');
-  _TemporaryBackend? temporary;
+  TemporaryBackend? temporary;
   Timer? poller;
   final running = File(p.join(directory, 'running.json'));
   if (running.existsSync() &&
@@ -180,7 +185,7 @@ Future<Map<String, Object?>> runSuite({
   }
   if (!running.existsSync() || !File(runtimeFile).existsSync()) {
     emit({'phase': 'backend'});
-    temporary = await _TemporaryBackend.start(project: project, directory: directory, name: adapter.initialMoment);
+    temporary = await TemporaryBackend.start(project: project, directory: directory, name: adapter.initialMoment);
   }
   Map<String, Object?>? status;
   Object? statusError;
@@ -253,6 +258,40 @@ Future<Map<String, Object?>> runSuite({
     Process.runSync('chmod', ['700', run]);
     void log(String file, String text) =>
         File(p.join(run, file)).writeAsStringSync(text.endsWith('\n') ? text : '$text\n', mode: FileMode.append);
+    // Exploration Moments need no app: each replays in the backend, and a
+    // suite of only those builds and opens nothing.
+    final explored = [
+      for (final name in selected)
+        if (explorationOf(moments[name]) != null) name,
+    ];
+    final checked = <Map<String, Object?>>[];
+    if (explored.isNotEmpty) {
+      emit({'phase': 'explorations', 'moments': explored.length});
+      final begun = nowMs();
+      checked.addAll(
+        await runExplorations(
+          call: (recipe, operation, body) => callRecipe(instance, recipe, operation, body),
+          moments: moments,
+          names: explored,
+          workers: workers,
+          emit: emit,
+        ),
+      );
+      selected = [
+        for (final name in selected)
+          if (!explored.contains(name)) name,
+      ];
+      if (selected.isEmpty) {
+        final summary = explorationSummary(checked, workers: workers, wallMs: nowMs() - begun, selection: selection);
+        File(p.join(run, 'summary.json')).writeAsStringSync('${const JsonEncoder.withIndent('  ').convert(summary)}\n');
+        return {
+          ...summary,
+          'directory': run,
+          'exitCode': const {'passed': 0, 'failed': 1, 'unavailable': 2}[summary['status']],
+        };
+      }
+      if (workers > selected.length) workers = selected.length;
+    }
     final resources = <Future<void> Function()>[];
     final browserPool = <Chromium>[];
     HeadlessRuntime? headless;
@@ -465,7 +504,7 @@ Future<Map<String, Object?>> runSuite({
 
       final history = _durations(project);
       final queue = [...selected]..sort((a, b) => (history[b] ?? 0).compareTo(history[a] ?? 0));
-      final results = <Map<String, Object?>>[];
+      final results = <Map<String, Object?>>[...checked];
       emit({
         'phase': 'run',
         'runtime': runtime,
@@ -512,8 +551,19 @@ Future<Map<String, Object?>> runSuite({
                   'checks': <Object?>[],
                 };
               }
+              Map<String, Object?>? observation;
+              if (observe) {
+                try {
+                  final observed = (await worker.request('/moments/look'))['observed'] as Map?;
+                  observation = observed == null
+                      ? null
+                      : {'projection': observed['projection'], 'offered': observed['offered']};
+                } on Object {
+                  observation = null;
+                }
+              }
               bool? recovered = false;
-              if (result['status'] != 'passed') {
+              if (!const ['passed', 'navigated'].contains(result['status'])) {
                 Map<String, Object?>? look;
                 try {
                   look = await worker.request('/moments/look');
@@ -542,6 +592,7 @@ Future<Map<String, Object?>> runSuite({
                 if (reasons.isNotEmpty) 'reason': reasons,
                 if (recovered == true) 'ownershipRecovered': true,
                 if (worker.errors.isNotEmpty) 'pageErrors': worker.errors.take(3).toList(),
+                'observation': ?observation,
               };
               results.add(entry);
               emit({'phase': 'moment', ...entry});
@@ -559,7 +610,7 @@ Future<Map<String, Object?>> runSuite({
       final wallMs = nowMs() - started;
       final order = moments.keys.toList();
       results.sort((a, b) => order.indexOf(a['name']! as String).compareTo(order.indexOf(b['name']! as String)));
-      final passed = results.every((r) => const ['passed', 'skipped'].contains(r['status']));
+      final passed = results.every((r) => const ['passed', 'navigated', 'skipped'].contains(r['status']));
       final summary = <String, Object?>{
         'version': 1,
         'status': passed
@@ -620,22 +671,25 @@ Future<Map<String, Object?>> runSuite({
   }
 }
 
-/// A suite without a running backend opens a backend-only instance for its
-/// own duration and closes it afterwards; its data and image stay for the
-/// next run.
-final class _TemporaryBackend {
-  _TemporaryBackend._(this._child, this._exited);
+/// A backend-only instance (`up <name> --backend-only`) opened for as long as
+/// a suite or a behaviour diff needs one and closed afterwards; its data and
+/// image stay for the next run. Its output goes to [log] (default
+/// `moments/.suite/backend.log`).
+final class TemporaryBackend {
+  TemporaryBackend._(this._child, this._exited);
   final Process _child;
   final Future<int> _exited;
   var _done = false;
 
-  static Future<_TemporaryBackend> start({
+  static Future<TemporaryBackend> start({
     required String project,
     required String directory,
     required String name,
+    String? log,
   }) async {
-    final suite = Directory(p.join(project, 'moments/.suite'))..createSync(recursive: true);
-    final file = File(p.join(suite.path, 'backend.log'))..writeAsStringSync('');
+    final file = File(log ?? p.join(project, 'moments/.suite/backend.log'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('');
     final self = selfCommand();
     final child = await Process.start(self.first, [
       ...self.skip(1),
@@ -652,7 +706,7 @@ final class _TemporaryBackend {
       exited = true;
       return code;
     });
-    final backend = _TemporaryBackend._(child, exit);
+    final backend = TemporaryBackend._(child, exit);
     final deadline = DateTime.now().add(const Duration(minutes: 10));
     while (!(File(p.join(directory, 'running.json')).existsSync() &&
         File(p.join(directory, '.runtime.json')).existsSync() &&

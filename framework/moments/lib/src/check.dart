@@ -18,7 +18,6 @@ import 'json.dart';
 import 'profile.dart';
 import 'progress.dart';
 import 'projection.dart';
-import 'protocol.dart';
 import 'refresh_check.dart';
 import 'verdict.dart';
 
@@ -290,6 +289,7 @@ Future<Map<String, Object?>> checkMoment({
   bool profile = false,
   bool restart = false,
   String? manifestFile,
+  int settleMs = 1000,
 }) async {
   manifestFile ??= p.join(project, 'moments/manifest.json');
   journey = journey || profile;
@@ -349,9 +349,10 @@ Future<Map<String, Object?>> checkMoment({
     if (declared == null) throw const _Unavailable('Unknown Moment');
     final scene = {...declared, 'checks': declared['checks'] ?? <Object?>[], 'steps': declared['steps'] ?? <Object?>[]};
     final checks = (scene['checks']! as List).cast<Map<String, Object?>>();
-    assertMaterializable(scene);
     final properties = propertiesFor(manifest, (scene['projection'] as Map?)?['route']);
-    validateChecks(checks, properties);
+    final navigation = journey && isNavigation(scene);
+    if (navigation) report['operation'] = 'navigation';
+    if (!navigation) validateChecks(checks, properties);
     if (journey || checks.any((c) => c['scope'] == 'step')) validateSteps(scene);
     // While polling, the runtime's own digest (assertDartRuntime) stands in for
     // a full reread; the boundaries below still reread every Dart file.
@@ -499,6 +500,8 @@ Future<Map<String, Object?>> checkMoment({
         evaluate: evaluateChecks,
         report: report,
         validateInspection: validateInspection,
+        settle: navigation,
+        settleMs: settleMs,
       );
       report['stage'] = 'check';
     }
@@ -583,7 +586,10 @@ Future<Map<String, Object?>> checkMoment({
           ? 'unavailable'
           : outcomes.any((c) => c['status'] == 'failed')
           ? 'failed'
+          : navigation
+          ? 'navigated'
           : 'passed';
+      if (navigation && stable) report['arrived'] = {'projection': observed['projection']};
       report['restoration'] = {
         'revision': revision,
         'reportedAt': observed?['reportedAt'],
@@ -602,7 +608,7 @@ Future<Map<String, Object?>> checkMoment({
       finalObservation['durationMs'] = nowMs() - settlementStarted;
       finalObservation['status'] = report['status'];
       finalObservation['progress'] = settlement.receipt();
-      if (report['status'] == 'passed') break;
+      if (const ['passed', 'navigated'].contains(report['status'])) break;
       if (settlement.expired) {
         report['reason'] = stable
             ? 'Final journey criteria were not reached before the deadline'
@@ -658,7 +664,7 @@ Future<Map<String, Object?>> checkMoment({
         };
       }
       try {
-        final passed = const ['passed', 'captured'].contains(report['status']);
+        final passed = const ['passed', 'captured', 'navigated'].contains(report['status']);
         final ended = await transport('/journey/lease', {'operation': 'finish', 'journeyId': id, 'passed': passed});
         report['ownership'] = {'id': id, 'phase': ended['phase']};
         if (passed && ended['phase'] != 'idle') throw StateError('Ownership was not released');
@@ -673,7 +679,8 @@ Future<Map<String, Object?>> checkMoment({
   report['durationMs'] = nowMs() - started;
   markPhase(null);
   if (profile) report['profile'] = journeyProfile(report, requiresBackend: profileNeedsBackend);
-  if (report['status'] != 'captured') {
+  // A navigation judges nothing, so it has no verdict to give.
+  if (!const ['captured', 'navigated'].contains(report['status'])) {
     report['verdict'] = avpVerdict(
       subject: name ?? 'active',
       status: report['status']! as String,
@@ -702,9 +709,9 @@ Future<Map<String, Object?>> checkMoment({
   final receipts = (actions?['receipts'] as List?)?.cast<Map>();
   return {
     'status': status,
-    'exitCode': status == 'passed' && (report['profile'] as Map?)?['status'] == 'partial'
+    'exitCode': const ['passed', 'navigated'].contains(status) && (report['profile'] as Map?)?['status'] == 'partial'
         ? 2
-        : const {'passed': 0, 'captured': 0, 'failed': 1, 'unavailable': 2}[status],
+        : const {'passed': 0, 'captured': 0, 'navigated': 0, 'failed': 1, 'unavailable': 2}[status],
     'report': file,
     'checks': [
       for (final c in (report['checks']! as List).cast<Map>()) {'name': c['name'], 'status': c['status']},
@@ -730,6 +737,7 @@ Future<Map<String, Object?>> checkMoment({
     if (refresh) ...{'name': name, 'stage': report['stage'], 'refresh': report['refresh']},
     if (journey) ...{
       'name': name,
+      'arrived': ?report['arrived'],
       'stage': report['stage'],
       'steps': report['steps'] ?? <Object?>[],
       'ownership': report['ownership'],

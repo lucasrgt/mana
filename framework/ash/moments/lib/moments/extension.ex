@@ -38,6 +38,7 @@ defmodule Moments.Scene do
     :backend,
     :platforms,
     :app,
+    :exploration,
     :__identifier__,
     :__spark_metadata__,
     defaults: [],
@@ -75,6 +76,11 @@ defmodule Moments.Extension do
   A feature's domain can declare Moments for apps whose settings one other
   domain owns (`app`); `Moments.Manifest` collects each app's Moments from
   every domain it is given or the OTP app lists in `:ash_domains`.
+
+  `explorations "priv/moments/explorations"` makes every saved `Mana.Explore`
+  trace in that directory (`mix mana.explore --save <name>`) a Moment of the
+  section's app, named after its file: running it replays the trace in a
+  database of its own and checks the property it broke.
   """
   @field %Spark.Dsl.Entity{
     name: :field,
@@ -170,7 +176,7 @@ defmodule Moments.Extension do
       name: [type: :atom, required: true],
       from: [
         type: :atom,
-        doc: "Parent Moment; declares ancestry, not a backend base or execution dependency."
+        doc: "Parent Moment: the runner prepares this Moment on the parent's checkpoint."
       ],
       description: [type: :string, required: true],
       backend: [type: :atom],
@@ -199,7 +205,12 @@ defmodule Moments.Extension do
       route: [type: :string, doc: "Required on the domain that owns the app's settings."],
       base: [type: :atom],
       watch: [type: {:list, :string}, default: []],
-      client_roots: [type: {:list, :string}, default: []]
+      client_roots: [type: {:list, :string}, default: []],
+      explorations: [
+        type: :string,
+        doc:
+          "A directory, from the Mix project root, of saved `Mana.Explore` traces: each `<name>.json` is the Moment `<name>` of this section's app, read when the manifest is exported."
+      ]
     ],
     entities: [@field, @scene]
   }

@@ -34,10 +34,19 @@ defmodule Mana.Explore do
   | `:history_replays` | `history` | replaying a record's log does not rebuild it |
 
   A violation is shrunk to the shortest sequence of moves that still breaks
-  the same property and kept in the report with that trace; `save/2`
-  writes it where `replay_file/3` (a Moment's backend recipe) can rebuild
-  it. Verbs that are `external:` or move money are never performed unless
-  `external: :run`. A run is deterministic for a `seed`.
+  the same property and kept in the report with that trace. `save/3` writes
+  it as a file, `replay_file/3` (a Moment's backend recipe) rebuilds the
+  situation it reaches, and `check/3` replays it to tell whether the
+  property still breaks there. Verbs that are `external:` or move money are
+  never performed unless `external: :run`. A run is deterministic for a
+  `seed`.
+
+  A saved trace is a Moment: `mix mana.explore --save <name>` writes it to
+  `priv/moments/explorations/<name>.json`, a `moments` section that declares
+  `explorations "priv/moments/explorations"` (`Moments.Extension`) exports
+  every trace there as a Moment of its app, and `moments suite <name>` runs
+  `check/3` in a database of its own: it fails while the bug is there and
+  passes once it is fixed.
 
   The report also carries coverage (verbs declared, reached, never reached)
   and the affordance graph: for each record *shape* — its atom, boolean and
@@ -77,7 +86,8 @@ defmodule Mana.Explore do
       :detail,
       trace: [],
       shrunk_from: nil,
-      run: nil
+      run: nil,
+      explored: nil
     ]
   end
 
@@ -139,8 +149,14 @@ defmodule Mana.Explore do
 
     if MapSet.member?(seen, key),
       do: {acc, seen},
-      else: {acc ++ [%{shrink(ctx, violation) | run: index}], MapSet.put(seen, key)}
+      else:
+        {acc ++ [%{shrink(ctx, violation) | run: index, explored: explored(ctx)}],
+         MapSet.put(seen, key)}
   end
+
+  # What a replay must check again to judge the same promise the same way.
+  defp explored(ctx),
+    do: %{resources: ctx.resources, skip_rules: Enum.sort(ctx.skip_rules)}
 
   @doc """
   A `reset:` for apps on Postgres: every run gets a fresh `Mana.Snapshot`
@@ -1217,7 +1233,26 @@ defmodule Mana.Explore do
     end
   end
 
+  # The rebuilt record (and the entries its replay logged) is a by-product:
+  # where the data layer transacts it is rolled back, as `Mana.Replay` does,
+  # so nothing of the check stays in the store.
   defp replay_mismatch(state, resource, log, record) do
+    if Ash.DataLayer.data_layer_can?(resource, :transact),
+      do:
+        rolled_back(resource, record, fn -> rebuilt_differently(state, resource, log, record) end),
+      else: rebuilt_differently(state, resource, log, record, &remove_rebuilt/1)
+  end
+
+  defp rolled_back(resource, record, check) do
+    case Ash.DataLayer.transaction([resource], fn ->
+           Ash.DataLayer.rollback([resource], {:checked, check.()})
+         end) do
+      {:error, {:checked, detail}} -> detail
+      other -> "#{Mana.Entity.type(resource)} #{record.id}: replay transaction: #{inspect(other)}"
+    end
+  end
+
+  defp rebuilt_differently(state, resource, log, record, cleanup \\ fn _ -> :ok end) do
     entries = Mana.History.export(log, Mana.Entity.type(resource), record.id)
 
     by_id =
@@ -1235,6 +1270,7 @@ defmodule Mana.Explore do
         nil
 
       {:ok, rebuilt, _} ->
+        cleanup.(rebuilt)
         rebuilt_mismatch(resource, record, rebuilt, entries)
 
       {:error, %{error: reason}} when reason in [:external, :redacted_input] ->
@@ -1265,17 +1301,19 @@ defmodule Mana.Explore do
             (clock_value?(Map.get(record, &1)) and not MapSet.member?(inputs, to_string(&1))))
       )
 
-    destroy_quietly(rebuilt)
-
     if fields != [],
       do:
         "#{Mana.Entity.type(resource)} #{record.id}: replaying its history rebuilt #{Enum.join(fields, ", ")} differently"
   end
 
-  defp destroy_quietly(record) do
-    case Ash.destroy(record, authorize?: false) do
-      {:error, error} -> skipped("removing a rebuilt #{inspect(record.__struct__)}", error, :ok)
-      _removed -> :ok
+  # Without a transaction the rebuilt record goes through the primary
+  # destroy; a resource without one keeps it until the next run's reset.
+  defp remove_rebuilt(%resource{} = record) do
+    with %{name: action} <- Ash.Resource.Info.primary_action(resource, :destroy),
+         {:error, error} <- Ash.destroy(record, action: action, authorize?: false) do
+      skipped("removing a rebuilt #{inspect(resource)}", error, :ok)
+    else
+      _ -> :ok
     end
   end
 
@@ -1461,7 +1499,7 @@ defmodule Mana.Explore do
           "criterion" => to_string(property),
           "status" => if(found == [], do: "pass", else: "fail"),
           "reason" => if(found != [], do: Enum.map_join(found, "; ", & &1.detail)),
-          "evidence" => Enum.map(found, &trace_json/1)
+          "evidence" => Enum.map(found, &to_json/1)
         }
       end
 
@@ -1524,19 +1562,24 @@ defmodule Mana.Explore do
 
   defp type({resource, index}), do: "#{Mana.Entity.type(resource)}##{index}"
 
-  @doc "Writes `violation`'s trace as JSON under `dir`; answers the path."
-  def save(%Violation{} = violation, dir) do
+  @doc """
+  Writes `violation`'s trace as JSON to `dir/<name>.json` (by default named
+  after the property, the record type and the verb); answers the path.
+  """
+  def save(%Violation{} = violation, dir, name \\ nil) do
     File.mkdir_p!(dir)
 
     name =
-      "#{violation.property}-#{Mana.Entity.type(violation.resource)}#{if violation.verb, do: "-#{violation.verb}"}"
+      name ||
+        "#{violation.property}-#{Mana.Entity.type(violation.resource)}#{if violation.verb, do: "-#{violation.verb}"}"
 
     path = Path.join(dir, "#{name}.json")
-    File.write!(path, Jason.encode!(trace_json(violation), pretty: true))
+    File.write!(path, Jason.encode!(to_json(violation), pretty: true) <> "\n")
     path
   end
 
-  defp trace_json(violation) do
+  @doc "`violation` as `save/3` writes it: what broke, how, and the moves that break it."
+  def to_json(%Violation{} = violation) do
     %{
       "property" => to_string(violation.property),
       "resource" => inspect(violation.resource),
@@ -1545,7 +1588,16 @@ defmodule Mana.Explore do
       "detail" => violation.detail,
       "moves" => Enum.map(violation.trace, &move_json/1)
     }
+    |> Map.merge(explored_json(violation.explored))
   end
+
+  defp explored_json(nil), do: %{}
+
+  defp explored_json(%{resources: resources, skip_rules: skip_rules}),
+    do: %{
+      "resources" => Enum.map(resources, &inspect/1),
+      "skip_rules" => Enum.map(skip_rules, &to_string/1)
+    }
 
   defp move_json(move) do
     move
@@ -1608,6 +1660,45 @@ defmodule Mana.Explore do
           do: {{resource, index}, record}
     end)
   end
+
+  @doc """
+  Replays a saved trace (`save/3`'s file, or its decoded JSON) from a fresh
+  store and checks only the property it broke, over the resources and rules
+  the exploration checked: `{:failed, violation}` while the bug is there,
+  `:passed` once it is fixed. A move the code no longer allows is attempted
+  and goes on, as in any replay; a trace naming a resource, verb, actor or
+  rule the app no longer has raises, so a stale trace is never a pass.
+  Options as `run/2` (`setup` or `actors`, `reset`).
+  """
+  def check(trace, domains, opts \\ [])
+
+  def check(path, domains, opts) when is_binary(path),
+    do: path |> File.read!() |> Jason.decode!() |> check(domains, opts)
+
+  def check(%{"property" => property, "moves" => moves} = trace, domains, opts)
+      when is_list(moves) do
+    property = String.to_existing_atom(property)
+
+    unless property in @properties,
+      do: raise(ArgumentError, "#{property} is not a property Mana.Explore checks")
+
+    opts =
+      opts
+      |> Keyword.put(:properties, [property])
+      |> put_new_some(:resources, trace["resources"] && Enum.map(trace["resources"], &module/1))
+      |> put_new_some(
+        :skip_rules,
+        trace["skip_rules"] && Enum.map(trace["skip_rules"], &String.to_existing_atom/1)
+      )
+
+    case replay(domains, Enum.map(moves, &move_from_json/1), opts) do
+      nil -> :passed
+      violation -> {:failed, violation}
+    end
+  end
+
+  defp put_new_some(opts, _key, nil), do: opts
+  defp put_new_some(opts, key, value), do: Keyword.put_new(opts, key, value)
 
   defp rebuild_move(ctx, move, state) do
     state = %{state | trace: state.trace ++ [move]}

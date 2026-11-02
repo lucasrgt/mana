@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:mana/runtime.dart' show openPrivate, uuidV4;
 import 'package:path/path.dart' as p;
 
+import 'backend_recipes.dart' show preparedIdentity;
 import 'canonical.dart';
 import 'dart_sources.dart';
 import 'errors.dart';
@@ -14,7 +15,6 @@ import 'journey.dart' show verbIdentity;
 import 'json.dart';
 import 'manifest.dart';
 import 'projection.dart';
-import 'protocol.dart';
 import 'restart_handoff.dart';
 import 'session_projection.dart';
 import 'gestures.dart' show GestureMoments;
@@ -214,7 +214,6 @@ final class Moments implements WatchedMoments, GestureMoments {
     if (manifest != null) {
       final moments = (manifest['moments']! as Map).cast<String, Object?>();
       if (!moments.containsKey(name)) throw MomentsError('Unknown moment: $name');
-      assertMaterializable((moments[name]! as Map).cast());
       return {
         'name': name,
         'recipeHash': recipeHash,
@@ -394,8 +393,10 @@ final class Moments implements WatchedMoments, GestureMoments {
     // selects the current declaration instead of attempting a migration.
     final remembered = !fresh && _options.resumeOnOpen ? _states[name] : null;
     if (remembered != null) _resume(remembered, recipe);
-    final declared = ((_catalog().manifest?['moments'] as Map?)?[name] as Map?)?['backend'];
-    if (prepare && declared != null) {
+    // A child without a recipe of its own still opens on its parent's data.
+    final moments = _catalog().manifest?['moments'] as Map?;
+    final declared = moments != null && preparedIdentity(moments, name) != null;
+    if (prepare && declared) {
       final run = _options.prepare;
       if (run == null) throw const MomentsError('No backend recipe executor is configured');
       _preparing = true;
@@ -410,7 +411,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         _preparing = false;
       }
     }
-    final rebuilds = prepare && declared != null;
+    final rebuilds = prepare && declared;
     final armed = rebuilds && _options.remountOnOpen && canRemount() ? _armRemount() : null;
     try {
       _move(name, reset: fresh);

@@ -1,12 +1,18 @@
 defmodule Moments.ActionTrace do
   @moduledoc "Bounded request-local Ash action observations. No arguments, actor values or error payloads."
   @behaviour Ash.Tracer
+  alias Ash.Resource.Info
   @key {__MODULE__, :context}
   @stack {__MODULE__, :stack}
   @limit 16
   @types [:action, :bulk_create, :bulk_update, :bulk_destroy]
 
-  def begin_request(gesture) do
+  @doc """
+  Opens a capture for this process. `limit` bounds the events kept (16 for a
+  gesture's receipt, which travels in a header; more for a recipe's
+  preparation, which runs many actions).
+  """
+  def begin_request(gesture, limit \\ @limit) when is_integer(limit) and limit > 0 do
     discard()
     table = :ets.new(__MODULE__, [:set, :public, write_concurrency: true])
     :ets.insert(table, {:count, 0})
@@ -15,6 +21,7 @@ defmodule Moments.ActionTrace do
       table: table,
       started: System.monotonic_time(),
       gesture: gesture,
+      limit: limit,
       request: Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
     })
 
@@ -28,7 +35,7 @@ defmodule Moments.ActionTrace do
 
       context ->
         count = :ets.lookup_element(context.table, :count, 2)
-        actions = for {id, event} <- :ets.tab2list(context.table), is_integer(id), do: {id, event}
+        {actions, writes_complete?} = kept(context)
 
         changes = for {{:change, id}, change} <- :ets.tab2list(context.table), do: {id, change}
 
@@ -36,11 +43,19 @@ defmodule Moments.ActionTrace do
           version: if(changes == [], do: 2, else: 3),
           gesture: context.gesture,
           request: context.request,
-          truncated: count > @limit,
-          actions: actions |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1)),
+          truncated: count > limit(context),
+          actions: actions,
           scope: "request-actions-only",
           coverage: "not-established"
         }
+
+        # Past the limit reads give way to writes: whether every create,
+        # update and destroy is still in the receipt, which is all a change
+        # to a write's effects needs to know.
+        result =
+          if result.truncated,
+            do: Map.put(result, :writesComplete, writes_complete?),
+            else: result
 
         result =
           if changes == [],
@@ -56,6 +71,28 @@ defmodule Moments.ActionTrace do
         discard()
         result
     end
+  end
+
+  defp kept(context) do
+    entries =
+      for {id, event, write?} <- :ets.tab2list(context.table),
+          is_integer(id),
+          do: {id, event, write?}
+
+    # Concurrent tasks may each have made room; the receipt never exceeds it.
+    {kept, trimmed} =
+      entries
+      |> Enum.sort_by(fn {id, _, write?} -> {!write?, id} end)
+      |> Enum.split(limit(context))
+
+    dropped =
+      case :ets.lookup(context.table, :dropped_writes) do
+        [{:dropped_writes, n}] -> n
+        [] -> 0
+      end
+
+    {kept |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1)),
+     dropped == 0 and not Enum.any?(trimmed, &elem(&1, 2))}
   end
 
   def discard do
@@ -80,7 +117,12 @@ defmodule Moments.ActionTrace do
   @impl true
   def start_span(type, _name) do
     Process.put(@stack, [
-      %{metadata: %{kind: to_string(type)}, error: false, started: System.monotonic_time()}
+      %{
+        metadata: %{kind: to_string(type)},
+        write: type != :action,
+        error: false,
+        started: System.monotonic_time()
+      }
       | Process.get(@stack, [])
     ])
 
@@ -104,11 +146,26 @@ defmodule Moments.ActionTrace do
           _ -> fields
         end
 
-      %{span | metadata: Map.merge(span.metadata, fields)}
+      %{
+        span
+        | metadata: Map.merge(span.metadata, fields),
+          write: span.write or mutation?(metadata[:resource], metadata[:action])
+      }
     end)
   end
 
   def set_metadata(_, _), do: :ok
+
+  defp mutation?(resource, action) when is_atom(resource) and is_atom(action) do
+    Info.resource?(resource) and
+      match?(
+        %{type: type} when type in [:create, :update, :destroy],
+        Info.action(resource, action)
+      )
+  end
+
+  defp mutation?(_resource, _action), do: false
+
   @impl true
   def set_error(_error, _options), do: update(&%{&1 | error: true})
   @impl true
@@ -137,7 +194,7 @@ defmodule Moments.ActionTrace do
           Map.put(fields, :durationUs, System.convert_time_unit(duration, :native, :microsecond)),
         else: fields
 
-    if !already_traced, do: retain(Map.put(fields, :outcome, "span-finished"))
+    if !already_traced, do: retain(Map.put(fields, :outcome, "span-finished"), true)
     :ok
   end
 
@@ -159,7 +216,7 @@ defmodule Moments.ActionTrace do
     metadata
     |> Map.put(:durationUs, elapsed(span.started))
     |> Map.put(:outcome, if(span.error, do: "error-reported", else: "span-finished"))
-    |> retain()
+    |> retain(span.write)
   end
 
   defp retain_span(_span), do: :ok
@@ -246,13 +303,32 @@ defmodule Moments.ActionTrace do
     ArgumentError -> :ok
   end
 
+  defp limit(context), do: Map.get(context, :limit, @limit)
+
+  # The newest read leaves for a write; with none left the write is dropped.
+  defp make_room(table, entry) do
+    reads = for {id, _event, false} <- :ets.tab2list(table), is_integer(id), do: id
+
+    if reads == [] do
+      :ets.update_counter(table, :dropped_writes, {2, 1}, {:dropped_writes, 0})
+    else
+      :ets.delete(table, Enum.max(reads))
+      :ets.insert(table, entry)
+    end
+  end
+
   defp elapsed(started),
     do: System.convert_time_unit(System.monotonic_time() - started, :native, :microsecond)
 
-  defp retain(event) do
+  defp retain(event, write?) do
     if context = Process.get(@key) do
       id = :ets.update_counter(context.table, :count, {2, 1})
-      if id <= @limit, do: :ets.insert(context.table, {id, event})
+
+      cond do
+        id <= limit(context) -> :ets.insert(context.table, {id, event, write?})
+        write? -> make_room(context.table, {id, event, true})
+        true -> :ok
+      end
     end
 
     :ok
