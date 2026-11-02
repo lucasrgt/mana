@@ -8,7 +8,8 @@ defmodule ManaBr.MixProject do
       elixir: "~> 1.18",
       deps: [
         {:ash, "~> 3.34 and >= 3.34.3"},
-        {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+        {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+        {:mana_lint, path: "../lint", only: [:dev, :test], runtime: false}
       ]
     ]
 

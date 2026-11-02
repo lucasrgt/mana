@@ -23,6 +23,7 @@ defmodule Moments.MixProject do
       {:ecto_sql, "~> 3.12", only: :test},
       {:postgrex, "~> 0.20", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:mana_lint, path: "../lint", only: [:dev, :test], runtime: false},
       {:simple_sat, "~> 0.1 and >= 0.1.1", only: :test}
     ]
 end

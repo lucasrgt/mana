@@ -1,0 +1,72 @@
+# Mana Lint
+
+A Credo plugin with checks for what Ash and Mana expect and Credo does not
+know. Every check reads the AST; a project tunes it with params in
+`.credo.exs`, never with `credo:disable`.
+
+```elixir
+# mix.exs
+{:mana_lint, path: "../mana/framework/ash/lint", only: [:dev, :test], runtime: false}
+
+# .credo.exs
+%{configs: [%{name: "default", strict: true, plugins: [{ManaLint, []}]}]}
+```
+
+`mix credo --strict` then runs the checks below with Credo's own (the plugin
+loads from the build, so compile first). `mix credo explain <file>:<line>`
+prints why a finding is not idiomatic and what to write instead.
+
+| Check | Flags |
+|---|---|
+| `AshEffectInTransactionHook` | an effect (payment adapter, storage put/delete, mailer, HTTP client, push, PubSub/Endpoint broadcast, `Mana.Entity.announce`, `Mana.Privacy.erase`) in a function given to `before_action`/`after_action`/`around_action` or to `Ash.transact`/`Repo.transaction`, or in a `change/3` body; a broadcast or notice in `after_transaction`. Calls are followed through the project's functions. Not `before_transaction`, `Oban.insert`, notifiers |
+| `AshSeedOutsideSeeds` | `Ash.Seed.*` outside tests, seeds, Moments recipes and support code |
+| `DirectRepoOnResource` | `Repo.*`/`Ecto.Adapters.SQL.query*` or an Ecto `from` on a table a resource declares (advisory locks and probes name none) |
+| `RawSqlInCalculation` | `Repo.*`/SQL, or an `Ash.get/read*` per record, inside a calculation |
+| `AshCallInLoop` | an Ash read or write per element of `Enum.*`/`Stream.*`/`for` over records of an Ash read |
+| `ManualActorAuthorization` | a read with `authorize?: false` whose result is compared with `actor.id` in `run/3`, `change/3` or `validate/3` |
+| `ValidationAsChange` | `add_error` in `change/3` on a condition of the changeset alone |
+| `GetOrCreate` | a `read_one`/`get` that found nothing followed by a `create`, without `upsert?` |
+| `AggregateInElixir` | a read's records counted, summed or maxed in Elixir (a page read with `limit` is not) |
+| `InMemoryFilterAfterRead` | a read's records filtered in Elixir by a plain field comparison |
+| `UnsupervisedProcess` | `spawn*`, `Task.start`, `Process.register` guarded by a rescue, `Process.sleep` outside interventions, fakes and Moments |
+| `PersistentTermHotWrite` | `:persistent_term.put` whose value or branch depends on a time |
+| `TableScanCron` | an Oban worker that filters a timestamp against now and iterates |
+| `BroadRescue` | `rescue _ ->` / `catch _, _ ->` that neither re-raises nor reports |
+| `ExternalPostWithoutIdempotencyKey` | a POST from a configured client module without an idempotency key |
+
+## Params
+
+Each check's defaults are in its explanation. A param given for a check in
+`checks:` replaces that default:
+
+```elixir
+checks: %{
+  extra: [
+    {ManaLint.Check.AshEffectInTransactionHook,
+     effects: [~r/(^|\.)Stripe\./, MyApp.Sms, ":telemetry.execute"]},
+    {ManaLint.Check.ExternalPostWithoutIdempotencyKey, clients: [~r/Stripe/, "MyApp.Pix"]}
+  ]
+}
+```
+
+Call patterns are a module (all its functions), `"Mod.fun"`, `{Mod, :fun}` or a
+regex matched against `"Mod.fun"`; paths and module lists take regexes or
+substrings.
+
+## What a check proves
+
+Nothing beyond its pattern: a check sees the code as written — aliases,
+pipes, the module's functions and, for the project-wide checks
+(`AshEffectInTransactionHook`, `DirectRepoOnResource`,
+`InMemoryFilterAfterRead`), every source file Credo reads. Effects reached
+through a dependency, dynamic dispatch (`apply/3`, an adapter in a variable)
+or an action run inside the hook (`Ash.update` whose own hooks call Stripe)
+are not followed. No finding is not a review.
+
+## Develop
+
+```sh
+mix test
+mix format --check-formatted
+mix compile && mix credo --strict   # the package checks itself with the plugin
+```

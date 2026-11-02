@@ -20,7 +20,8 @@ defmodule __Name__.MixProject do
       {:phoenix, "~> 1.8.0"},
       {:bandit, "~> 1.0"},
       {:jason, "~> 1.4"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:mana_lint, path: "../mana/framework/ash/lint", only: [:dev, :test], runtime: false}
     ]
   end
 end
