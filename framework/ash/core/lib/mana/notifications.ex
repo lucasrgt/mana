@@ -484,6 +484,9 @@ end
 
 defmodule Mana.Notifications.Send do
   @moduledoc false
+  # Delivery is Mana.Notifications.Notifier's, after the outermost commit. A
+  # dry run (Mana.Checkpoint, Moments' fake/1) is usually rolled back, so it
+  # never commits: what it would send is held here, as the action happens.
   use Ash.Resource.Change
 
   @impl true
@@ -492,13 +495,11 @@ defmodule Mana.Notifications.Send do
          Mana.Notifications.declared(changeset.resource),
          &(&1.action == changeset.action.name)
        ) do
-      Ash.Changeset.after_transaction(changeset, fn
-        _changeset, {:ok, record} ->
-          Mana.Notifications.send_all(record, changeset.action.name, context.actor)
-          {:ok, record}
+      Ash.Changeset.after_action(changeset, fn _changeset, record ->
+        if Process.get(:mana_dry_run),
+          do: Mana.Notifications.send_all(record, changeset.action.name, context.actor)
 
-        _changeset, result ->
-          result
+        {:ok, record}
       end)
     else
       changeset
@@ -507,6 +508,28 @@ defmodule Mana.Notifications.Send do
 
   @impl true
   def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
+end
+
+defmodule Mana.Notifications.Notifier do
+  @moduledoc false
+  # An Ash notifier runs once the outermost transaction commits and never for
+  # one that rolls back, so a notice never tells of a change that did not
+  # happen, however deep the action that made it.
+  use Ash.Notifier
+
+  @impl true
+  def notify(%Ash.Notifier.Notification{
+        resource: resource,
+        action: %{name: name},
+        data: record,
+        actor: actor
+      }) do
+    if is_nil(Process.get(:mana_dry_run)) and
+         Enum.any?(Mana.Notifications.declared(resource), &(&1.action == name)),
+       do: Mana.Notifications.send_all(record, name, actor)
+
+    :ok
+  end
 end
 
 defmodule Mana.Notifications.Transformer do
@@ -524,7 +547,14 @@ defmodule Mana.Notifications.Transformer do
         {:ok, dsl}
 
       _ ->
-        Builder.add_change(dsl, Mana.Notifications.Send, on: [:create, :update, :destroy])
+        notifiers = Transformer.get_persisted(dsl, :simple_notifiers, [])
+
+        dsl
+        |> Transformer.persist(
+          :simple_notifiers,
+          Enum.uniq(notifiers ++ [Mana.Notifications.Notifier])
+        )
+        |> Builder.add_change(Mana.Notifications.Send, on: [:create, :update, :destroy])
     end
   end
 end
