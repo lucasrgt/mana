@@ -92,6 +92,25 @@ jobs:
       - run: dart analyze
       - run: dart test
 
+  macos:
+    # The runner's macOS layer on a real Mac: fcntl locks across processes,
+    # process groups (perl setpgrp), ps/sysctl identity, the iOS transport and
+    # progress waits. GitHub's macOS hosts have no Docker, so tests that start
+    # containers run in the dart job.
+    name: Moments runner · macOS
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: framework/moments
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
+        with:
+          sdk: 3.13.3
+      - run: dart pub get --enforce-lockfile
+      - run: dart test test/platform_test.dart test/process_group_test.dart test/ios_transport_test.dart test/progress_test.dart
+
   flutter:
     name: Flutter · ${{ matrix.package }}
     runs-on: ubuntu-24.04
