@@ -2298,8 +2298,18 @@ defmodule ManaCoreTest do
 
       until = DateTime.add(DateTime.utc_now(), 8, :hour)
       Application.put_env(:mana_core, :quiet_until, until)
-      Application.put_env(:mana_core, :deadline_inserter, &send(self(), {:held, &1}))
-      on_exit(fn -> Application.delete_env(:mana_core, :quiet_until) end)
+      # Notices have their own seam: quieting deadlines must not drop them.
+      Application.put_env(:mana_core, :deadline_inserter, fn _ ->
+        raise "a notice went through deadlines"
+      end)
+
+      Application.put_env(:mana_core, :notice_inserter, &send(self(), {:held, &1}))
+
+      on_exit(fn ->
+        Application.delete_env(:mana_core, :quiet_until)
+        Application.delete_env(:mana_core, :deadline_inserter)
+        Application.delete_env(:mana_core, :notice_inserter)
+      end)
 
       assert [:inbox] =
                Mana.Notifications.deliver(ManaCoreTest.Order, %{

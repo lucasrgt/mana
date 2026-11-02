@@ -431,7 +431,9 @@ defmodule Mana.Notifications do
 
   defp enqueue(resource, notice, stage, at) do
     args = %{"resource" => inspect(resource), "stage" => stage, "notice" => encode(notice)}
-    inserter = Application.get_env(:mana_core, :deadline_inserter, &insert/1)
+    # Its own seam: a test or Mana.Explore quieting deadlines
+    # (:deadline_inserter) must not drop notices with them.
+    inserter = Application.get_env(:mana_core, :notice_inserter, &insert/1)
     inserter.(%{args: args, queue: opt(resource, :queue, :default), scheduled_at: at})
   end
 
