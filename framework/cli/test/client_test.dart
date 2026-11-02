@@ -149,4 +149,23 @@ import 'package:built_value/json_object.dart' as json;
       expect(withListBuilders('final serializers = 1;\n', []), isNotEmpty);
     });
   });
+
+  test('builders compile just in time where build_runner can be told to', () {
+    String lock(String version) =>
+        'packages:\n'
+        '  build_config:\n'
+        '    dependency: transitive\n'
+        '    version: "1.2.0"\n'
+        '  build_runner:\n'
+        '    dependency: "direct dev"\n'
+        '    description:\n'
+        '      name: build_runner\n'
+        '    source: hosted\n'
+        '    version: "$version"\n';
+    expect(buildRunnerFlags(lock('2.16.2')), ['--force-jit']);
+    expect(buildRunnerFlags(lock('2.10.0')), ['--force-jit']);
+    expect(buildRunnerFlags(lock('2.9.0')), isEmpty);
+    expect(buildRunnerFlags(lock('3.0.0')), isEmpty);
+    expect(buildRunnerFlags('packages:\n'), isEmpty);
+  });
 }

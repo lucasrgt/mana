@@ -32,6 +32,7 @@ Future<Map<String, Object?>> generateClient({
   output = p.absolute(output);
   input = p.absolute(input);
   final generatorFile = p.absolute(jar ?? generatorJar());
+  final java = javaBinary();
   final generator = (pinnedToolchain()['generator']! as Map)
       .cast<String, Object?>();
   final owned = Directory(output).existsSync();
@@ -108,19 +109,13 @@ Future<Map<String, Object?>> generateClient({
       mode: ProcessStartMode.inheritStdio,
     );
     final code = await child.exitCode;
-    if (code != 0) throw ManaFailure('$command failed ($code)');
+    if (code != 0) throw ManaFailure('${p.basename(command)} failed ($code)');
   }
 
   var failureStage = 'generation';
   try {
-    await run('java', [
-      '-jar',
-      generatorFile,
-      'validate',
-      '-i',
-      stageInput.path,
-    ]);
-    await run('java', [
+    await run(java, ['-jar', generatorFile, 'validate', '-i', stageInput.path]);
+    await run(java, [
       '-jar',
       generatorFile,
       'generate',
@@ -153,7 +148,14 @@ Future<Map<String, Object?>> generateClient({
     );
     failureStage = 'serializers';
     await run('dart', ['pub', 'get']);
-    await run('dart', ['run', 'build_runner', 'build']);
+    await run('dart', [
+      'run',
+      'build_runner',
+      'build',
+      ...buildRunnerFlags(
+        File(p.join(stage, 'pubspec.lock')).readAsStringSync(),
+      ),
+    ]);
     await run('dart', [
       'fix',
       '--apply',
@@ -426,3 +428,19 @@ bool _buildsList(CascadeExpression cascade, String type) =>
       }
       return false;
     });
+
+/// Since 2.14, build_runner compiles its builders ahead of time unless told
+/// otherwise (`--force-jit`, from 2.10): for a client, built once per
+/// generation, that compile takes about twice as long as the build it speeds
+/// up.
+List<String> buildRunnerFlags(String lock) {
+  final version = RegExp(
+    r'^  build_runner:\n(?:    .*\n)*?    version: "(\d+)\.(\d+)\.',
+    multiLine: true,
+  ).firstMatch(lock);
+  if (version == null) return const [];
+  final [major, minor] = [
+    for (final group in [1, 2]) int.parse(version.group(group)!),
+  ];
+  return major == 2 && minor >= 10 ? const ['--force-jit'] : const [];
+}

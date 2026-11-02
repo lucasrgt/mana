@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'elixir.dart';
 import 'failure.dart';
+import 'requirements.dart';
 import 'toolchain.dart';
 
 /// A new Mana project in [target]: an Ash backend (`backend/`), a Flutter
@@ -30,6 +32,12 @@ Future<void> newProject(
   final root = p.absolute(target);
   if (Directory(root).existsSync() && Directory(root).listSync().isNotEmpty) {
     throw ManaFailure('$root already exists and is not empty');
+  }
+  final gaps = await requirementGaps(backend: setup, contracts: false);
+  if (gaps.isNotEmpty) {
+    throw ManaFailure(
+      'mana new needs, on this machine:\n${gaps.map((gap) => '  - $gap').join('\n')}',
+    );
   }
   final module = name
       .split('_')
@@ -64,6 +72,15 @@ Future<void> newProject(
     'mana',
   ], root);
   await _run('git', ['checkout', '-q', ref], p.join(root, 'mana'));
+  // Docker builds the backend's image while the app and the CLI are prepared.
+  final image = setup && !localElixir()
+      ? _settled(
+          ensureElixirImage(
+            framework: p.join(root, 'mana/framework'),
+            quiet: true,
+          ),
+        )
+      : Future<Object?>.value();
 
   say('· Flutter app at app/');
   await _run('flutter', [
@@ -99,29 +116,39 @@ Future<void> newProject(
 
   final mana = p.join(root, 'mana/framework/cli/mana');
   final moments = p.join(root, 'mana/framework/moments/moments');
-  for (final (label, command, args, cwd) in [
-    ('contract tools', mana, ['contracts', 'install'], root),
-    ('backend dependencies', mana, ['mix', 'backend', 'deps.get'], root),
-    (
-      'first migration',
-      mana,
-      ['mix', 'backend', 'ash.codegen', 'initial'],
-      root,
-    ),
+  say('· Mana CLI');
+  _reuseCompiledCli(framework, p.join(root, 'mana/framework'));
+  await _run(mana, ['--help'], root, quiet: true);
+  // Off the backend's path: its first compile is the slowest stage, and
+  // neither of these needs it.
+  final alongside = _settled(
+    Future.wait([
+      _run(mana, ['contracts', 'install'], root, quiet: true),
+      _run(moments, ['--help'], root, quiet: true),
+    ]),
+  );
+  say('· Elixir image');
+  if (await image case final Object error) throw error;
+  for (final (label, args) in [
+    ('backend dependencies', ['deps.get']),
+    ('first migration', ['ash.codegen', 'initial']),
     (
       'API contract',
-      mana,
       [
-        'mix',
-        'backend',
         'contracts.export',
         '$module.Notes',
         '/api',
         '../contract/api.json',
         '${module}Web.OpenApi',
       ],
-      root,
     ),
+  ]) {
+    say('· $label');
+    await _run(mana, ['mix', 'backend', ...args], root);
+  }
+  say('· contract tools and the Moments runner');
+  if (await alongside case final Object error) throw error;
+  for (final (label, command, args, cwd) in [
     (
       'Dart client',
       mana,
@@ -150,6 +177,29 @@ Future<void> newProject(
   );
 }
 
+/// Gives the project's framework the executable running this when both CLIs
+/// have the same sources and lock, sparing `cli/mana` its compile, the
+/// slowest step before the backend's.
+void _reuseCompiledCli(String framework, String project) {
+  final running = File(Platform.resolvedExecutable),
+      built = File(p.join(framework, 'cli/.dart_tool/mana'));
+  if (!built.existsSync() ||
+      built.resolveSymbolicLinksSync() != running.resolveSymbolicLinksSync()) {
+    return;
+  }
+  String sources(String cli) => [
+    for (final folder in ['bin', 'lib']) treeSha256(p.join(cli, folder)),
+    sha256Hex(File(p.join(cli, 'pubspec.lock')).readAsBytesSync()),
+  ].join();
+  if (sources(p.join(framework, 'cli')) != sources(p.join(project, 'cli'))) {
+    return;
+  }
+  final target = File(p.join(project, 'cli/.dart_tool/mana'))
+    ..parent.createSync(recursive: true);
+  running.copySync('${target.path}.$pid');
+  File('${target.path}.$pid').renameSync(target.path);
+}
+
 void _copyTemplate(String from, String to, Map<String, String> tokens) {
   String fill(String text) => tokens.entries.fold(
     text,
@@ -170,14 +220,34 @@ String? _git(List<String> args, String cwd) {
   return result.exitCode == 0 && out.isNotEmpty ? out : null;
 }
 
-Future<void> _run(String command, List<String> args, String cwd) async {
-  final process = await Process.start(
-    command,
-    args,
-    workingDirectory: cwd,
-    mode: ProcessStartMode.inheritStdio,
-  );
-  if (await process.exitCode != 0) {
+/// [work]'s error, or null once it succeeded: a step started early and
+/// awaited later must not fail unhandled meanwhile.
+Future<Object?> _settled(Future<Object?> work) =>
+    work.then((_) => null, onError: (Object error) => error);
+
+/// Runs [command]; a [quiet] one shows its output only when it fails, so
+/// steps running side by side do not interleave.
+Future<void> _run(
+  String command,
+  List<String> args,
+  String cwd, {
+  bool quiet = false,
+}) async {
+  final ProcessResult result;
+  if (quiet) {
+    result = await Process.run(command, args, workingDirectory: cwd);
+  } else {
+    final process = await Process.start(
+      command,
+      args,
+      workingDirectory: cwd,
+      mode: ProcessStartMode.inheritStdio,
+    );
+    result = ProcessResult(process.pid, await process.exitCode, '', '');
+  }
+  if (result.exitCode != 0) {
+    stdout.write(result.stdout);
+    stderr.write(result.stderr);
     throw ManaFailure(
       '${p.basename(command)} ${args.join(' ')} failed in $cwd',
     );

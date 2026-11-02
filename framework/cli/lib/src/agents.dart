@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import 'assets.dart';
 import 'capabilities.dart';
+import 'elixir.dart';
 import 'elixir_style.dart';
 import 'failure.dart';
 import 'features.dart';
@@ -12,6 +13,7 @@ import 'manifest.dart';
 import 'notebook.dart';
 import 'primitives.dart';
 import 'process.dart';
+import 'requirements.dart';
 import 'toolchain.dart';
 
 Map<String, Object?> _agent(Config config, String name) =>
@@ -170,11 +172,37 @@ Future<void> setup(
 });
 
 Future<void> doctor(String root, Config config, List<String> names) async {
-  for (final product in productPaths(root, config)) {
+  final products = productPaths(root, config);
+  for (final product in products) {
     stdout.writeln(
       '${product.name}: ${[?product.backend, ...product.frontend].join(' + ')}',
     );
   }
+  final backend = products.any(
+        (product) => switch (product.backend) {
+          final backend? => File(p.join(root, backend, 'mix.exs')).existsSync(),
+          null => false,
+        },
+      ),
+      app = products.any(
+        (product) => product.frontend.any(
+          (path) => File(p.join(root, path, 'pubspec.yaml')).existsSync(),
+        ),
+      ),
+      contracts = generatedContracts(root).isNotEmpty;
+  final gaps = await requirementGaps(
+    backend: backend,
+    app: app,
+    contracts: contracts,
+  );
+  if (gaps.isNotEmpty) {
+    throw ManaFailure(
+      'This machine is missing what the project needs:\n${gaps.map((gap) => '  - $gap').join('\n')}',
+    );
+  }
+  stdout.writeln(
+    'machine: ${['git', if (backend) localElixir() ? 'Elixir' : 'Docker', if (app) 'Flutter', if (contracts) 'the pinned contract tools'].join(', ')}',
+  );
   inspectAgents(root, config, names);
   artifactPlan(root, config);
   syncGuidance(root, names, check: true);

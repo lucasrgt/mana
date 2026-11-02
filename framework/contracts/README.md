@@ -16,11 +16,17 @@ framework/cli/mana contracts compare \
 
 The installer uses a version and file/binary hashes pinned in `toolchain.json` (the
 generator jar comes from Maven Central, no npm), in the private cache
-`~/.cache/mana/contracts`. The currently pinned platform is Linux x64. Another platform
-requires adding and verifying its official artifact; there is no fallback to an
-arbitrary version installed on the PATH. Later comparisons are local: no account,
-upload, remote service, `--open` or external references. The export must be a complete
-OpenAPI 3.0 JSON.
+`~/.cache/mana/contracts`. The generator runs on a pinned Java runtime the installer
+fetches too (Eclipse Temurin JRE from Adoptium's releases, checked against the
+archive's hash and then the digest of every extracted file), so the machine needs no
+Java; a `java` on the PATH is never used. The three downloads run at once. Pinned
+platforms: Linux x64 and arm64, macOS arm64 and x64. Another platform requires adding
+and verifying its official artifacts; there is no fallback to an arbitrary version
+installed on the PATH. Each use checks the installed bytes again (the runtime's whole
+tree, about a second) and asks for `mana contracts install` when they are missing or
+changed; `mana doctor` reports the same in a project with a generated client. Later
+comparisons are local: no account, upload, remote service, `--open` or external
+references. The export must be a complete OpenAPI 3.0 JSON.
 
 The report distinguishes `compatible`, `review`, `breaking` and `unavailable`. Exits: 0
 compatible, 1 findings to handle, 2 comparison unavailable. A warning is not implicit

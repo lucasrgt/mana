@@ -153,15 +153,16 @@ jobs:
         with:
           channel: stable
           flutter-version: 3.47.4
-      # `mana client generate` runs the pinned OpenAPI Generator jar.
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: "21"
       - run: |
           git config --global user.name "Mana CI"
           git config --global user.email "ci@mana.invalid"
-      - run: .github/scripts/first-green.sh "$RUNNER_TEMP/first-green" 300
+      # The runner image ships a Java; a java that always fails, first on the PATH,
+      # proves the starter needs none (the generator runs on the pinned runtime).
+      - run: |
+          mkdir -p "$RUNNER_TEMP/no-java"
+          printf '#!/bin/sh\necho "java on the PATH was used" >&2\nexit 1\n' > "$RUNNER_TEMP/no-java/java"
+          chmod +x "$RUNNER_TEMP/no-java/java"
+          PATH="$RUNNER_TEMP/no-java:$PATH" .github/scripts/first-green.sh "$RUNNER_TEMP/first-green" 300
 
   skill:
     name: Agent skill matches the catalog

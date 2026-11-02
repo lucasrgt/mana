@@ -12,7 +12,9 @@ in the database.
 ## Requirements
 
 Docker (the backend and its database run in containers), the Flutter SDK and
-git. Nothing else has to be installed on the machine.
+git. Nothing else has to be installed on the machine: `mana contracts install`
+fetches the pinned contract tools and the Java runtime the client generator runs
+on. `mana/framework/cli/mana doctor` names whatever is missing.
 
 ## Every day
 

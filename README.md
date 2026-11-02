@@ -68,9 +68,13 @@ commit it: `git -C mana checkout v0.2.0`.
 
 ## Requirements
 
-Linux (the runner uses `/proc`, `flock` and user systemd for some features), Docker,
-the Flutter SDK (Dart 3.9+) and Node for a few scripts. Elixir runs inside a pinned
-Docker image, so it does not need to be installed on the host.
+Linux or macOS, git, Docker with its daemon running and usable by your user, and the
+Flutter SDK (Dart 3.9+). Elixir runs inside a pinned Docker image, and
+`mana contracts install` (which `mana new` runs) fetches the pinned contract tools and
+the Java runtime the client generator runs on, so neither Elixir nor Java has to be
+installed. `mana new` checks the machine before writing anything, and `mana doctor`
+names whatever a project needs that is missing. Some runner features use Linux's
+`/proc`, `flock` and user systemd; a few scripts need Node.
 
 ```sh
 framework/cli/mana --help

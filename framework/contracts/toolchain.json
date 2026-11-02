@@ -6,6 +6,21 @@
         "url": "https://github.com/oasdiff/oasdiff/releases/download/v1.33.0/oasdiff_1.33.0_linux_amd64.tar.gz",
         "sha256": "43a4e328e2d13ba1552d760aa68d2485c75c5621f309f6ff64ae895188345247",
         "binarySha256": "fa65aae43c867e9f79da9cb121d3c1a113637883afe014c0680fd5b50696f416"
+      },
+      "linux-arm64": {
+        "url": "https://github.com/oasdiff/oasdiff/releases/download/v1.33.0/oasdiff_1.33.0_linux_arm64.tar.gz",
+        "sha256": "4ae3c362d6074d919aada2dea82d0ee84366591600384455d0bdc658ddf8f7ae",
+        "binarySha256": "05baaaad3cf4576f95b72ebd0f40052ef3a6873c6c347fb5e5905071255e4aff"
+      },
+      "darwin-arm64": {
+        "url": "https://github.com/oasdiff/oasdiff/releases/download/v1.33.0/oasdiff_1.33.0_darwin_all.tar.gz",
+        "sha256": "2a479337c15afdcbf0b1e89c0b4d0cf0176472dbc11483358fed1f831d1e46c5",
+        "binarySha256": "14259eae1a315b73ea730e9f5ad4dc30eef4c1caaf0fe6511da913c74ec3106d"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/oasdiff/oasdiff/releases/download/v1.33.0/oasdiff_1.33.0_darwin_all.tar.gz",
+        "sha256": "2a479337c15afdcbf0b1e89c0b4d0cf0176472dbc11483358fed1f831d1e46c5",
+        "binarySha256": "14259eae1a315b73ea730e9f5ad4dc30eef4c1caaf0fe6511da913c74ec3106d"
       }
     }
   },
@@ -14,5 +29,35 @@
     "version": "7.25.0",
     "sha256": "41ce4f6b07f196676439d710759fa1ced7a08066d06ff1bf314681470289efae",
     "url": "https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/7.25.0/openapi-generator-cli-7.25.0.jar"
+  },
+  "java": {
+    "name": "temurin-jre",
+    "version": "21.0.13+9",
+    "platforms": {
+      "linux-x64": {
+        "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jre_x64_linux_hotspot_21.0.13_9.tar.gz",
+        "sha256": "a535a1df9c6284d9618872984e026ae0352d1f7e9e0605425c0e6114f47351dd",
+        "treeSha256": "f0ec1aa4ba80f2ca46e3fc11facf11eadddad4fa6b2fda5bb260df5b836fd333",
+        "java": "jdk-21.0.13+9-jre/bin/java"
+      },
+      "linux-arm64": {
+        "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jre_aarch64_linux_hotspot_21.0.13_9.tar.gz",
+        "sha256": "b1734db7ade49c3f6acc6ae06233b8c2dd90e3e2f00f67000ae1c972aaa64d8c",
+        "treeSha256": "28aa7bf4aa95fb74977f814c92fcd44f81a561874125da52478df3ab56fb0992",
+        "java": "jdk-21.0.13+9-jre/bin/java"
+      },
+      "darwin-arm64": {
+        "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jre_aarch64_mac_hotspot_21.0.13_9.tar.gz",
+        "sha256": "225bab0a09491ef06835488cd942f5d2befa9a0410a2484f0c8bbcf7506ec09a",
+        "treeSha256": "9f856d5e8277061c1f81c93752f19512cfe61ee661591222efead46211e7d3b4",
+        "java": "jdk-21.0.13+9-jre/Contents/Home/bin/java"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jre_x64_mac_hotspot_21.0.13_9.tar.gz",
+        "sha256": "c909674b1c10c261b9a3fb7e9c0efebd303e33f88a4fe84be7135b5e2d711f89",
+        "treeSha256": "72246d28d0280c2ccb0ccfb8f4097da8ff058314e41a371fe5eaf93a93967a02",
+        "java": "jdk-21.0.13+9-jre/Contents/Home/bin/java"
+      }
+    }
   }
 }

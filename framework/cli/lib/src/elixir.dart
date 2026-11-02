@@ -52,25 +52,45 @@ String workspaceRoot() {
   }
 }
 
-String elixirImage() {
-  final dockerfile = File(p.join(frameworkRoot(), 'ash/toolchain/Dockerfile'));
+/// The pinned Elixir image of [framework] (this CLI's by default).
+String elixirImage([String? framework]) {
+  final dockerfile = File(
+    p.join(framework ?? frameworkRoot(), 'ash/toolchain/Dockerfile'),
+  );
   return 'moments-elixir:${sha256.convert(dockerfile.readAsBytesSync()).toString().substring(0, 16)}';
 }
 
-Future<String> ensureElixirImage() async {
-  final image = elixirImage();
-  if (Process.runSync('docker', ['image', 'inspect', image]).exitCode == 0) {
+/// Builds [elixirImage] when Docker does not have it yet; [quiet] keeps the
+/// build's output unless it fails.
+Future<String> ensureElixirImage({
+  String? framework,
+  bool quiet = false,
+}) async {
+  final image = elixirImage(framework);
+  if ((await Process.run('docker', ['image', 'inspect', image])).exitCode ==
+      0) {
     return image;
   }
-  final build = await Process.start('docker', [
+  final args = [
     'build',
     '-t',
     image,
-    p.join(frameworkRoot(), 'ash/toolchain'),
-  ], mode: ProcessStartMode.inheritStdio);
-  if (await build.exitCode != 0) {
-    throw const ManaFailure('Elixir toolchain build failed');
+    p.join(framework ?? frameworkRoot(), 'ash/toolchain'),
+  ];
+  final int code;
+  if (quiet) {
+    final build = await Process.run('docker', args);
+    code = build.exitCode;
+    if (code != 0) stderr.write('${build.stdout}${build.stderr}');
+  } else {
+    final build = await Process.start(
+      'docker',
+      args,
+      mode: ProcessStartMode.inheritStdio,
+    );
+    code = await build.exitCode;
   }
+  if (code != 0) throw const ManaFailure('Elixir toolchain build failed');
   return image;
 }
 
