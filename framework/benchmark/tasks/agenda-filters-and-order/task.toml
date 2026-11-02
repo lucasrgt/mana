@@ -1,0 +1,22 @@
+kind = "ui"
+summary = "The hosts' agenda: day chips, the past filter, the order, kept filters and honest failures"
+commit = "0dbb623c0d94f5bc6cc13fb405bffc9087e268da"
+revert = ["apps/hosts/lib/features/host/operations/**", "apps/hosts/lib/app.dart"]
+hidden = ["apps/hosts/test/features/host/operations/host_operations_view_model_test.dart"]
+
+[[prepare]]
+id = "pub"
+cwd = "apps/hosts"
+run = ["flutter", "pub", "get", "--enforce-lockfile"]
+
+[[check]]
+id = "hosts"
+cwd = "apps/hosts"
+run = ["flutter", "test", "test/features/host/operations/host_operations_view_model_test.dart"]
+
+[[heldout]]
+id = "hosts"
+cwd = "apps/hosts"
+run = ["flutter", "test", "{files}"]
+files = "apps/hosts/test/**/*_test.dart"
+count = '-(\d+): Some tests failed'

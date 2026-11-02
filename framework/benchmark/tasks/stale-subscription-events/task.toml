@@ -1,0 +1,15 @@
+kind = "bug"
+summary = "Only the stored Stripe subscription changes a plan or an ad, and erasure cancels subscriptions"
+commit = "27f25761aae1538e7a4661456fb11b26a34550d3"
+hidden = ["backend/test/partners_test.exs", "backend/test/payments_hosting_test.exs", "backend/test/bureau_test.exs"]
+
+[[check]]
+id = "subscriptions"
+run = ["tools/hostpoint", "lab", "test", "test/partners_test.exs", "test/payments_hosting_test.exs", "test/bureau_test.exs"]
+
+[[heldout]]
+id = "api"
+run = ["tools/hostpoint", "lab", "test", "{files}"]
+files = "backend/test/**/*_test.exs"
+files_root = "backend"
+count = '(\d+) failures?'

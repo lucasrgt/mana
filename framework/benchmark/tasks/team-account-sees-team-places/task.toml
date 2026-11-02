@@ -1,0 +1,15 @@
+kind = "rule"
+summary = "Accounts with a team email opened before sign-up marked them become test accounts"
+commit = "bc2d53a908475748f3f3d5ecd007f99deccc205e"
+hidden = ["backend/test/discovery_test.exs"]
+
+[[check]]
+id = "discovery"
+run = ["tools/hostpoint", "lab", "test", "test/discovery_test.exs"]
+
+[[heldout]]
+id = "api"
+run = ["tools/hostpoint", "lab", "test", "{files}"]
+files = "backend/test/**/*_test.exs"
+files_root = "backend"
+count = '(\d+) failures?'

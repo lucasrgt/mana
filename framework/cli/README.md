@@ -13,7 +13,11 @@ else there. It installs nothing into the global profile.
 directory does not exist.
 
 `mana doctor` checks configuration, artifacts, skill links and executables without
-inference. It does not replace the app's own gate. `--project` selects a root;
+inference. It does not replace the app's own gate. It first names each tool the
+project needs that this machine lacks, with how to get it: git; Docker with a
+reachable daemon for an Ash backend (or `mix` with `MANA_ELIXIR=local`); Flutter for
+an app; the pinned contract tools for a generated client. `mana new` runs the same
+check before it writes anything. `--project` selects a root;
 without it, Mana looks for the nearest `mana.toml` among the ancestors.
 
 Invariants: invalid TOML fails before running dependencies; corrupted artifacts are
@@ -37,7 +41,7 @@ The same CLI gathers the tools the other framework pieces use:
 
 | Command | What it does |
 | --- | --- |
-| `mana contracts install` | downloads oasdiff and OpenAPI Generator pinned by SHA-256 in `contracts/toolchain.json` |
+| `mana contracts install` | downloads oasdiff, OpenAPI Generator and the Java runtime it runs on, pinned by SHA-256 in `contracts/toolchain.json` |
 | `mana contracts compare --base --candidate` | compares OpenAPI contracts ([contracts](../contracts/README.md)) |
 | `mana client generate --input --output --name` | generates and analyses the Dart client, with recorded provenance |
 | `mana mix <project> [args]` | `mix` in the pinned Elixir image (Docker), with the Moments ownership labels |
@@ -98,6 +102,15 @@ source or release; `--no-setup` only writes the files. The template lives in
 `templates/new/`; `__name__`, `__Name__` and `__dash__` become the folder name, its
 module name and its dashed form.
 
+Setup runs what does not need the backend beside it: Docker builds the Elixir image
+while the app and the project's CLI are prepared, and the contract tools download
+and the Moments runner compiles while the backend's dependencies compile. Each
+`· step` line closes the one before, which is how `.github/scripts/first-green.sh`
+times them; CI runs that script on a clean runner with a 300-second budget, from
+`mana new` to a green `moments suite --headless`. The client's `build_runner`
+compiles its builders just in time: ahead-of-time compiling them, its default
+since 2.14, takes longer than the one build it speeds up.
+
 `mana lab prepare|serve|test|mix` runs a project's backend against a Moments
 sandbox's PostgreSQL (`MANA_MOMENTS_INSTANCE`, the `instance.json` that
 `moments up` writes). The database is `MANA_DATABASE` (`<backend>_dev`, or
@@ -131,6 +144,20 @@ where exit 2 is undecided). `mana sense --changed` uses the diff since `--base` 
 new files; a failing sensor with `gate` stops the more expensive ones (`--keep-going`
 continues) and `--budget` leaves those that do not fit as `unresolved`. Logs and the
 verdict live in `.mana/sense/<date>/`.
+
+## Evals and the benchmark
+
+`mana eval run <name>` gives the project's agent a task with no hints in a
+throwaway worktree and checks the result (`evals/<name>/`). `mana eval
+benchmark` runs a benchmark's tasks (`framework/benchmark/` by default,
+`--suite <dir>`), each pinned to a commit of the repository given as `--repo`,
+under each condition and repetition, in a workspace with no git history, and
+appends one JSON line per run (tokens, wall time, hidden checks, held-out
+failures, diff) to `results.jsonl`; `report <results.jsonl>` recomputes the
+summary from those lines alone. `validate` runs the built-in `noop` and
+`oracle` agents (no model) and fails a task whose checks pass untouched or
+fail on its own commit; `--dry-run` prints each agent command and runs
+nothing. See [the benchmark](../benchmark/README.md).
 
 ## Upgrades
 

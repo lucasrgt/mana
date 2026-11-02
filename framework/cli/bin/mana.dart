@@ -33,6 +33,9 @@ mana note add --about <feature:|verb:|moment:|entity:...> --why "..." [--outcome
 mana eval list | run <name> [--agent claude|codex] [--keep]
   Gives an agent a task with no hints in a throwaway worktree (evals/<name>/task.md)
   and checks whether it used the framework as intended (checks.toml) → AVP verdict.
+mana eval benchmark [run|validate|list] --repo <git repo> [--tasks a,b] [--dry-run] | report <results.jsonl>
+  Real tasks of a project run by an agent with and without Moments (framework/benchmark):
+  success, wall time, tokens and held-out failures, one JSON line per run.
 mana intent list | show <id> | approve <id> --by <name> | check <id>
   An ask as situations and criteria (intents/<id>.toml), frozen on approval, checked as an AVP verdict.
 mana graph [verbs-without-moment | dead-verbs | proves <type.verb> | knob <name> | verb <type.verb>] [--json]
@@ -48,6 +51,21 @@ mana mcp --api <url> [--agent <name>] [--flat --contract <openapi.json>] [--stat
   entry, follow a verb a record offers. The token comes from MANA_AGENT_TOKEN.''';
 
 Future<void> _eval(List<String> arguments) async {
+  if (arguments.firstOrNull == 'benchmark') {
+    try {
+      exitCode = await benchmarkCommand(
+        arguments.skip(1).toList(),
+        frameworkRoot: frameworkRoot(),
+      );
+    } on FormatException catch (error) {
+      stderr.writeln('mana: ${error.message}');
+      exitCode = 1;
+    } on ManaFailure catch (error) {
+      stderr.writeln('mana: ${error.message}');
+      exitCode = 1;
+    }
+    return;
+  }
   final parser = ArgParser()
     ..addOption('agent', defaultsTo: 'claude')
     ..addFlag('keep', negatable: false)
@@ -437,7 +455,9 @@ Future<void> _contracts(List<String> arguments) async {
     switch (values.rest) {
       case ['install']:
         final installed = await installToolchain();
-        stdout.writeln('${installed.oasdiff}\n${installed.generator}');
+        stdout.writeln(
+          [installed.oasdiff, installed.generator, installed.java].join('\n'),
+        );
       case ['compare']:
         final base = values.option('base'),
             candidate = values.option('candidate');

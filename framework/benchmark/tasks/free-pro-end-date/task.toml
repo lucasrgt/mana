@@ -1,0 +1,16 @@
+kind = "feature"
+summary = "One configurable day when every host's free Pro ends"
+commit = "9b6d3162ba7d573c4084d9e435af0e970c31f389"
+revert = ["backend/**", "tools/**"]
+hidden = ["backend/test/catalog_hosting_test.exs"]
+
+[[check]]
+id = "hosting"
+run = ["tools/hostpoint", "lab", "test", "test/catalog_hosting_test.exs"]
+
+[[heldout]]
+id = "api"
+run = ["tools/hostpoint", "lab", "test", "{files}"]
+files = "backend/test/**/*_test.exs"
+files_root = "backend"
+count = '(\d+) failures?'

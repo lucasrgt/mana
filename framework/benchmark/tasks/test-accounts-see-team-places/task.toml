@@ -1,0 +1,15 @@
+kind = "bug"
+summary = "A test account finds the places test accounts list"
+commit = "1ee725003ce9e63e1f9fc722df6d986e8fd6b173"
+hidden = ["backend/test/discovery_test.exs"]
+
+[[check]]
+id = "discovery"
+run = ["tools/hostpoint", "lab", "test", "test/discovery_test.exs"]
+
+[[heldout]]
+id = "api"
+run = ["tools/hostpoint", "lab", "test", "{files}"]
+files = "backend/test/**/*_test.exs"
+files_root = "backend"
+count = '(\d+) failures?'

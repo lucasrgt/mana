@@ -1,0 +1,21 @@
+kind = "feature"
+summary = "A location refused for good offers the phone's settings and is asked again on return"
+commit = "f97838dd9c5d9bbb8eea50b2c223f2bda5166d69"
+hidden = ["apps/travelers/test/features/traveler/home/traveler_home_view_model_test.dart"]
+
+[[prepare]]
+id = "pub"
+cwd = "apps/travelers"
+run = ["flutter", "pub", "get", "--enforce-lockfile"]
+
+[[check]]
+id = "travelers"
+cwd = "apps/travelers"
+run = ["flutter", "test", "test/features/traveler/home/traveler_home_view_model_test.dart"]
+
+[[heldout]]
+id = "travelers"
+cwd = "apps/travelers"
+run = ["flutter", "test", "{files}"]
+files = "apps/travelers/test/**/*_test.dart"
+count = '-(\d+): Some tests failed'

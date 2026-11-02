@@ -1,0 +1,18 @@
+kind = "rule"
+summary = "Data requests and stored files are deleted only once their transaction commits"
+commit = "e83162d8fac2552e2e38cf3c7d4605500aabf869"
+hidden = ["backend/test/data_requests_test.exs", "backend/test/thumbnails_test.exs"]
+
+[[check]]
+id = "data-requests"
+run = ["tools/hostpoint", "lab", "test", "test/data_requests_test.exs", "test/thumbnails_test.exs"]
+
+# These two files already fail on the commit itself (five tests), so they
+# say nothing about the agent's change.
+[[heldout]]
+id = "api"
+run = ["tools/hostpoint", "lab", "test", "{files}"]
+files = "backend/test/**/*_test.exs"
+files_root = "backend"
+count = '(\d+) failures?'
+except = ["backend/test/bookings_test.exs", "backend/test/partners_test.exs"]

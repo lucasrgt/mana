@@ -1,0 +1,21 @@
+kind = "ui"
+summary = "Swiping a place's photos on a phone no longer reaches the map"
+commit = "eb926cf7966a074655a2798a4933742a2649de01"
+hidden = ["apps/travelers/test/ui/traveler_home_frame_test.dart"]
+
+[[prepare]]
+id = "pub"
+cwd = "apps/travelers"
+run = ["flutter", "pub", "get", "--enforce-lockfile"]
+
+[[check]]
+id = "travelers"
+cwd = "apps/travelers"
+run = ["flutter", "test", "test/ui/traveler_home_frame_test.dart"]
+
+[[heldout]]
+id = "travelers"
+cwd = "apps/travelers"
+run = ["flutter", "test", "{files}"]
+files = "apps/travelers/test/**/*_test.dart"
+count = '-(\d+): Some tests failed'

@@ -1,0 +1,86 @@
+# The Moments benchmark: real Host Point tasks, each done by an agent with
+# Moments and without them. See README.md for the method.
+
+name = "Host Point"
+
+# Said to the agent before every task, in both conditions.
+preamble = """
+You work alone in this repository and nobody will answer questions: decide, \
+do the whole task, and leave your changes in the working tree. A PostgreSQL \
+server for tests is in MANA_LAB_POSTGRES, so `tools/hostpoint lab test \
+[test files]` runs the API's ExUnit tests (in Docker), and \
+`flutter test` works in each app and package."""
+
+# Never in the agent's copy: this benchmark, its tasks and their checks.
+remove = ["mana/framework/benchmark"]
+
+# Build output copied from the --repo working tree when present, so no run
+# starts from a cold compile. Sources are dated now, so whatever changed
+# rebuilds.
+copy = [
+  "backend/deps",
+  "backend/_build",
+  "mana/framework/ash/.toolchain",
+]
+
+# Before the agent starts, untimed: fresh lab databases (MANA_LAB_POSTGRES
+# must be a server kept for the benchmark), the agent configuration a
+# developer has after `mana setup` (skills linked, guidance in AGENTS.md)
+# and the API's locked dependencies, built and migrated for tests.
+prepare = [
+  { id = "databases", run = ["sh", "-c", "for db in hostpoint_test hostpoint_dev; do psql \"$MANA_LAB_POSTGRES/postgres\" -qc \"DROP DATABASE IF EXISTS $db WITH (FORCE)\" || exit 1; done"] },
+  { id = "setup", run = ["mana/framework/cli/mana", "setup", "--agents", "claude", "--skip-tasks"] },
+  { id = "deps", run = ["tools/hostpoint", "lab", "mix", "deps.get"] },
+  { id = "api", run = ["tools/hostpoint", "lab", "test", "--exclude", "test"] },
+]
+
+# Moments sandboxes an agent started; the harness also removes every
+# container that mounts the workspace or carries one of its projects' labels.
+cleanup = [
+  { id = "travelers", run = ["mana/framework/moments/moments", "down", "--project", "apps/travelers"] },
+  { id = "hosts", run = ["mana/framework/moments/moments", "down", "--project", "apps/hosts"] },
+]
+
+repetitions = 3
+timeout = "45m"
+check_timeout = "40m"
+
+# Variables of this shell that would point the agent at another checkout.
+drop_env = ["MANA_", "MOMENTS_", "HOSTPOINT_"]
+pass_env = ["MANA_LAB_POSTGRES"]
+
+[submodules]
+mana = "mana"
+
+[conditions.moments]
+summary = "Host Point as it is: AGENTS.md, the mana skill and the Moments runner."
+
+[conditions.none]
+summary = """Moments taken out of the agent's instructions (every line of AGENTS.md \
+and of the mana skill naming them) and the runner replaced by a stub that \
+refuses. The code, the Moments' declarations and the docs stay as they are."""
+[[conditions.none.strip]]
+files = ["AGENTS.md", "mana/framework/agents/skills/mana/SKILL.md"]
+pattern = '\bmoments?\b'
+ignore_case = true
+[conditions.none.replace]
+"mana/framework/moments/moments" = """#!/bin/sh
+echo "moments: not available in this checkout" >&2
+exit 127
+"""
+
+[agents.claude]
+command = [
+  "claude", "-p", "{prompt}",
+  "--output-format", "json",
+  "--model", "{model}",
+  "--max-budget-usd", "{budget}",
+  "--permission-mode", "bypassPermissions",
+  "--setting-sources", "project",
+  "--no-session-persistence",
+]
+model = "opus"
+budget = "15"
+usage = "claude-json"
+# Set when the harness itself runs inside a Claude Code session.
+unset = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"]

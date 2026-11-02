@@ -1,0 +1,15 @@
+kind = "bug"
+summary = "Three payment bugs once platform checkout is on"
+commit = "7139f52d2ee1d3d4b7bf5fd2c71a8c0a6e776e8a"
+hidden = ["backend/test/bookings_test.exs"]
+
+[[check]]
+id = "bookings"
+run = ["tools/hostpoint", "lab", "test", "test/bookings_test.exs"]
+
+[[heldout]]
+id = "api"
+run = ["tools/hostpoint", "lab", "test", "{files}"]
+files = "backend/test/**/*_test.exs"
+files_root = "backend"
+count = '(\d+) failures?'

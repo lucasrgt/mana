@@ -1,0 +1,33 @@
+kind = "feature"
+summary = "Every price field types reais from the cents, one way in every app"
+commit = "cdbc3656539e77fd57e44252d882bcf8ae57c401"
+hidden = ["apps/hosts/test/features/host/money_input_test.dart"]
+
+[[prepare]]
+id = "pub"
+cwd = "apps/hosts"
+run = ["flutter", "pub", "get", "--enforce-lockfile"]
+
+[[check]]
+id = "hosts"
+cwd = "apps/hosts"
+run = ["flutter", "test", "test/features/host/money_input_test.dart"]
+
+[[heldout]]
+id = "hosts"
+cwd = "apps/hosts"
+run = ["flutter", "test", "{files}"]
+files = "apps/hosts/test/**/*_test.dart"
+count = '-(\d+): Some tests failed'
+
+[[prepare]]
+id = "pub-os"
+cwd = "apps/os"
+run = ["flutter", "pub", "get", "--enforce-lockfile"]
+
+[[heldout]]
+id = "os"
+cwd = "apps/os"
+run = ["flutter", "test", "{files}"]
+files = "apps/os/test/**/*_test.dart"
+count = '-(\d+): Some tests failed'

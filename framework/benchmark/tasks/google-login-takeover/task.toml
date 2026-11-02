@@ -1,0 +1,15 @@
+kind = "bug"
+summary = "Google log-in ends a squatter's password and sessions; the registration phone path closes after registration"
+commit = "f89fea86d547b77de30917bd6f82d5a7100f4870"
+hidden = ["backend/test/journeys/account_google_test.exs", "backend/test/journeys/account_profile_test.exs"]
+
+[[check]]
+id = "accounts"
+run = ["tools/hostpoint", "lab", "test", "test/journeys/account_google_test.exs", "test/journeys/account_profile_test.exs"]
+
+[[heldout]]
+id = "api"
+run = ["tools/hostpoint", "lab", "test", "{files}"]
+files = "backend/test/**/*_test.exs"
+files_root = "backend"
+count = '(\d+) failures?'

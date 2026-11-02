@@ -1,0 +1,18 @@
+kind = "rule"
+summary = "The municipal dashboard leaves test and store-review travelers out"
+commit = "ee8bef27e18a356d3391541a953d304754b125d8"
+revert = ["backend/lib/hostpoint/municipalities/actions.ex"]
+hidden = ["backend/test/bureau_test.exs"]
+
+# Only the commit's new test: the file's older country-wide count also counts
+# the test accounts this test creates, so it fails depending on the order.
+[[check]]
+id = "bureau"
+run = ["tools/hostpoint", "lab", "test", "test/bureau_test.exs:83"]
+
+[[heldout]]
+id = "api"
+run = ["tools/hostpoint", "lab", "test", "{files}"]
+files = "backend/test/**/*_test.exs"
+files_root = "backend"
+count = '(\d+) failures?'
