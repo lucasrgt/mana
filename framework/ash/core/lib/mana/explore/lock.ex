@@ -7,9 +7,10 @@ defmodule Mana.Explore.Lock do
 
       `cancel` is no longer offered to host on booking when status=paid
 
-  The exploration is seeded, so the same code writes the same file; a
-  change in what inputs are generated can still move which shapes are
-  reached, and then the diff says so (a shape newly or no longer reached).
+  The exploration is seeded and orders records by what they hold, so the
+  same code writes the same bytes, however the store orders ties; a change
+  in what inputs are generated can still move which shapes are reached,
+  and then the diff says so (a shape newly or no longer reached).
   """
 
   @doc "The lock of `report`."

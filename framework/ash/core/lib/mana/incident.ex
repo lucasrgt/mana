@@ -18,7 +18,11 @@ defmodule Mana.Incident do
   transitively, those of every record a `belongs_to` names whose resource
   keeps history and has entries by then; each record's state at `at` is its
   done entries' `after` folded in order. References are found where the
-  history kept them (a public attribute or an input).
+  history kept them (a public attribute, an input or the seed). A record
+  whose history starts with an update was created outside its actions (a
+  seed, a data migration): its row as it stood before that update
+  (`Mana.History.seed_state/4`) is kept as its `seed`, which replay writes
+  as it is instead of performing a create the history never had.
 
   People are not records: a row of an identity resource (one whose privacy
   subject is its primary key, a user) is never collected or replayed. Every
@@ -35,15 +39,16 @@ defmodule Mana.Incident do
        "roles": ["host", "person-1"],
        "people": [{"role": "host", "type": "user", "state": {...}}],
        "records": [{"ref": "place-1", "type": "place", "entries": [...], "state": {...}},
-                   {"ref": "booking-1", "type": "booking", ...}]}
+                   {"ref": "booking-1", "type": "booking", ..., "seed": {...}}]}
 
-  Records come referenced first, so each one's references are rebuilt
-  before it. Entries are `Mana.History.export/3`'s without `trace`, with
-  `actor_id` as a role (as `Mana.History.fixture/4`). In `params` and
-  `state`, a collected record's id reads `[record:<ref>]`, a person's id
-  `[actor:<role>]`, a personal value `[personal:<field>:<n>]` (equal values
-  share one); `"[redacted]"` is the history's own. Keys are sorted, so the
-  same history encodes to the same bytes.
+  Records come referenced first; `seed` is there only for a record whose
+  history starts with an update. Entries are `Mana.History.export/3`'s
+  without `trace`, with `actor_id` as a role (as `Mana.History.fixture/4`).
+  In `params`, `state` and `seed`, a collected record's id reads
+  `[record:<ref>]`, a person's id `[actor:<role>]`, a personal value
+  `[personal:<field>:<n>]` (equal values share one); `"[redacted]"` is the
+  history's own. Keys are sorted, so the same history encodes to the same
+  bytes.
 
   ## Anonymization
 
@@ -108,8 +113,11 @@ defmodule Mana.Incident do
 
   @doc """
   Rebuilds an incident (a fixture path or an `export/4` map) through
-  `Mana.History.replay/3`, record by record, on whatever database the
-  caller runs on — inside a `data_scope: true` recipe, its scope.
+  `Mana.History.replay_all/2` on whatever database the caller runs on —
+  inside a `data_scope: true` recipe, its scope. The entries of all the
+  records are performed in the order they were recorded, not record by
+  record, so a step that needed another record's later state (publishing
+  a place once its service is published) finds it again.
 
   Each role is one person, the same wherever the fixture names it (an
   entry's actor, a `host_id`): `actors` maps a role to the actor that acts
@@ -144,11 +152,22 @@ defmodule Mana.Incident do
         external: Keyword.get(opts, :external)
       }
 
-      incident["records"]
-      |> Enum.reduce_while({:ok, %{}}, &rebuild(&1, &2, context))
-      |> case do
-        {:ok, rebuilt} -> {:ok, Map.get(rebuilt, incident["subject"]), rebuilt}
-        error -> error
+      with {:ok, histories} <- histories(incident["records"], context),
+           context = Map.put(context, :kinds, Map.new(histories, &{&1.key, &1.resource})),
+           {:ok, rebuilt, _applied} <-
+             History.replay_all(histories,
+               actor: context.actors,
+               times: :as_recorded,
+               external: context.external,
+               params: &resolve_params(&1, &2, &3, &4, context)
+             ) do
+        {:ok, Map.get(rebuilt, incident["subject"]), rebuilt}
+      else
+        {:error, %{key: ref} = failure} ->
+          {:error, failure |> Map.delete(:key) |> Map.put(:record, ref)}
+
+        error ->
+          error
       end
     end
   end
@@ -200,7 +219,18 @@ defmodule Mana.Incident do
           DateTime.compare(entry_at, at) != :gt,
           do: Map.delete(entry, "trace")
 
-    %{resource: resource, type: type, id: id, entries: entries, state: state(log, type, id, at)}
+    seed =
+      if History.starts_with_update?(resource, entries),
+        do: History.seed_state(resource, id, current(resource, id))
+
+    %{
+      resource: resource,
+      type: type,
+      id: id,
+      entries: entries,
+      seed: seed,
+      state: Map.merge(seed || %{}, state(log, type, id, at))
+    }
   end
 
   defp state(log, type, id, at) do
@@ -225,11 +255,11 @@ defmodule Mana.Incident do
         do: {type, value}
   end
 
-  # Every value `field` held in the record's state and its entries' inputs.
+  # Every value `field` held in the record's state, seed and entries' inputs.
   defp inputs(record, field) do
     key = to_string(field)
     from_entries = Enum.map(record.entries, &(&1["params"] || %{})[key])
-    Enum.reject([record.state[key] | from_entries], &is_nil/1)
+    Enum.reject([record.state[key], (record.seed || %{})[key] | from_entries], &is_nil/1)
   end
 
   # ---------------------------------------------------------------------------
@@ -260,7 +290,8 @@ defmodule Mana.Incident do
     }
   end
 
-  defp maps(record), do: Enum.map(record.entries, &(&1["params"] || %{})) ++ [record.state]
+  defp maps(record),
+    do: Enum.map(record.entries, &(&1["params"] || %{})) ++ [record.state, record.seed || %{}]
 
   defp people_of(record, identities) do
     actors = for entry <- record.entries, entry["actor_id"], do: entry["actor_id"]
@@ -397,12 +428,16 @@ defmodule Mana.Incident do
         |> Map.put("params", fields(entry["params"] || %{}, types, personal, names))
       end
 
-    %{
+    anonymized = %{
       "ref" => Map.fetch!(names.refs, record.id),
       "type" => record.type,
       "entries" => entries,
       "state" => fields(record.state, attributes, personal, names)
     }
+
+    if record.seed,
+      do: Map.put(anonymized, "seed", fields(record.seed, attributes, personal, names)),
+      else: anonymized
   end
 
   defp anonymize_person(person, names) do
@@ -551,7 +586,10 @@ defmodule Mana.Incident do
 
   defp referenced_roles(incident) do
     for record <- incident["records"],
-        map <- [record["state"] | Enum.map(record["entries"], &(&1["params"] || %{}))],
+        map <- [
+          record["state"],
+          record["seed"] || %{} | Enum.map(record["entries"], &(&1["params"] || %{}))
+        ],
         [_, "actor", role | _] <- map |> strings() |> Enum.map(&Regex.run(@marker, &1)),
         into: MapSet.new(),
         do: role
@@ -583,41 +621,33 @@ defmodule Mana.Incident do
     end
   end
 
-  defp rebuild(record, {:ok, rebuilt}, context) do
-    ref = record["ref"]
-
-    with {:ok, resource} <- Map.fetch(context.resources, record["type"]),
-         entries =
-           Enum.map(record["entries"], &resolve_entry(&1, ref, resource, rebuilt, context)),
-         {:ok, built, _applied} <-
-           History.replay(resource, entries,
-             actor: context.actors,
-             times: :as_recorded,
-             external: context.external
-           ) do
-      {:cont, {:ok, if(built, do: Map.put(rebuilt, ref, built), else: rebuilt)}}
-    else
-      :error -> {:halt, {:error, %{record: ref, error: :unknown_type}}}
-      {:error, failure} -> {:halt, {:error, Map.put(failure, :record, ref)}}
-    end
+  defp histories(records, context) do
+    Enum.reduce_while(Enum.reverse(records), {:ok, []}, fn record, {:ok, histories} ->
+      case Map.fetch(context.resources, record["type"]) do
+        {:ok, resource} -> {:cont, {:ok, [history(record, resource, context) | histories]}}
+        :error -> {:halt, {:error, %{record: record["ref"], error: :unknown_type}}}
+      end
+    end)
   end
 
-  # Notes name no action of the resource; replay passes over them.
-  defp resolve_entry(entry, ref, resource, rebuilt, context) do
-    case Enum.find(Info.actions(resource), &(to_string(&1.name) == entry["action"])) do
-      nil ->
-        entry
+  # References resolve when the entry is performed, against the records
+  # rebuilt by then: in recorded order, a record is rebuilt before any entry
+  # that names it.
+  defp history(record, resource, context) do
+    seed = record["seed"] && (&fields_now(record["seed"], types(resource), &1, context))
+    %{key: record["ref"], resource: resource, entries: record["entries"], seed: seed}
+  end
 
-      action ->
-        types = Map.merge(types(resource), arguments(resource, entry["action"]))
+  defp resolve_params(ref, action, params, rebuilt, context) do
+    resource = Map.fetch!(context.kinds, ref)
+    types = Map.merge(types(resource), arguments(resource, to_string(action)))
+    context.params.(ref, action, fields_now(params, types, rebuilt, context))
+  end
 
-        params =
-          for {key, value} <- History.shift(entry["params"] || %{}, context.offset),
-              into: %{},
-              do: {key, resolve(value, Map.get(types, key), rebuilt, context)}
-
-        Map.put(entry, "params", context.params.(ref, action.name, params))
-    end
+  defp fields_now(map, types, rebuilt, context) do
+    for {key, value} <- History.shift(map, context.offset),
+        into: %{},
+        do: {key, resolve(value, Map.get(types, key), rebuilt, context)}
   end
 
   defp resolve(map, type, rebuilt, context) when is_map(map),

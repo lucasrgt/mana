@@ -145,6 +145,30 @@ defmodule Mana.ReplayUndoTest do
       assert Mana.Replay.format(report) =~ "balance 10 → 11"
     end
 
+    test "a subject whose entries start with an update is rebuilt from its row before them" do
+      seeded =
+        ReplayTest.Wallet
+        |> Ash.Seed.seed!(%{balance: 5})
+        |> Ash.update!(%{amount: 10}, action: :deposit, actor: @me)
+
+      opened = wallet_with([1])
+      cut = DateTime.utc_now()
+      Ash.update!(opened, %{amount: 10}, action: :deposit, actor: @me)
+
+      entries =
+        Enum.filter(exported(), fn entry ->
+          {:ok, at, _} = DateTime.from_iso8601(entry["at"])
+          entry["subject_id"] == seeded.id or DateTime.after?(at, cut)
+        end)
+
+      report = Mana.Replay.run(entries, domains: [ReplayTest.Domain])
+
+      assert [%{outcome: :same, applied: 1}, %{outcome: :same, applied: 1}] = report.results,
+             inspect(report.results)
+
+      assert length(Ash.read!(ReplayTest.Wallet)) == 2
+    end
+
     test "reads JSON lines" do
       wallet_with([3])
       path = Path.join(System.tmp_dir!(), "replay-#{System.unique_integer([:positive])}.jsonl")

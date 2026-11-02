@@ -204,32 +204,154 @@ defmodule Mana.History do
   (`note/3`: a delivery, a webhook) are what happened around it and replay nothing;
   other effects run as the environment runs them (fakes in development and
   tests); `notify?: false` drops the replayed actions' notifications, for a
-  rebuild in a transaction that is rolled back. Answers `{:ok, record,
-  applied}` or `{:error, %{at: index, action: action, error: error}}`.
+  rebuild in a transaction that is rolled back.
+
+  A history that starts with an update belongs to a row created outside its
+  actions (a seed, a data migration): nothing in it creates the row.
+  `seed:` (its attributes before that update, `seed_state/4`) writes the
+  row straight through the data layer, under a new key and without an
+  entry, right before the update; without `seed:` the replay is refused
+  with `:not_created`. Answers `{:ok, record, applied}` or
+  `{:error, %{at: index, action: action, error: error}}`.
   """
   def replay(resource, entries, opts \\ []) do
+    params = Keyword.get(opts, :params, fn _action, params -> params end)
+    history = %{key: resource, resource: resource, entries: entries, seed: opts[:seed]}
+
+    opts =
+      Keyword.put(opts, :params, fn _key, action, input, _rebuilt -> params.(action, input) end)
+
+    case replay_all([history], opts) do
+      {:ok, rebuilt, applied} ->
+        {:ok, Map.get(rebuilt, resource), Enum.map(applied, &elem(&1, 1))}
+
+      {:error, failure} ->
+        {:error, Map.delete(failure, :key)}
+    end
+  end
+
+  @doc """
+  Rebuilds several records as `replay/3` rebuilds one, performing their
+  entries in the order they were recorded across all of them — by `at`, a
+  tie going to the earlier of `histories`, each record's own entries never
+  reordered — so the rebuilt records pass through the states the originals
+  did: a step that needs another record's later state (a place published
+  once one of its services is) finds it. A history is `%{key:, resource:,
+  entries:}`, with an optional `seed` (a map, or `fn rebuilt -> map end`).
+  `params` is `fn key, action, params, rebuilt -> params end`, with the
+  records rebuilt so far by key, so an input that named another record of
+  the set can name its rebuilt one. Answers `{:ok, %{key => record},
+  [{key, action}]}` or `{:error, %{key:, at: index, action:, error:}}`,
+  `index` counting that record's replayed entries.
+  """
+  def replay_all(histories, opts \\ []) do
+    skip_external? = Keyword.get(opts, :external) == :skip
+    histories = Enum.map(histories, &replayable(&1, skip_external?))
+
     replay = %{
-      resource: resource,
       actor: replay_actor(Keyword.get(opts, :actor, fn _ -> nil end)),
-      params: Keyword.get(opts, :params, fn _action, params -> params end),
-      offset: offset(entries, Keyword.get(opts, :times, :shift)),
-      external: external_verbs(resource),
+      params: Keyword.get(opts, :params, fn _key, _action, params, _rebuilt -> params end),
+      offset: offset(Enum.flat_map(histories, & &1.entries), Keyword.get(opts, :times, :shift)),
       notify: if(Keyword.get(opts, :notify?, true), do: [], else: [return_notifications?: true])
     }
 
-    skip_external? = Keyword.get(opts, :external) == :skip
+    histories
+    |> in_recorded_order()
+    |> Enum.reduce_while({:ok, %{}, []}, &replay_entry(&1, &2, replay))
+  end
 
+  @doc """
+  The attributes a record had before its first recorded change: `now` (its
+  attributes as they are, by name) with every done entry's `before` put
+  back, newest first. It is the `seed:` of a replay whose history starts
+  with an update. The key is left out, and so is a value the history kept
+  only as `"[redacted]"` (the rebuilt row takes the attribute's default).
+
+  `since:` (a `DateTime`) undoes only the changes at or after it: the row
+  before a window of its history (an export `--since`). `entries:` (exported
+  entries, with their `before`) are put back too, for a log this database
+  does not hold.
+  """
+  def seed_state(resource, subject_id, now, opts \\ []) do
+    type = Mana.Entity.type(resource)
+    keys = resource |> Ash.Resource.Info.primary_key() |> Enum.map(&to_string/1)
+    since = opts[:since] && DateTime.to_unix(opts[:since], :microsecond)
+
+    logged =
+      resource
+      |> log()
+      |> Ash.Query.filter(
+        subject_type == ^type and subject_id == ^to_string(subject_id) and outcome == :done
+      )
+      |> Ash.read!(authorize?: false)
+      |> Enum.map(&{DateTime.to_unix(&1.at, :microsecond), &1.before})
+
+    exported =
+      for entry <- Keyword.get(opts, :entries, []),
+          entry["outcome"] in ["done", :done],
+          do: {recorded_at(entry) || 0, entry["before"] || %{}}
+
+    (logged ++ exported)
+    |> Enum.filter(fn {at, _before} -> is_nil(since) or at >= since end)
+    |> Enum.sort_by(&elem(&1, 0), :desc)
+    |> Enum.reduce(plain(Map.new(now)), fn {_at, before}, state -> Map.merge(state, before) end)
+    |> Map.drop(keys)
+    |> Map.reject(fn {_field, value} -> value == @redacted end)
+  end
+
+  @doc "Whether the first of `entries` that `replay/3` performs is an update: the row was created outside its actions."
+  def starts_with_update?(resource, entries) do
+    actions = Map.new(Ash.Resource.Info.actions(resource), &{to_string(&1.name), &1.type})
+
+    case Enum.find(entries, &(&1["outcome"] == "done" and Map.has_key?(actions, &1["action"]))) do
+      nil -> false
+      first -> actions[first["action"]] != :create
+    end
+  end
+
+  defp replayable(history, skip_external?) do
     actions =
-      for action <- Ash.Resource.Info.actions(resource),
+      for action <- Ash.Resource.Info.actions(history.resource),
           into: MapSet.new(),
           do: to_string(action.name)
 
-    entries
-    |> Enum.filter(&(&1["outcome"] == "done" and MapSet.member?(actions, &1["action"])))
-    |> Enum.reject(&(skip_external? and MapSet.member?(replay.external, &1["verb"])))
-    |> Enum.with_index()
-    |> Enum.reduce_while({:ok, nil, []}, &replay_entry(&1, &2, replay))
+    external = external_verbs(history.resource)
+
+    steps =
+      history.entries
+      |> Enum.filter(&(&1["outcome"] == "done" and MapSet.member?(actions, &1["action"])))
+      |> Enum.reject(&(skip_external? and MapSet.member?(external, &1["verb"])))
+      |> Enum.with_index()
+
+    Map.merge(history, %{steps: steps, external: external, seed: Map.get(history, :seed)})
   end
+
+  # Each entry sorts no earlier than the one before it in its record, so a
+  # record's own order holds even where its times do not increase or are
+  # missing (a hand-written fixture).
+  defp in_recorded_order(histories) do
+    histories
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {history, position} ->
+      history.steps
+      |> Enum.map_reduce(0, fn {entry, index}, last ->
+        at = max(recorded_at(entry) || last, last)
+        {{{at, position, index}, {history, entry, index}}, at}
+      end)
+      |> elem(0)
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
+  end
+
+  defp recorded_at(%{"at" => at}) when is_binary(at) do
+    case DateTime.from_iso8601(at) do
+      {:ok, at, _} -> DateTime.to_unix(at, :microsecond)
+      _ -> nil
+    end
+  end
+
+  defp recorded_at(_entry), do: nil
 
   defp replay_actor(actors) when is_map(actors), do: &Map.get(actors, &1)
   defp replay_actor(fun), do: fun
@@ -241,42 +363,83 @@ defmodule Mana.History do
         do: to_string(verb.name)
   end
 
-  defp replay_entry({entry, index}, {:ok, record, applied}, replay) do
+  defp replay_entry({history, entry, index}, {:ok, rebuilt, applied}, replay) do
     action = String.to_existing_atom(entry["action"])
-    input = replay.params.(action, shift(entry["params"] || %{}, replay.offset))
+
+    input =
+      replay.params.(history.key, action, shift(entry["params"] || %{}, replay.offset), rebuilt)
 
     who =
       if entry["actor_kind"] == "user" and entry["actor_id"], do: replay.actor.(entry["actor_id"])
 
     opts = [action: action, actor: who, authorize?: not is_nil(who)]
 
-    case perform(replay, entry, record, input, opts) do
-      {:ok, record} -> {:cont, {:ok, record, applied ++ [action]}}
-      {:error, error} -> {:halt, {:error, %{at: index, action: action, error: error}}}
+    case perform(replay, history, entry, {input, opts}, rebuilt) do
+      {:ok, record} ->
+        {:cont, {:ok, Map.put(rebuilt, history.key, record), applied ++ [{history.key, action}]}}
+
+      {:error, error} ->
+        {:halt, {:error, %{key: history.key, at: index, action: action, error: error}}}
     end
   end
 
-  defp perform(replay, entry, record, input, opts) do
+  defp perform(replay, history, entry, {input, opts}, rebuilt) do
+    resource = history.resource
+
     cond do
-      MapSet.member?(replay.external, entry["verb"]) ->
+      MapSet.member?(history.external, entry["verb"]) ->
         {:error, :external}
 
       Enum.any?(Map.values(input), &(&1 == @redacted)) ->
         {:error, :redacted_input}
 
       # A create after the first is an upsert that landed on the record.
-      is_nil(record) or Ash.Resource.Info.action(replay.resource, opts[:action]).type == :create ->
-        replay.resource
+      Ash.Resource.Info.action(resource, opts[:action]).type == :create ->
+        resource
         |> Ash.Changeset.for_create(opts[:action], input, opts)
         |> Ash.create(replay.notify)
 
       true ->
-        record
-        |> Ash.Changeset.for_update(opts[:action], input, opts)
-        |> Ash.update(replay.notify)
+        with {:ok, record} <- existing(rebuilt[history.key], history, rebuilt, replay.offset) do
+          record
+          |> Ash.Changeset.for_update(opts[:action], input, opts)
+          |> Ash.update(replay.notify)
+        end
     end
     |> dropping_notifications()
   end
+
+  defp existing(nil, %{seed: nil}, _rebuilt, _offset), do: {:error, :not_created}
+
+  # The row is written as it stood, straight through the data layer: its
+  # history holds no create to perform, and an action would hold it to rules
+  # it was never written under. Its key is new, the rest the seed's or, where
+  # the seed is silent, the attribute's default.
+  defp existing(nil, %{resource: resource, seed: seed}, rebuilt, offset) do
+    seed = if is_function(seed, 1), do: seed.(rebuilt), else: seed
+    seed = Map.new(seed, fn {field, value} -> {to_string(field), value} end)
+
+    attributes =
+      for attribute <- Ash.Resource.Info.attributes(resource), into: %{} do
+        case Map.fetch(seed, to_string(attribute.name)) do
+          {:ok, value} when not attribute.primary_key? -> {attribute.name, shift(value, offset)}
+          _ -> {attribute.name, default(attribute.default)}
+        end
+      end
+
+    changeset =
+      resource |> Ash.Changeset.new() |> Ash.Changeset.force_change_attributes(attributes)
+
+    if changeset.valid?,
+      do: Ash.DataLayer.create(resource, changeset),
+      else: {:error, Ash.Error.to_error_class(changeset.errors)}
+  end
+
+  defp existing(record, _history, _rebuilt, _offset), do: {:ok, record}
+
+  defp default({module, function, args}), do: apply(module, function, args)
+  defp default(fun) when is_function(fun, 0), do: fun.()
+  defp default(value), do: value
 
   defp dropping_notifications({:ok, record, _notifications}), do: {:ok, record}
   defp dropping_notifications(result), do: result
@@ -287,11 +450,9 @@ defmodule Mana.History do
   defp offset(_entries, :as_recorded), do: 0
 
   defp offset(entries, :shift) do
-    with [%{"at" => at} | _] when is_binary(at) <- entries,
-         {:ok, first, _} <- DateTime.from_iso8601(at) do
-      DateTime.diff(DateTime.utc_now(), first, :microsecond)
-    else
-      _ -> 0
+    case entries |> Enum.map(&recorded_at/1) |> Enum.reject(&is_nil/1) do
+      [] -> 0
+      times -> DateTime.to_unix(DateTime.utc_now(), :microsecond) - Enum.min(times)
     end
   end
 

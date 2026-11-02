@@ -11,7 +11,7 @@ defmodule PostgresTest.Harness do
 
   @repo PostgresTest.Repo
   @migrations Path.expand("migrations", __DIR__)
-  @tables ~w(orders history_entries travelers bookings reviews cards ledgers notes ratings threads stays people oban_jobs)
+  @tables ~w(orders history_entries travelers bookings reviews cards ledgers notes ratings threads stays people offerings venues oban_jobs)
 
   def migrations, do: @migrations
 

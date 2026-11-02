@@ -60,7 +60,11 @@ What the app knows about itself (`framework/docs/prd-self-knowing.md`):
   enforced refusals, idempotence, inverses, reconcile rules (timed ones on a
   moved clock), flows and history replay; violations shrink to their shortest
   moves. A record's history is replayed with the original set aside, so a
-  unique identity or an upsert never meets it. What it cannot use (a resource
+  unique identity or an upsert never meets it, together with the records
+  that reference it in the order the entries were recorded; a history that
+  starts with an update is seeded from the row before it. A seed gives the
+  same run and the same `affordances.json` bytes: records met together are
+  ordered by content, not timestamps or ids. What it cannot use (a resource
   without a primary read, a part that raises) is reported once, in the
   report, never logged per move. `mix mana.explore`; `Mana.Explore.Lock` and
   `mix mana.affordances` keep the affordance graph as a committed
@@ -75,12 +79,14 @@ What the app knows about itself (`framework/docs/prd-self-knowing.md`):
 - `Mana.Graph` — the program graph from Spark introspection, Moments
   manifests and screen references; `mix mana.graph` (and `mana graph`).
 - `Mana.Replay` — an exported history log replayed against the current code
-  in rolled-back transactions, compared per feature; `mix mana.replay`.
+  in rolled-back transactions, compared per feature; a subject whose entries
+  start with an update is rebuilt from its row before them; `mix mana.replay`.
 - `Mana.Undo` — the newest change of a person taken back through its verb's
   inverse, recorded as `via: "undo:<id>"`.
 - `Mana.Incident` — a record's history up to a moment, with what it references,
   anonymized (privacy `personal` fields, people as roles with stand-ins made
-  once per role) into a fixture a recipe replays into the same situation;
+  once per role) into a fixture a recipe replays into the same situation,
+  every record's entries in recorded order (`Mana.History.replay_all/2`);
   `mix mana.incident booking:<id> --at <iso>`.
 
 Tests run on ETS. With `MANA_TEST_POSTGRES=ecto://user:pass@host/db` the
@@ -90,6 +96,8 @@ announcements, notices and history telemetry only after commit, history
 entries atomic with their change, erasure scrubbing history and deleting
 stored files only after commit, negated and compound reconcile `holds` in
 SQL, embedded-field search, outbound webhooks after commit, an incident
-reopened into the same booking, and `Mana.Explore` through `Mana.Snapshot`
-scopes (records with a unique identity rebuilt beside the original). The database named in the URL
+reopened into the same booking, incidents and explored histories whose
+steps need another record's later state or start with an update, and
+`Mana.Explore` through `Mana.Snapshot` scopes (records with a unique
+identity rebuilt beside the original). The database named in the URL
 is dropped and cloned from a migrated template for each test module.

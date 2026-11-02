@@ -12,7 +12,10 @@ defmodule Mana.Replay do
   layer that cannot, the rebuilt record is destroyed afterwards), so
   nothing stays written. Run it against a database that holds what the
   subjects refer to — a restore of production, or a `Mana.Snapshot` of one
-  (`scope:`). Verbs declared `external:` refuse the replay unless
+  (`scope:`). A subject whose entries start with an update (a row written
+  outside its actions, or created before the export began) is rebuilt from
+  its row as it stood before them (`Mana.History.seed_state/4`). Verbs
+  declared `external:` refuse the replay unless
   `external: :skip`; redacted inputs cannot replay (`params:` may supply
   them, as for `Mana.History.replay/3`).
 
@@ -93,7 +96,7 @@ defmodule Mana.Replay do
         Map.merge(base, %{outcome: :same, detail: "nothing was done"})
 
       true ->
-        Map.merge(base, isolated(resource, fn -> compare(resource, entries, opts) end))
+        Map.merge(base, isolated(resource, fn -> compare(resource, id, entries, opts) end))
     end
   end
 
@@ -110,15 +113,17 @@ defmodule Mana.Replay do
     end
   end
 
-  defp compare(resource, entries, opts) do
+  defp compare(resource, id, entries, opts) do
     recorded = recorded(entries)
+    exported = Enum.map(entries, &as_export/1)
 
     replayed =
-      History.replay(resource, Enum.map(entries, &as_export/1),
+      History.replay(resource, exported,
         actor: opts[:actor] || fn _ -> nil end,
         params: opts[:params] || fn _action, params -> params end,
         times: opts[:times] || :as_recorded,
-        external: opts[:external]
+        external: opts[:external],
+        seed: seed(resource, id, entries, exported)
       )
 
     case replayed do
@@ -141,6 +146,36 @@ defmodule Mana.Replay do
     end
   rescue
     error -> %{outcome: :failed, detail: Exception.message(error) |> String.slice(0, 300)}
+  end
+
+  # Entries that start with an update belong to a row created outside its
+  # actions, or before the export began: it is rebuilt from the row as it
+  # stood before the first of them — as this database holds it now, with
+  # every change since then undone.
+  defp seed(resource, id, entries, exported) do
+    if History.starts_with_update?(resource, exported),
+      do:
+        History.seed_state(resource, id, row(resource, id),
+          since: Enum.find_value(entries, &done_at/1),
+          entries: entries
+        )
+  end
+
+  defp done_at(entry) do
+    with "done" <- to_string(entry["outcome"]),
+         {:ok, at, _} <- DateTime.from_iso8601(to_string(entry["at"])),
+         do: at,
+         else: (_ -> nil)
+  end
+
+  defp row(resource, id) do
+    case Ash.get(resource, id, authorize?: false, error?: false) do
+      {:ok, %{} = row} ->
+        Map.new(Ash.Resource.Info.attributes(resource), &{&1.name, Map.get(row, &1.name)})
+
+      _ ->
+        %{}
+    end
   end
 
   defp diverged_fields(record, recorded) do

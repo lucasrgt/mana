@@ -33,13 +33,25 @@ defmodule Mana.Explore do
   | `:flow_deadlock` | `flow` | no one is offered the verb of a record's current step, and no deadline holds for it |
   | `:history_replays` | `history` | replaying a record's log does not rebuild it |
 
+  A record's log is replayed with the original set aside, together with
+  the records that reference it, every entry in the order it was recorded
+  (`Mana.History.replay_all/2`); a record whose log starts with an update
+  (written outside its actions) is seeded from its row before that update.
+
   A violation is shrunk to the shortest sequence of moves that still breaks
   the same property and kept in the report with that trace. `save/3` writes
   it as a file, `replay_file/3` (a Moment's backend recipe) rebuilds the
   situation it reaches, and `check/3` replays it to tell whether the
   property still breaks there. Verbs that are `external:` or move money are
-  never performed unless `external: :run`. A run is deterministic for a
-  `seed`.
+  never performed unless `external: :run`.
+
+  A run is deterministic for a `seed`: records get references in the order
+  the run met them, and records met together (a setup's, a move's side
+  effects) are ordered by what they hold, never by a timestamp or an id; a
+  deadline after a wait falls on the run's clock, counted from when the run
+  saw the record change. Generated inputs come from the seed; a
+  `generators:` function that reads the clock or randomness of its own
+  makes the run depend on it.
 
   A saved trace is a Moment: `mix mana.explore --save <name>` writes it to
   `priv/moments/explorations/<name>.json`, a `moments` section that declares
@@ -424,20 +436,84 @@ defmodule Mana.Explore do
 
   # Records get stable references by the order they appear in a run
   # (`{Resource, 0}` is the first one seen), so a trace replays on a fresh
-  # store whose ids differ.
+  # store whose ids differ. Records that appear together (a setup's, a
+  # move's side effects) are ordered by what they hold, never by when or
+  # under which id they were written: a timestamp of second precision ties
+  # and the store then answers ties in its own order, ids are random, and
+  # either would make the same seed act on another record.
   defp discover(state, ctx) do
     Enum.reduce(ctx.all, state, fn resource, state ->
       {records, state} = read_all(state, resource)
       known = Map.get(state.refs, resource, [])
-      ids = Enum.map(records, & &1.id)
+      seen = MapSet.new(known)
+      ids = known_ids(state)
+
+      new =
+        records
+        |> Enum.reject(&MapSet.member?(seen, &1.id))
+        |> Enum.sort_by(&content(&1, ids))
+        |> Enum.map(& &1.id)
 
       %{
         state
-        | refs: Map.put(state.refs, resource, known ++ Enum.reject(ids, &(&1 in known))),
+        | refs: Map.put(state.refs, resource, known ++ new),
           stamps: Enum.reduce(records, state.stamps, &stamp(&2, &1, state.offset))
       }
     end)
   end
+
+  # A record as the run sees it: its attributes, without its key and the
+  # ones the store fills from the clock or at random (a function default),
+  # times as one value, a known record's or actor's id as its reference and
+  # any other id as one value.
+  defp content(%resource{} = record, ids) do
+    for attribute <- Ash.Resource.Info.attributes(resource),
+        not attribute.primary_key?,
+        not generated?(attribute.default) and not generated?(attribute.update_default),
+        do: {attribute.name, neutral(Map.get(record, attribute.name), ids)}
+  end
+
+  defp generated?(default), do: is_function(default) or match?({_, _, _}, default)
+
+  defp known_ids(state) do
+    refs =
+      for {resource, ids} <- state.refs,
+          {id, index} <- Enum.with_index(ids),
+          into: %{},
+          do: {to_string(id), {:ref, resource, index}}
+
+    for {name, actor} <- state.actors,
+        is_map(actor) and Map.has_key?(actor, :id),
+        into: refs,
+        do: {to_string(actor.id), {:actor, name}}
+  end
+
+  defp neutral(%type{}, _ids) when type in [DateTime, NaiveDateTime, Time], do: :time
+
+  defp neutral(value, ids) when is_binary(value) do
+    cond do
+      Map.has_key?(ids, value) -> ids[value]
+      match?({:ok, _}, Ecto.UUID.cast(value)) -> :id
+      true -> value
+    end
+  end
+
+  defp neutral(%_{} = value, ids), do: value |> Map.from_struct() |> neutral(ids)
+
+  defp neutral(value, ids) when is_map(value),
+    do: value |> Enum.map(fn {key, inner} -> {key, neutral(inner, ids)} end) |> Enum.sort()
+
+  defp neutral(value, ids) when is_list(value), do: Enum.map(value, &neutral(&1, ids))
+  defp neutral(value, _ids), do: value
+
+  # The record a start move created is the next one of its resource, before
+  # anything its creation made alongside it.
+  defp register(state, %resource{id: id}) do
+    known = Map.get(state.refs, resource, [])
+    if id in known, do: state, else: %{state | refs: Map.put(state.refs, resource, known ++ [id])}
+  end
+
+  defp register(state, _result), do: state
 
   # What each actor is offered on every record a move can start from, and
   # the collection verbs it may start, asked once per state: choosing a
@@ -487,6 +563,11 @@ defmodule Mana.Explore do
     end
   end
 
+  defp elapsed(state, record) do
+    {_, since} = Map.get(state.stamps, record.id, {nil, state.offset})
+    state.offset - since
+  end
+
   defp clock(state) do
     fn record ->
       {_, since} = Map.get(state.stamps, record.id, {nil, state.offset})
@@ -494,6 +575,7 @@ defmodule Mana.Explore do
     end
   end
 
+  # The oldest 200 are read; `discover` orders them.
   defp read_all(state, resource) do
     sort = Enum.find([:inserted_at, :created_at], &Ash.Resource.Info.attribute(resource, &1))
 
@@ -503,7 +585,6 @@ defmodule Mana.Explore do
       |> then(&if(sort, do: Ash.Query.sort(&1, [{sort, :asc}]), else: &1))
       |> Ash.Query.limit(200)
       |> Ash.read!(authorize?: false)
-      |> then(&if(sort, do: &1, else: Enum.sort_by(&1, fn r -> to_string(r.id) end)))
 
     {records, state}
   rescue
@@ -833,8 +914,8 @@ defmodule Mana.Explore do
     actor = actor(state, move.actor)
 
     case perform(move.resource, verb, resolve(state, move.params), actor) do
-      {:ok, _record} ->
-        reached(state, move.resource, verb.name)
+      {:ok, record} ->
+        state |> register(record) |> reached(move.resource, verb.name)
 
       {:error, kind, detail} ->
         judge_offered_failure(ctx, state, kind, detail, move.resource, verb, move)
@@ -1152,7 +1233,7 @@ defmodule Mana.Explore do
         Mana.Entity.holds?(deadline.when, record),
         reduce: state do
       state ->
-        case due(deadline, record, now.(record), seconds) do
+        case due(deadline, record, now.(record), elapsed(state, record)) do
           {:ok, true} ->
             Mana.Entity.run_deadline(resource, record.id, to_string(deadline.name))
             reached(state, resource, {:deadline, deadline.name})
@@ -1166,16 +1247,13 @@ defmodule Mana.Explore do
     end
   end
 
-  defp due(%{after: {amount, unit}}, record, now, advanced) when is_integer(amount) do
-    wait = Mana.Reconcile.within_seconds({amount, unit})
+  # A deadline after a wait counts on the run's clock from when the run saw
+  # the record last change, never on its stored timestamps: how long the run
+  # took for real, or a timestamp of second precision, would decide it.
+  defp due(%{after: {amount, unit}}, _record, _now, elapsed) when is_integer(amount),
+    do: {:ok, elapsed >= Mana.Reconcile.within_seconds({amount, unit})}
 
-    case Map.get(record, :updated_at) || Map.get(record, :inserted_at) do
-      %DateTime{} = at -> {:ok, DateTime.diff(now, at, :second) >= wait}
-      _ -> {:ok, advanced >= wait}
-    end
-  end
-
-  defp due(deadline, record, now, _advanced) do
+  defp due(deadline, record, now, _elapsed) do
     case Mana.Entity.due_at(deadline, record) do
       %DateTime{} = at -> {:ok, DateTime.compare(at, now) != :gt}
       _ -> {:ok, false}
@@ -1301,11 +1379,9 @@ defmodule Mana.Explore do
   end
 
   defp check_resource_history(ctx, resource, state) do
-    log = Mana.History in Spark.extensions(resource) && Mana.History.log(resource)
-
-    if log do
+    if history_log(resource) do
       Enum.reduce_while(records(state, resource), {:cont, state}, fn record, {_, state} ->
-        ctx |> replay_mismatch(state, resource, log, record) |> judge_history(state, resource)
+        ctx |> replay_mismatch(state, resource, record) |> judge_history(state, resource)
       end)
     else
       {:cont, state}
@@ -1326,51 +1402,61 @@ defmodule Mana.Explore do
   # The record is rebuilt where it no longer is: the original is set aside
   # first, so the rebuild meets none of its identities (a unique key the
   # original holds, an upsert that would land on it and change it) and the
-  # comparison is between the record and its log alone. Where the data layer
-  # transacts, setting aside and rebuilding happen in a transaction rolled
-  # back after the comparison, as `Mana.Replay` does; the records that
-  # reference the original go aside with it, since the database would refuse
-  # to remove it under them. Elsewhere the rebuilt record and the entries it
-  # logged are removed and the original is put back as it was.
-  defp replay_mismatch(ctx, state, resource, log, record) do
+  # comparison is between the record and its log alone. The records that
+  # reference it go aside with it (the database would refuse to remove it
+  # under them) and are rebuilt with it, every entry in the order it was
+  # recorded, since a step of the record may need one of theirs (publishing
+  # a place once its service is published). Where the data layer transacts,
+  # setting aside and rebuilding happen in a transaction rolled back after
+  # the comparison, as `Mana.Replay` does. Elsewhere the rebuilt records and
+  # the entries they logged are removed and the originals put back as they
+  # were.
+  defp replay_mismatch(ctx, state, resource, record) do
     if Ash.DataLayer.data_layer_can?(resource, :transact),
-      do: rolled_back(ctx, state, resource, log, record),
-      else: put_back(state, resource, log, record)
+      do: rolled_back(ctx, state, resource, record),
+      else: put_back(ctx, state, record)
   end
 
-  defp rolled_back(ctx, state, resource, log, record) do
+  defp rolled_back(ctx, state, resource, record) do
     case Ash.DataLayer.transaction([resource], fn ->
-           Ash.DataLayer.rollback([resource], {:checked, aside(ctx, state, log, record)})
+           Ash.DataLayer.rollback([resource], {:checked, aside(ctx, state, record)})
          end) do
       {:error, {:checked, outcome}} -> outcome
-      other -> "#{Mana.Entity.type(resource)} #{record.id}: replay transaction: #{inspect(other)}"
+      other -> "#{name(state, record)}: replay transaction: #{inspect(other)}"
     end
   end
 
-  defp aside(ctx, state, log, %resource{} = record) do
-    case set_aside(ctx, record, MapSet.new()) do
-      {:ok, _aside} -> rebuilt_differently(state, resource, log, record)
+  defp aside(ctx, state, record) do
+    case set_aside(ctx, record, {MapSet.new(), []}, true) do
+      {:ok, {_keys, aside}} -> rebuilt_differently(state, record, aside)
       {:error, reason} -> {:inconclusive, reason}
     end
   end
 
-  # Depth first: what references a record goes before it.
-  defp set_aside(ctx, %resource{} = record, aside) do
+  # Depth first: what references a record goes before it, so `aside` lists
+  # the records in the order they were removed.
+  defp set_aside(ctx, %resource{} = record, {keys, aside}, transaction?) do
     key = {resource, Map.take(record, Ash.Resource.Info.primary_key(resource))}
 
-    if MapSet.member?(aside, key) do
-      {:ok, aside}
+    if MapSet.member?(keys, key) do
+      {:ok, {keys, aside}}
     else
-      with {:ok, aside} <- set_aside_all(ctx, referencing(ctx, record), MapSet.put(aside, key)),
-           :ok <- remove(record, true),
-           do: {:ok, aside}
+      with {:ok, {keys, aside}} <-
+             set_aside_all(
+               ctx,
+               referencing(ctx, record),
+               {MapSet.put(keys, key), aside},
+               transaction?
+             ),
+           :ok <- remove(record, transaction?),
+           do: {:ok, {keys, aside ++ [record]}}
     end
   end
 
-  defp set_aside_all(ctx, records, aside) do
-    Enum.reduce_while(records, {:ok, aside}, fn record, {:ok, aside} ->
-      case set_aside(ctx, record, aside) do
-        {:ok, aside} -> {:cont, {:ok, aside}}
+  defp set_aside_all(ctx, records, acc, transaction?) do
+    Enum.reduce_while(records, {:ok, acc}, fn record, {:ok, acc} ->
+      case set_aside(ctx, record, acc, transaction?) do
+        {:ok, acc} -> {:cont, {:ok, acc}}
         error -> {:halt, error}
       end
     end)
@@ -1433,16 +1519,15 @@ defmodule Mana.Explore do
     end
   end
 
-  defp put_back(state, resource, log, record) do
-    type = Mana.Entity.type(resource)
-    known = entry_ids(log, type, record.id)
+  defp put_back(ctx, state, record) do
+    case set_aside(ctx, record, {MapSet.new(), []}, false) do
+      {:ok, {_keys, aside}} ->
+        known = aside |> Enum.flat_map(&logged/1) |> MapSet.new(& &1.id)
 
-    case remove(record) do
-      :ok ->
         try do
-          rebuilt_differently(state, resource, log, record, &remove_rebuilt(log, type, known, &1))
+          rebuilt_differently(state, record, aside, &remove_rebuilt(&1, known))
         after
-          restore(record)
+          aside |> Enum.reverse() |> Enum.each(&restore/1)
         end
 
       {:error, reason} ->
@@ -1450,23 +1535,29 @@ defmodule Mana.Explore do
     end
   end
 
-  defp remove_rebuilt(log, type, known, rebuilt) do
-    remove(rebuilt)
-
-    for entry <- entries(log, type, rebuilt.id),
-        not MapSet.member?(known, entry.id),
-        do: remove(entry)
+  defp remove_rebuilt(rebuilt, known) do
+    for record <- rebuilt do
+      remove(record)
+      for entry <- logged(record), not MapSet.member?(known, entry.id), do: remove(entry)
+    end
 
     :ok
   end
 
-  defp entries(log, type, id) do
-    log
-    |> Ash.Query.filter(subject_type == ^type and subject_id == ^to_string(id))
-    |> Ash.read!(authorize?: false)
+  defp logged(%resource{} = record) do
+    if log = history_log(resource) do
+      type = Mana.Entity.type(resource)
+
+      log
+      |> Ash.Query.filter(subject_type == ^type and subject_id == ^to_string(record.id))
+      |> Ash.read!(authorize?: false)
+    else
+      []
+    end
   end
 
-  defp entry_ids(log, type, id), do: MapSet.new(entries(log, type, id), & &1.id)
+  defp history_log(resource),
+    do: Mana.History in Spark.extensions(resource) && Mana.History.log(resource)
 
   # A rebuild that stopped half way may hold the original's key.
   defp restore(%resource{} = record) do
@@ -1489,8 +1580,14 @@ defmodule Mana.Explore do
     :ok
   end
 
-  defp rebuilt_differently(state, resource, log, record, cleanup \\ fn _ -> :ok end) do
-    entries = Mana.History.export(log, Mana.Entity.type(resource), record.id)
+  # The record first, then what went aside with it in the reverse of the
+  # order it was removed (what a record references before it); a record
+  # without history cannot be rebuilt and is only out of the way.
+  defp rebuilt_differently(state, record, aside, cleanup \\ fn _ -> :ok end) do
+    group = aside |> Enum.reverse() |> Enum.filter(&history_log(&1.__struct__))
+    ids = Map.new(group, &{to_string(&1.id), key(&1)})
+    histories = Enum.map(group, &history(&1, ids))
+    entries = Enum.find(histories, &(&1.key == key(record))).entries
 
     by_id =
       for {_name, actor} <- state.actors,
@@ -1499,30 +1596,83 @@ defmodule Mana.Explore do
           into: %{},
           do: {to_string(actor.id), actor}
 
-    case Mana.History.replay(resource, entries,
+    case Mana.History.replay_all(histories,
            actor: &Map.get(by_id, to_string(&1)),
+           params: fn _key, _action, params, rebuilt -> rebound(params, ids, rebuilt) end,
            times: :as_recorded,
            notify?: false
          ) do
-      {:ok, nil, _} ->
-        nil
-
       {:ok, rebuilt, _} ->
-        cleanup.(rebuilt)
-        rebuilt_mismatch(resource, record, rebuilt, entries)
+        cleanup.(Map.values(rebuilt))
+        copy = rebuilt[key(record)]
+        if copy, do: rebuilt_mismatch(state, record, copy, entries)
 
       {:error, %{error: reason}} when reason in [:external, :redacted_input] ->
         nil
 
-      {:error, %{at: at, action: action}} ->
-        "#{Mana.Entity.type(resource)} #{record.id}: replay stopped at entry #{at} (#{action})"
+      {:error, failure} ->
+        stopped(state, record, failure)
     end
   rescue
     error ->
-      "#{Mana.Entity.type(resource)} #{record.id}: replay crashed: #{Exception.message(error) |> String.slice(0, 200)}"
+      "#{name(state, record)}: replay crashed: #{Exception.message(error) |> String.slice(0, 200)}"
   end
 
-  defp rebuilt_mismatch(resource, record, rebuilt, entries) do
+  defp key(%resource{} = record), do: {resource, record.id}
+
+  defp history(%resource{} = record, ids) do
+    entries = Mana.History.export(history_log(resource), Mana.Entity.type(resource), record.id)
+
+    seed =
+      if Mana.History.starts_with_update?(resource, entries) do
+        now =
+          Map.new(Ash.Resource.Info.attributes(resource), &{&1.name, Map.get(record, &1.name)})
+
+        seed = Mana.History.seed_state(resource, record.id, now)
+        &rebound(seed, ids, &1)
+      end
+
+    %{key: key(record), resource: resource, entries: entries, seed: seed}
+  end
+
+  # A value that named a record of the set names its rebuilt copy, once
+  # there is one.
+  defp rebound(value, ids, rebuilt) when is_binary(value) do
+    case Map.fetch(ids, value) do
+      {:ok, key} when is_map_key(rebuilt, key) -> to_string(rebuilt[key].id)
+      _ -> value
+    end
+  end
+
+  defp rebound(map, ids, rebuilt) when is_map(map) and not is_struct(map),
+    do: Map.new(map, fn {field, value} -> {field, rebound(value, ids, rebuilt)} end)
+
+  defp rebound(list, ids, rebuilt) when is_list(list),
+    do: Enum.map(list, &rebound(&1, ids, rebuilt))
+
+  defp rebound(value, _ids, _rebuilt), do: value
+
+  defp stopped(state, record, %{key: {resource, id} = at_key, at: at, action: action} = failure) do
+    of = if at_key == key(record), do: "", else: " of #{name(state, resource, id)}"
+
+    "#{name(state, record)}: replay stopped at entry #{at}#{of} (#{action}): #{failure_reason(failure.error)}"
+  end
+
+  defp failure_reason(reason) when is_atom(reason), do: to_string(reason)
+  defp failure_reason(error), do: Mana.History.error_code(error)
+
+  # By reference (`booking#0`), not id: a detail reads the same in every run
+  # of a seed.
+  defp name(state, %resource{} = record), do: name(state, resource, record.id)
+
+  defp name(state, resource, id) do
+    case ref_of(state, resource, id) do
+      {_, nil} -> "#{Mana.Entity.type(resource)} #{id}"
+      ref -> type(ref)
+    end
+  end
+
+  defp rebuilt_mismatch(state, record, rebuilt, entries) do
     # A time an action stamps from the clock (requested_at) is not
     # something a replay can reproduce; one that came in as input is.
     inputs =
@@ -1541,7 +1691,7 @@ defmodule Mana.Explore do
 
     if fields != [],
       do:
-        "#{Mana.Entity.type(resource)} #{record.id}: replaying its history rebuilt #{Enum.join(fields, ", ")} differently"
+        "#{name(state, record)}: replaying its history rebuilt #{Enum.join(fields, ", ")} differently"
   end
 
   # Exploration goes on past a part it cannot run; the report counts each
