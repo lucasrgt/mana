@@ -7,6 +7,7 @@ defmodule ManaCore.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       consolidate_protocols: Mix.env() != :test,
+      elixirc_paths: if(Mix.env() == :test, do: ["lib", "test/support"], else: ["lib"]),
       deps: [
         {:ash, "~> 3.34 and >= 3.34.3"},
         {:ash_json_api, "~> 1.0", optional: true},
@@ -20,7 +21,10 @@ defmodule ManaCore.MixProject do
         {:ecto_sql, "~> 3.12", optional: true},
         {:postgrex, "~> 0.20", optional: true},
         {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-        {:simple_sat, "~> 0.1 and >= 0.1.1", only: :test}
+        {:mana_lint, path: "../lint", only: [:dev, :test], runtime: false},
+        {:simple_sat, "~> 0.1 and >= 0.1.1", only: :test},
+        # The Postgres test harness (test/support/postgres); apps bring their own.
+        {:ash_postgres, "~> 2.14", only: :test}
       ]
     ]
 

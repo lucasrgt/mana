@@ -17,23 +17,38 @@ defmodule Mana.Checkpoint do
     with {:ok, steps} <- load(plan, actor),
          [] <- irreversible(steps),
          {:ok, resources} <- transactional(steps) do
-      Process.put(:mana_dry_run, [])
-
-      result =
-        Ash.DataLayer.transaction(resources, fn ->
-          outcome = Mana.Verbs.run_all(steps, actor, rolled_back: true)
-          Ash.DataLayer.rollback(resources, %{outcome: summary(outcome), history: history(steps)})
-        end)
-
-      notices = Process.delete(:mana_dry_run) |> Enum.reverse()
-
-      case result do
-        {:error, %{outcome: _} = report} -> {:ok, Map.put(report, :notices, notices)}
-        other -> {:error, other}
-      end
+      steps |> rolled_back(resources, actor) |> with_notices()
     else
       [_ | _] = money -> {:error, %{irreversible: money}}
       {:error, _} = error -> error
+    end
+  end
+
+  # `Ash.transact`, not the data layer's own transaction: the actions nested
+  # in the steps (history entries, live announcements) then queue their Ash
+  # notifications on it instead of sending them on the spot, and the
+  # rollback drops them. The report leaves the rolled-back transaction as a
+  # message, since what the rollback carries comes back as an Ash error.
+  defp rolled_back(steps, resources, actor),
+    do: Mana.Notifications.fake(fn -> transact_and_roll_back(resources, steps, actor) end)
+
+  defp with_notices({{:ok, report}, notices}), do: {:ok, Map.put(report, :notices, notices)}
+  defp with_notices({other, _notices}), do: {:error, other}
+
+  defp transact_and_roll_back(resources, steps, actor) do
+    ref = make_ref()
+
+    result =
+      Ash.transact(resources, fn ->
+        outcome = Mana.Verbs.run_all(steps, actor, rolled_back: true)
+        send(self(), {ref, %{outcome: summary(outcome), history: history(steps)}})
+        Ash.DataLayer.rollback(resources, :dry_run)
+      end)
+
+    receive do
+      {^ref, report} -> {:ok, report}
+    after
+      0 -> result
     end
   end
 

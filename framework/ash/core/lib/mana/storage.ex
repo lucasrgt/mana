@@ -45,6 +45,12 @@ defmodule Mana.Storage do
   end
 
   def put(key, body, content_type), do: adapter().put(safe!(key), body, content_type)
+
+  @doc """
+  Deletes the object at `key`. An adapter answers `:ok` for a key already
+  gone, so a retried deletion (`Mana.Uploads` discarding a destroyed file's
+  objects) is idempotent.
+  """
   def delete(key), do: adapter().delete(safe!(key))
   def exists?(key), do: adapter().exists?(safe!(key))
   def get(key), do: adapter().get(safe!(key))

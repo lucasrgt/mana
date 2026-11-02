@@ -24,11 +24,15 @@ defmodule Mana.Reconcile do
           holds: {MyApp.Payments, :charged?}
       end
 
-  `observe/2` reads the records in `scope` and asks `holds` (`{Module, :fun}`
-  called with a record, answering `true`, `false` or `{false, detail}`)
-  about each: the rule has `converged` when every one holds, is `diverging`
-  otherwise (with the records and details), and `blocked` when `apply`
-  already tried and the record still diverges. With `apply`
+  `observe/2` streams the records in `scope` and asks `holds` about each:
+  the rule has `converged` when every one holds, is `diverging` otherwise
+  (with the records and details), and `blocked` when `apply` already tried
+  and the record still diverges. `holds` is preferably an expression over
+  the record (`holds: expr(not is_nil(charge_id))`): it is asked in the
+  query, so only the diverging records are read. `{Module, :fun}`, called
+  with each record in scope and answering `true`, `false` or
+  `{false, detail}`, is for a rule an expression cannot say; it costs
+  whatever the function reads, per record. With `apply`
   (`{Module, :fun}`), `observe(resource, apply: true)` asks it to bring each
   diverging record back, through verbs, and reports what stayed blocked.
   Without it the rule only observes — the first, safe step next to the
@@ -68,9 +72,9 @@ defmodule Mana.Reconcile do
         doc: "An expression selecting the records the rule is about."
       ],
       holds: [
-        type: {:tuple, [:atom, :atom]},
+        type: :any,
         doc:
-          "`{Module, :fun}`: true, false or `{false, detail}` for a record; may be left out when `within` is given."
+          "An expression over the record, asked in the query; or `{Module, :fun}`: true, false or `{false, detail}` for a record. May be left out when `within` is given."
       ],
       within: [
         type:
@@ -94,6 +98,8 @@ defmodule Mana.Reconcile do
 
   use Spark.Dsl.Extension, sections: [@reconcile], transformers: [Mana.Reconcile.Verify]
 
+  require Ash.Expr
+  alias Ash.Resource.Info
   alias Spark.Dsl.Extension
 
   def declared(resource), do: Extension.get_entities(resource, [:reconcile])
@@ -104,13 +110,9 @@ defmodule Mana.Reconcile do
   end
 
   defp observe_rule(resource, rule, opts) do
-    records = resource |> Ash.Query.do_filter(rule.scope) |> Ash.read!(authorize?: false)
     now = opts[:now] || DateTime.utc_now()
-
-    diverging =
-      for record <- records, detail = divergence(rule, record, now), do: {record, detail}
-
-    {repaired, blocked, remaining} = settle(rule, diverging, opts[:apply])
+    {checked, diverging} = diverging(resource, rule, now)
+    {repaired, blocked, remaining} = settle(resource, rule, diverging, opts[:apply])
     state = state(remaining, blocked)
     emit_diverged(resource, rule, state, remaining)
 
@@ -118,15 +120,65 @@ defmodule Mana.Reconcile do
       rule: rule.name,
       describe: rule.describe,
       state: state,
-      checked: length(records),
+      checked: checked,
       repaired: length(repaired),
       diverging: for({record, detail} <- remaining, do: %{id: record.id, detail: detail})
     }
   end
 
-  defp settle(rule, diverging, apply?) do
+  # An expression `holds` is asked in the query: only the records failing it
+  # are read (and, for a timed rule, those with no timestamp to count from,
+  # which diverge whatever `holds` says), and the scope is only counted.
+  defp diverging(resource, rule, now) do
+    scope = Ash.Query.do_filter(resource, rule.scope)
+
+    if expression?(rule.holds) do
+      diverging =
+        scope
+        |> Ash.Query.do_filter(failing(rule, resource))
+        |> stream()
+        |> Enum.flat_map(&diverges(rule, &1, now, "does not hold"))
+
+      {Ash.count!(scope, authorize?: false), diverging}
+    else
+      {checked, diverging} =
+        scope
+        |> stream()
+        |> Enum.reduce({0, []}, fn record, {checked, diverging} ->
+          {checked + 1, Enum.reverse(diverges(rule, record, now, holds(rule, record)), diverging)}
+        end)
+
+      {checked, Enum.reverse(diverging)}
+    end
+  end
+
+  defp failing(%{holds: holds, within: nil}, _resource),
+    do: Ash.Expr.expr(is_nil(^holds) or not (^holds))
+
+  defp failing(%{holds: holds} = rule, resource) do
+    since = since(rule, struct(resource))
+
+    if Info.field(resource, since),
+      do: Ash.Expr.expr(is_nil(^holds) or not (^holds) or is_nil(^Ash.Expr.ref(since))),
+      else: true
+  end
+
+  defp diverges(rule, record, now, detail) do
+    case divergence(rule, record, now, detail) do
+      nil -> []
+      detail -> [{record, detail}]
+    end
+  end
+
+  # Ash streams by keyset pages when the primary read paginates (a default
+  # `:read` does) and reads the scope at once otherwise.
+  defp stream(query), do: Ash.stream!(query, authorize?: false, allow_stream_with: :full_read)
+
+  defp settle(resource, rule, diverging, apply?) do
     if apply? && rule.apply do
-      {repaired, blocked} = Enum.split_with(diverging, fn {record, _} -> repair(rule, record) end)
+      {repaired, blocked} =
+        Enum.split_with(diverging, fn {record, _} -> repair(resource, rule, record) end)
+
       {repaired, blocked, blocked}
     else
       {[], [], diverging}
@@ -147,20 +199,20 @@ defmodule Mana.Reconcile do
     })
   end
 
-  defp divergence(%{within: nil} = rule, record, _now), do: holds(rule, record)
+  # `detail` is why `holds` fails for the record, nil when it holds.
+  defp divergence(%{within: nil}, _record, _now, detail), do: detail
 
-  defp divergence(rule, record, now) do
+  defp divergence(rule, record, now, detail) do
     case age(rule, record, now) do
       nil ->
         "has no #{since(rule, record)} to count #{duration(window(rule, record))} from"
 
       seconds ->
-        overdue(rule, record, seconds)
+        overdue(rule, record, seconds, detail)
     end
   end
 
-  defp overdue(rule, record, seconds) do
-    detail = holds(rule, record)
+  defp overdue(rule, record, seconds, detail) do
     window = window(rule, record)
 
     if seconds > window and detail do
@@ -172,15 +224,40 @@ defmodule Mana.Reconcile do
   # A timed rule without `holds` is about leaving the scope in time.
   defp holds(%{holds: nil}, _record), do: "still in scope"
 
-  defp holds(rule, record) do
-    {module, function} = rule.holds
-
+  defp holds(%{holds: {module, function}}, record) when is_atom(module) and is_atom(function) do
     case apply(module, function, [record]) do
       true -> nil
       false -> "does not hold"
       {false, detail} -> detail
     end
   end
+
+  defp holds(%{holds: holds}, record) do
+    resource = record.__struct__
+
+    held =
+      case Ash.Expr.eval(holds,
+             record: record,
+             resource: resource,
+             unknown_on_unknown_refs?: true
+           ) do
+        {:ok, value} ->
+          value
+
+        _ ->
+          resource
+          |> Ash.Query.do_filter(Map.to_list(Map.take(record, Info.primary_key(resource))))
+          |> Ash.Query.do_filter(holds)
+          |> Ash.exists?(authorize?: false)
+      end
+
+    if held == true, do: nil, else: "does not hold"
+  end
+
+  @doc false
+  def expression?(nil), do: false
+  def expression?({module, function}) when is_atom(module) and is_atom(function), do: false
+  def expression?(_holds), do: true
 
   @doc false
   def window(%{within: {module, function}}, record) when is_atom(module) and is_atom(function),
@@ -216,13 +293,56 @@ defmodule Mana.Reconcile do
   defp duration(seconds) when seconds >= 60, do: "#{div(seconds, 60)}m"
   defp duration(seconds), do: "#{seconds}s"
 
-  defp repair(rule, record) do
+  # A repair refused by the domain (an Ash error answered or raised by the
+  # verbs it performs) leaves the record blocked; anything else is a crash the
+  # loop would hide, so it reaches the error reporter too. A repair that
+  # removed the record settled it.
+  defp repair(resource, rule, record) do
     {module, function} = rule.apply
     apply(module, function, [record])
-    {:ok, fresh} = Ash.get(record.__struct__, record.id, authorize?: false)
-    not in_scope?(rule, fresh) or is_nil(divergence(rule, fresh, DateTime.utc_now()))
+
+    case Ash.read_one(primary_key(resource, record), authorize?: false) do
+      {:ok, nil} ->
+        true
+
+      {:ok, fresh} ->
+        not in_scope?(rule, fresh) or
+          is_nil(divergence(rule, fresh, DateTime.utc_now(), holds(rule, fresh)))
+
+      {:error, error} ->
+        blocked(resource, rule, record, error)
+    end
   rescue
-    _ -> false
+    error -> blocked(resource, rule, record, Ash.Error.to_ash_error(error, __STACKTRACE__))
+  end
+
+  defp primary_key(resource, record),
+    do:
+      Ash.Query.do_filter(
+        resource,
+        Map.to_list(Map.take(record, Info.primary_key(resource)))
+      )
+
+  defp blocked(resource, rule, record, error) do
+    case Ash.Error.to_error_class(error) do
+      %class{} when class in [Ash.Error.Forbidden, Ash.Error.Invalid] ->
+        false
+
+      unknown ->
+        report(%{resource: resource, rule: rule.name, id: record.id}, unknown)
+        false
+    end
+  end
+
+  require Logger
+
+  # `config :mana_core, :error_reporter, {Mod, :fun}` (e.g. Sentry), called
+  # with what the failure happened to and the error; the log without one.
+  defp report(metadata, error) do
+    case Application.get_env(:mana_core, :error_reporter) do
+      {module, function} -> apply(module, function, [metadata, error])
+      nil -> Logger.error("#{inspect(metadata)}: #{Exception.format(:error, error)}")
+    end
   end
 
   # A repaired record may leave the rule's scope altogether (a lifted

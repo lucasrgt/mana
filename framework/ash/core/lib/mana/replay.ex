@@ -26,6 +26,8 @@ defmodule Mana.Replay do
   alias Ash.Domain.Info
   alias Mana.History
 
+  require Logger
+
   @ignored ["id", "inserted_at", "updated_at", "created_at"]
 
   @doc "The entries of a JSON-lines export."
@@ -152,11 +154,21 @@ defmodule Mana.Replay do
 
   # Without a transaction to roll back, the rebuilt record is removed.
   defp cleanup(record) do
-    unless Ash.DataLayer.data_layer_can?(record.__struct__, :transact) do
-      Ash.destroy(record, authorize?: false)
+    if Ash.DataLayer.data_layer_can?(record.__struct__, :transact),
+      do: :ok,
+      else: remove(record)
+  end
+
+  defp remove(record) do
+    case Ash.destroy(record, authorize?: false) do
+      {:error, error} ->
+        Logger.warning(
+          "Mana.Replay left a rebuilt #{inspect(record.__struct__)}: #{Exception.message(error)}"
+        )
+
+      _removed ->
+        :ok
     end
-  rescue
-    _ -> :ok
   end
 
   defp recorded(entries) do

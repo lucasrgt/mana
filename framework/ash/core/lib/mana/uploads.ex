@@ -33,10 +33,24 @@ defmodule Mana.Uploads do
 
   It adds the file's attributes (`owner_id`, `kind`, `content_type`,
   `size_bytes`, `storage_key`, `status`, timestamps) and the actions
-  `request_upload` (a signed upload for the actor), `confirm` (ready once
-  stored) and `mark_ready`. Who may call them stays in the resource's own
-  policies. Other resources bind these files with `Mana.Uploads.Attached`
-  and read them with `Mana.Uploads.Urls`.
+  `request_upload` (a signed upload for the actor), `confirm` (an update of
+  the file: ready once its object is in storage, a no-op once ready, and the
+  thumbnail job inserted in the same transaction) and `mark_ready`. Who may
+  call them stays in the resource's own policies, so `confirm` (and the
+  read that finds the file) needs one such as
+  `authorize_if expr(owner_id == ^actor(:id))`: nothing else stops one
+  person confirming another's upload. Other resources bind these files with
+  `Mana.Uploads.Attached` and read them with `Mana.Uploads.Urls`.
+
+  Destroying a file (any destroy action, `Mana.Privacy.erase/2` included)
+  deletes its object and thumbnail from storage only once the destroy
+  commits, so a destroy that rolls back keeps both. Where the app runs Oban
+  on the resource's repo (`Mana.Notifications.outbox?/1`), a job inserted
+  in the destroy's transaction (`discard_queue`) deletes them, with up to 20
+  attempts, and an object already gone counts as deleted. Without it,
+  they are deleted once the outermost transaction commits (an Ash notifier):
+  a bulk destroy then needs `notify?: true`, and a failure goes to the error
+  reporter, not back to the caller.
   """
   require Ash.Query
 
@@ -83,6 +97,11 @@ defmodule Mana.Uploads do
         type: :atom,
         default: :default,
         doc: "The Oban queue that makes thumbnails."
+      ],
+      discard_queue: [
+        type: :atom,
+        default: :default,
+        doc: "The Oban queue that deletes a destroyed file's objects."
       ]
     ]
   }
@@ -102,6 +121,9 @@ defmodule Mana.Uploads do
 
   def thumbnail_queue(resource),
     do: Extension.get_opt(resource, [:uploads], :thumbnail_queue, :default)
+
+  def discard_queue(resource),
+    do: Extension.get_opt(resource, [:uploads], :discard_queue, :default)
 
   @doc "The file ids a record or changeset holds in `attributes`, in order, each once."
   def ids(%Ash.Changeset{} = changeset, attributes),
@@ -197,8 +219,19 @@ defmodule Mana.Uploads.Transformer do
   def transform(dsl) do
     case Transformer.get_entities(dsl, [:uploads]) do
       [] -> {:ok, dsl}
-      kinds -> build(dsl, kinds)
+      kinds -> with {:ok, dsl} <- build(dsl, kinds), do: discard(dsl)
     end
+  end
+
+  defp discard(dsl) do
+    notifiers = Transformer.get_persisted(dsl, :simple_notifiers, [])
+
+    dsl
+    |> Transformer.persist(
+      :simple_notifiers,
+      Enum.uniq(notifiers ++ [Mana.Uploads.Discard.Notifier])
+    )
+    |> Builder.add_change(Mana.Uploads.Discard, on: [:destroy])
   end
 
   defp build(dsl, kinds) do
@@ -285,22 +318,11 @@ defmodule Mana.Uploads.Transformer do
              constraints: [fields: ticket],
              arguments: [kind_arg, type_arg, size_arg],
              run: {Mana.Uploads.Request, []}
-           ),
-         {:ok, id_arg} <- Builder.build_action_argument(:id, :uuid, allow_nil?: false) do
-      Builder.add_new_action(dsl, :action, :confirm,
-        returns: :map,
-        constraints: [
-          fields: [
-            asset_id: [type: :uuid, allow_nil?: false],
-            status: [
-              type: :atom,
-              allow_nil?: false,
-              constraints: [one_of: [:uploading, :ready]]
-            ]
-          ]
-        ],
-        arguments: [id_arg],
-        run: {Mana.Uploads.Confirm, []}
+           ) do
+      Builder.add_new_action(dsl, :update, :confirm,
+        accept: [],
+        require_atomic?: false,
+        changes: [Builder.build_action_change(Mana.Uploads.Confirm)]
       )
     end
   end
@@ -357,31 +379,36 @@ defmodule Mana.Uploads.Request do
 end
 
 defmodule Mana.Uploads.Confirm do
-  @moduledoc "Ready only once the object exists in storage; confirming again is a no-op."
-  use Ash.Resource.Actions.Implementation
-  require Ash.Query
+  @moduledoc """
+  Ready only once the object exists in storage; confirming a ready file
+  changes nothing. Storage is asked before the transaction opens, so no lock
+  waits on it; the thumbnail job is inserted in the transaction, so a confirm
+  that rolls back leaves none, and one that cannot insert it fails.
+  """
+  use Ash.Resource.Change
   alias Mana.Uploads.Thumbnail
 
   @impl true
-  def run(input, _, %{actor: actor}) do
-    input.resource
-    |> Ash.Query.filter(id == ^input.arguments.id and owner_id == ^actor.id)
-    |> Ash.read_one!(authorize?: false)
-    |> case do
-      nil ->
-        {:error, Mana.Uploads.error(:not_found)}
+  def change(%{data: %{status: :ready}} = changeset, _opts, _context), do: changeset
 
-      %{status: :ready} = file ->
-        {:ok, %{asset_id: file.id, status: :ready}}
+  def change(changeset, _opts, _context) do
+    changeset
+    |> Ash.Changeset.before_transaction(&stored/1)
+    |> Ash.Changeset.force_change_attribute(:status, :ready)
+    |> Ash.Changeset.after_action(&thumbnail/2)
+  end
 
-      file ->
-        if Mana.Storage.exists?(file.storage_key) do
-          ready = Ash.update!(file, %{}, action: :mark_ready, authorize?: false)
-          Thumbnail.enqueue(input.resource, ready)
-          {:ok, %{asset_id: ready.id, status: ready.status}}
-        else
-          {:error, Mana.Uploads.error(:not_uploaded)}
-        end
+  defp stored(changeset) do
+    if Mana.Storage.exists?(changeset.data.storage_key),
+      do: changeset,
+      else: Ash.Changeset.add_error(changeset, Mana.Uploads.error(:not_uploaded))
+  end
+
+  defp thumbnail(changeset, file) do
+    case Thumbnail.enqueue(changeset.resource, file) do
+      :skip -> {:ok, file}
+      {:ok, _job} -> {:ok, file}
+      {:error, error} -> {:error, error}
     end
   end
 end
@@ -543,13 +570,27 @@ defmodule Mana.Uploads.Thumbnail do
   def make(resource, file, size) do
     with {:ok, original} <- Mana.Storage.get(file.storage_key),
          {:ok, jpeg} <- resize(original, size),
-         key = file.storage_key <> ".thumb.jpg",
+         key = key(file.storage_key),
          :ok <- Mana.Storage.put(key, jpeg, "image/jpeg") do
-      Ash.update(file, %{thumbnail_key: key},
-        action: :attach_thumbnail,
-        authorize?: false,
-        domain: Info.domain(resource)
-      )
+      attach(resource, file, key)
+    end
+  end
+
+  @doc false
+  def key(storage_key), do: storage_key <> ".thumb.jpg"
+
+  # The file may be destroyed while its thumbnail is made, its objects
+  # already discarded: the JPEG stored after that would outlive it. A failed
+  # attach takes the JPEG back; a retried job makes it again.
+  defp attach(resource, file, key) do
+    with {:error, _} = error <-
+           Ash.update(file, %{thumbnail_key: key},
+             action: :attach_thumbnail,
+             authorize?: false,
+             domain: Info.domain(resource)
+           ) do
+      _ = Mana.Storage.delete(key)
+      error
     end
   end
 
@@ -582,5 +623,110 @@ if Code.ensure_loaded?(Oban.Worker) do
           :ok
       end
     end
+  end
+end
+
+defmodule Mana.Uploads.Discard do
+  @moduledoc false
+  # A file's objects go only once its destroy commits: deleted first, a
+  # destroy that rolls back would keep rows naming objects that are gone.
+  # The outbox's job is inserted here, inside the destroy's transaction, so
+  # it commits or rolls back with the row; without the outbox
+  # `Mana.Uploads.Discard.Notifier` deletes them after the commit.
+  use Ash.Resource.Change
+
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [Mana.Uploads.Discard.Worker, Oban]}
+  alias Mana.Uploads.Discard.Worker
+  alias Mana.Uploads.Thumbnail
+
+  # Whether the job goes is decided once, here, and kept in the changeset's
+  # context for the notifier: a destroy's notification carries the record as
+  # it was before the after_action hooks, so their metadata never reaches it.
+  @impl true
+  def change(changeset, _opts, _context) do
+    if Mana.Notifications.outbox?(changeset.resource),
+      do:
+        changeset
+        |> Ash.Changeset.set_context(%{mana_discard: :queued})
+        |> Ash.Changeset.after_action(&queue/2),
+      else: changeset
+  end
+
+  @impl true
+  def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
+
+  @doc false
+  def queued?(%Ash.Changeset{context: %{mana_discard: :queued}}), do: true
+  def queued?(_changeset), do: false
+
+  defp queue(changeset, file) do
+    %{"keys" => keys(file)}
+    |> Worker.new(queue: Mana.Uploads.discard_queue(changeset.resource))
+    |> Oban.insert()
+    |> case do
+      {:ok, _job} -> {:ok, file}
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  # The thumbnail's key is asked for even when the row names none: its job
+  # may have stored the JPEG without attaching it yet.
+  @doc false
+  def keys(file),
+    do:
+      [file.storage_key, file.thumbnail_key, Thumbnail.key(file.storage_key)]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+  @doc false
+  def delete(keys) do
+    case for(key <- keys, {:error, reason} <- [Mana.Storage.delete(key)], do: {key, reason}) do
+      [] -> :ok
+      failed -> {:error, failed}
+    end
+  end
+end
+
+defmodule Mana.Uploads.Discard.Notifier do
+  @moduledoc false
+  # Without the outbox: an Ash notifier runs once the outermost transaction
+  # commits and never for one that rolls back. The caller's destroy already
+  # committed, so a storage failure is reported rather than raised.
+  use Ash.Notifier
+  alias Mana.Uploads.Discard
+  alias Mana.Verbs.Report
+
+  @impl true
+  def notify(%Ash.Notifier.Notification{
+        resource: resource,
+        action: %{type: :destroy},
+        changeset: changeset,
+        data: file
+      }) do
+    with false <- Discard.queued?(changeset),
+         {:error, failed} <- Discard.delete(Discard.keys(file)) do
+      Report.error(
+        RuntimeError.exception("stored objects not deleted: #{inspect(failed)}"),
+        %{resource: resource, id: file.id}
+      )
+    end
+
+    :ok
+  end
+
+  def notify(_notification), do: :ok
+end
+
+if Code.ensure_loaded?(Oban.Worker) do
+  defmodule Mana.Uploads.Discard.Worker do
+    @moduledoc false
+    # Storage adapters answer `:ok` for a key already gone, so a job that
+    # deleted some keys before failing deletes only the rest on its retry.
+    use Oban.Worker, max_attempts: 20
+    alias Mana.Uploads.Discard
+
+    @impl Oban.Worker
+    def perform(%Oban.Job{args: %{"keys" => keys}}), do: Discard.delete(keys)
   end
 end

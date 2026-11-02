@@ -38,7 +38,17 @@ defmodule Mana.Knobs do
   (development and tests); elsewhere the header is ignored. A Moment's
   recipe puts the id in its launch as `knobScope`, and the Moments runtime
   sends it with every request of that run.
+
+  ## The cache
+
+  Each node keeps the shared values it read for `knob_ttl_ms` (5 000), so a
+  change made on another node shows here within that time; one made here
+  shows at once. Start `Mana.Knobs.Cache` in the application's supervision
+  tree: reading or changing a knob raises while it is not running. Scoped
+  values are always read from the store.
   """
+
+  alias Mana.Knobs.Cache
 
   defmacro __using__(opts) do
     quote do
@@ -179,21 +189,13 @@ defmodule Mana.Knobs do
 
   # Read from the store at most every `knob_ttl_ms` (5 s) per node, so a
   # change made on one machine reaches the others without a broadcast.
-  defp shared(module, name) do
-    key = {__MODULE__, module, name}
-    now = System.monotonic_time(:millisecond)
-    ttl = Application.get_env(:mana_core, :knob_ttl_ms, 5_000)
-
-    case :persistent_term.get(key, :unset) do
-      {value, at} when now - at < ttl ->
-        value
-
-      _ ->
-        value = row(module, to_string(name))
-        :persistent_term.put(key, {value, now})
-        value
-    end
-  end
+  defp shared(module, name),
+    do:
+      Cache.fetch(
+        {module, name},
+        Application.get_env(:mana_core, :knob_ttl_ms, 5_000),
+        fn -> row(module, to_string(name)) end
+      )
 
   @doc "The knob's value: the stored one, or its default."
   def get(module, name) do
@@ -242,7 +244,7 @@ defmodule Mana.Knobs do
         )
         |> Ash.create(authorize?: false)
 
-      :persistent_term.erase({__MODULE__, module, name})
+      Cache.forget({module, name})
       result
     end
   end
@@ -258,7 +260,7 @@ defmodule Mana.Knobs do
            ),
          do: Ash.destroy!(row, authorize?: false)
 
-    :persistent_term.erase({__MODULE__, module, name})
+    Cache.forget({module, name})
     :ok
   end
 

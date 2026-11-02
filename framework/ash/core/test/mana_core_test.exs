@@ -850,6 +850,8 @@ defmodule ManaCoreTest do
   setup_all do
     Application.put_env(:mana_core, :knobs, ManaCoreTest.Knobs)
     Application.put_env(:mana_core, :knob_ttl_ms, 0)
+    start_supervised!(Mana.Knobs.Cache)
+    start_supervised!(Mana.Notifications.Groups)
     ManaCoreTest.Limiter.start()
     Application.put_env(:mana_core, :limiter, ManaCoreTest.Limiter)
     :ok

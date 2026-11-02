@@ -25,6 +25,8 @@ defmodule Mana.Examples do
 
   alias Mana.Intervene.Rules
 
+  require Logger
+
   @compile {:no_warn_undefined, [Moments.ActionTrace]}
 
   defmacro __using__(_opts) do
@@ -93,7 +95,14 @@ defmodule Mana.Examples do
 
     :ok
   rescue
-    _ -> :ok
+    # Recording is a side channel: it never changes what the call returns.
+    error ->
+      Logger.warning(
+        "Mana.Examples did not record #{inspect(module)}.#{name}/#{arity}: " <>
+          Exception.message(error)
+      )
+
+      :ok
   end
 
   @doc "A value as an example shows it: structs by name and the fields that hold something, shortened."

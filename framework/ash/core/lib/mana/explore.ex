@@ -48,6 +48,7 @@ defmodule Mana.Explore do
   `reset:` (a function), e.g. a fresh `Mana.Snapshot` scope per run.
   """
   require Ash.Query
+  require Logger
 
   alias Ash.DataLayer.Ets
   alias Spark.Dsl.Extension
@@ -430,7 +431,7 @@ defmodule Mana.Explore do
     |> Ash.read!(authorize?: false)
     |> then(&if(sort, do: &1, else: Enum.sort_by(&1, fn r -> to_string(r.id) end)))
   rescue
-    _ -> []
+    error -> skipped("reading #{inspect(resource)}", error, [])
   end
 
   defp ref_of(state, resource, id),
@@ -602,13 +603,13 @@ defmodule Mana.Explore do
   defp safe_offered(record, actor) do
     Mana.Verbs.offered(record, actor)
   rescue
-    _ -> []
+    error -> skipped("the verbs offered on #{inspect(record.__struct__)}", error, [])
   end
 
   defp safe_available(domains, actor) do
     Mana.Verbs.available(domains, actor)
   rescue
-    _ -> []
+    error -> skipped("the verbs available", error, [])
   end
 
   defp pick(state, list) do
@@ -663,7 +664,7 @@ defmodule Mana.Explore do
         |> StreamData.seeded(seed)
         |> Enum.at(0)
       rescue
-        _ -> %{}
+        error -> skipped("generating input for #{inspect(resource)}.#{action.name}", error, %{})
       end
 
     {Map.merge(generated, fixed), %{state | rand: rand}}
@@ -1086,7 +1087,7 @@ defmodule Mana.Explore do
       _ -> false
     end
   rescue
-    _ -> false
+    error -> skipped("a deadline of #{inspect(record.__struct__)}", error, false)
   end
 
   # ---------------------------------------------------------------------------
@@ -1137,7 +1138,7 @@ defmodule Mana.Explore do
   defp observe_rule(resource, rule, now) do
     Mana.Reconcile.observe(resource, now: now) |> Enum.filter(&(&1.rule == rule.name))
   rescue
-    _ -> []
+    error -> skipped("rule #{rule.name} of #{inspect(resource)}", error, [])
   end
 
   defp check_deadlock(state, ctx) do
@@ -1272,9 +1273,16 @@ defmodule Mana.Explore do
   end
 
   defp destroy_quietly(record) do
-    Ash.destroy!(record, authorize?: false)
-  rescue
-    _ -> :ok
+    case Ash.destroy(record, authorize?: false) do
+      {:error, error} -> skipped("removing a rebuilt #{inspect(record.__struct__)}", error, :ok)
+      _removed -> :ok
+    end
+  end
+
+  # Exploration goes on past a part it cannot run, and says which one and why.
+  defp skipped(what, error, default) do
+    Logger.warning("Mana.Explore skipped #{what}: #{Exception.message(error)}")
+    default
   end
 
   defp clock_value?(%DateTime{}), do: true
@@ -1621,7 +1629,7 @@ defmodule Mana.Explore do
     base = %{kind: kind}
 
     base
-    |> put_some(:actor, json["actor"] && String.to_atom(json["actor"]))
+    |> put_some(:actor, json["actor"] && String.to_existing_atom(json["actor"]))
     |> put_some(:verb, json["verb"] && String.to_existing_atom(json["verb"]))
     |> put_some(:ref, ref_from_json(json["ref"]))
     |> put_some(:resource, json["resource"] && module(json["resource"]))
@@ -1646,7 +1654,7 @@ defmodule Mana.Explore do
   defp ref_from_json(_), do: nil
 
   defp param_from_json(%{"ref" => [resource, index]}), do: {:ref, module(resource), index}
-  defp param_from_json(%{"actor" => name}), do: {:actor, String.to_atom(name)}
+  defp param_from_json(%{"actor" => name}), do: {:actor, String.to_existing_atom(name)}
   defp param_from_json(value), do: value
 
   defp module(name),

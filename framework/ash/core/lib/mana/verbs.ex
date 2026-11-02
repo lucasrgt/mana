@@ -58,7 +58,10 @@ defmodule Mana.Verbs do
   # Optional dependencies, called only when the app has them.
   @compile {:no_warn_undefined, [AshJsonApi.Domain.Info]}
 
+  alias Ash.Query.Calculation
+  alias Ash.Resource.Calculation.Expression
   alias Ash.Type.NewType
+  alias Mana.Verbs.Report
   alias Spark.Dsl.Extension
 
   @verb %Spark.Dsl.Entity{
@@ -176,15 +179,21 @@ defmodule Mana.Verbs do
   def action(%Mana.Verbs.Verb{action: nil, name: name}), do: name
   def action(%Mana.Verbs.Verb{action: action}), do: action
 
-  @doc "The names of the verbs `record` offers `actor` now, its children's collection verbs as `type.verb`."
+  @doc """
+  The names of the verbs `record` offers `actor` now, its children's
+  collection verbs as `type.verb`. A `when` that cannot be decided from the
+  record in memory is asked of the stored row; reading the `verbs`
+  calculation instead answers every one in the read's own query.
+  """
   def offered(record, actor, opts \\ []) do
     resource = record.__struct__
+    stored = if opts[:loaded], do: &loaded(record, &1), else: fn _key -> :error end
 
     own =
       for verb <- declared(resource),
           not verb.collection,
           knob_on?(verb, actor),
-          holds?(verb, record, resource, actor),
+          holds?(verb, record, resource, actor, stored.(when_calculation(verb))),
           flow_allows?(resource, record, verb),
           allowed?(verb, record, actor, opts),
           do: to_string(verb.name)
@@ -192,11 +201,67 @@ defmodule Mana.Verbs do
     related =
       for {child, verb} <- children(resource),
           knob_on?(verb, actor),
-          holds?(verb, record, resource, actor),
+          holds?(verb, record, resource, actor, stored.(child_calculation(child, verb))),
           can_create?(child, verb, %{elem(verb.from, 1) => record.id}, actor),
           do: "#{Mana.Entity.type(child)}.#{verb.name}"
 
     own ++ related
+  end
+
+  @doc false
+  # The private boolean calculation the transformer declares for each verb
+  # whose `when` is an expression over its own record.
+  def when_calculation(%{name: name}), do: :"__mana_when_#{name}"
+
+  defp child_calculation(child, verb), do: {__MODULE__, child, verb.name}
+
+  @doc false
+  # What `Mana.Verbs.Offered` loads with the records: each verb's `when` as a
+  # boolean computed by the data layer in the read itself. A child's `when`
+  # is an expression over this record, but the child is found only at
+  # runtime, so its calculation is built here rather than declared.
+  def when_loads(resource) do
+    own =
+      for verb <- declared(resource),
+          not verb.collection,
+          expression?(verb.when),
+          do: when_calculation(verb)
+
+    related =
+      for {child, verb} <- children(resource), expression?(verb.when) do
+        {:ok, calculation} =
+          Calculation.new(
+            child_calculation(child, verb),
+            Expression,
+            [expr: verb.when],
+            :boolean,
+            []
+          )
+
+        calculation
+      end
+
+    own ++ related
+  end
+
+  @doc false
+  def expression?(nil), do: false
+  def expression?({module, function}) when is_atom(module) and is_atom(function), do: false
+  def expression?(_expression), do: true
+
+  defp loaded(record, {__MODULE__, _child, _name} = key) do
+    case record.calculations do
+      %{^key => value} -> {:ok, value}
+      _ -> :error
+    end
+  end
+
+  defp loaded(record, name) do
+    case record do
+      %{^name => %Ash.NotLoaded{}} -> :error
+      %{^name => value} -> {:ok, value}
+      _ -> :error
+    end
   end
 
   @doc "The record-less collection verbs `actor` may perform now across `domains`, as `type.verb`."
@@ -273,15 +338,51 @@ defmodule Mana.Verbs do
   defp precondition?(%{when: {module, function}}, actor),
     do: apply(module, function, [actor]) == true
 
-  defp can_create?(resource, verb, input, actor) do
-    Ash.can?({resource, action(verb), input}, actor,
-      run_queries?: false,
-      maybe_is: false,
-      return_forbidden_error?: false
-    )
+  # The changeset `Ash.can` builds for the offer would run the verb gates
+  # again: the offer has decided `when` already, and the gates would ask the
+  # stored row (or fetch the parent) once more per record.
+  @offer_check :mana_verbs_offer_check
+
+  @doc false
+  def offer_check?(changeset), do: changeset.context[@offer_check] == true
+
+  defp can_create?(resource, verb, input, actor),
+    do: can({resource, action(verb), input}, actor, [], verb)
+
+  # `run_queries?: false`: a policy that would need a query is answered no,
+  # so the offer never costs a query per record. A refusal (forbidden, or an
+  # input the action rejects) means not offered. Anything else, returned or
+  # raised while Ash builds the changeset without the verb's input (a change
+  # that crashes on a missing argument), is a bug the offer would hide: it
+  # goes to the error reporter, and the verb is still not offered.
+  defp can(subject, actor, opts, verb) do
+    opts = [run_queries?: false, maybe_is: false, context: %{@offer_check => true}] ++ opts
+
+    case Ash.can(subject, actor, opts) do
+      {:ok, true} -> true
+      {:ok, true, _} -> true
+      {:ok, _} -> false
+      {:ok, false, _} -> false
+      {:error, error} -> refused_or_reported(error, subject, verb)
+    end
   rescue
-    _ -> false
+    error in [Ash.Error.Forbidden, Ash.Error.Invalid, Ash.Error.Unknown, Ash.Error.Framework] ->
+      refused_or_reported(error, subject, verb)
   end
+
+  defp refused_or_reported(error, subject, verb) do
+    case Ash.Error.to_error_class(error) do
+      %class{} when class in [Ash.Error.Forbidden, Ash.Error.Invalid] ->
+        false
+
+      error ->
+        Report.error(error, %{verb: verb.name, subject: subject_name(subject)})
+        false
+    end
+  end
+
+  defp subject_name({%resource{}, action}), do: {resource, action}
+  defp subject_name({resource, action, _input}), do: {resource, action}
 
   @doc false
   # The collection verbs other resources of the app declare `from` this one.
@@ -323,13 +424,15 @@ defmodule Mana.Verbs do
       (is_nil(knobs) or is_nil(verb.feature) or Mana.Knobs.feature_on?(knobs, verb.feature, actor))
   end
 
-  defp holds?(%{when: nil}, _record, _resource, _actor), do: true
+  defp holds?(verb, record, resource, actor, stored \\ :error)
 
-  defp holds?(%{when: {module, function}}, record, _resource, actor),
+  defp holds?(%{when: nil}, _record, _resource, _actor, _stored), do: true
+
+  defp holds?(%{when: {module, function}}, record, _resource, actor, _stored),
     do: apply(module, function, [record, actor]) == true
 
-  defp holds?(%{when: expression}, record, resource, actor),
-    do: decide(expression, record, resource, actor) == {:ok, true}
+  defp holds?(%{when: expression}, record, resource, actor, stored),
+    do: decide(expression, record, resource, actor, stored) == {:ok, true}
 
   @doc false
   def condition(expression, actor), do: Ash.Expr.fill_template(expression, actor: actor)
@@ -339,7 +442,11 @@ defmodule Mana.Verbs do
   loaded, otherwise (an aggregate, a related calculation) asked of the stored
   row by its primary key.
   """
-  def decide(expression, record, resource, actor) do
+  def decide(expression, record, resource, actor),
+    do: decide(expression, record, resource, actor, :error)
+
+  # `{:ok, value}` in `stored` is the stored row's answer, already loaded.
+  defp decide(expression, record, resource, actor, stored) do
     condition = condition(expression, actor)
 
     case Ash.Expr.eval(condition,
@@ -348,6 +455,7 @@ defmodule Mana.Verbs do
            unknown_on_unknown_refs?: true
          ) do
       {:ok, value} -> {:ok, value}
+      _ when stored != :error -> stored
       _ -> stored(condition, record, resource)
     end
   end
@@ -372,16 +480,8 @@ defmodule Mana.Verbs do
   defp flow_allows?(resource, record, verb),
     do: Mana.Flow not in Spark.extensions(resource) or Mana.Flow.may_run?(record, action(verb))
 
-  defp allowed?(verb, record, actor, opts) do
-    Ash.can?({record, action(verb)}, actor,
-      run_queries?: false,
-      maybe_is: false,
-      tenant: opts[:tenant],
-      return_forbidden_error?: false
-    )
-  rescue
-    _ -> false
-  end
+  defp allowed?(verb, record, actor, opts),
+    do: can({record, action(verb)}, actor, [tenant: opts[:tenant]], verb)
 
   @doc """
   Performs `steps` (`{record, verb, params}`) in order as `actor`. When one
@@ -391,10 +491,15 @@ defmodule Mana.Verbs do
 
   `rolled_back: true` is for a run inside a transaction the caller rolls
   back (`Mana.Checkpoint.dry_run/2`): the steps' Ash notifications are taken
-  and dropped with it, since nothing they announce will have happened.
+  and dropped with it, since nothing they announce will have happened, and
+  a step refused there does not roll that transaction back under the steps
+  after it, so the run still reports which failed and what was compensated.
   """
   def run_all(steps, actor, opts \\ []) do
-    update = if opts[:rolled_back], do: [return_notifications?: true], else: []
+    update =
+      if opts[:rolled_back],
+        do: [return_notifications?: true, rollback_on_error?: false],
+        else: []
 
     case perform(steps, actor, update) do
       {:failed, index, error, done} ->
@@ -658,13 +763,7 @@ defmodule Mana.Verbs do
   end
 
   defp br_format?(type),
-    do: function_exported?(type, :format, 0) and match?("br-" <> _, safe_format(type))
-
-  defp safe_format(type) do
-    type.format()
-  rescue
-    _ -> nil
-  end
+    do: function_exported?(type, :format, 0) and match?("br-" <> _, type.format())
 
   defp match_source(%Regex{source: source}), do: source
   defp match_source({m, f, a}), do: match_source(apply(m, f, a))
@@ -682,8 +781,36 @@ defmodule Mana.Verbs.Offered do
   use Ash.Resource.Calculation
 
   @impl true
+  def load(query, _opts, _context), do: Mana.Verbs.when_loads(query.resource)
+
+  # The loaded `when` values were computed for this same actor, so they are
+  # trusted here and only here.
+  @impl true
   def calculate(records, _opts, context) do
-    Enum.map(records, &Mana.Verbs.offered(&1, context.actor, tenant: context.tenant))
+    Enum.map(
+      records,
+      &Mana.Verbs.offered(&1, context.actor, tenant: context.tenant, loaded: true)
+    )
+  end
+end
+
+defmodule Mana.Verbs.Report do
+  @moduledoc false
+  # A failure no one decided (a crashing policy, a broken action) goes to the
+  # app's error reporter (`config :mana_core, :error_reporter, {Mod, :fun}`,
+  # called with what it happened to and the error), or the log without one.
+  require Logger
+
+  def error(error, metadata) do
+    case Application.get_env(:mana_core, :error_reporter) do
+      {module, function} ->
+        apply(module, function, [metadata, error])
+
+      nil ->
+        Logger.error("#{inspect(metadata)}: #{Exception.format(:error, error)}")
+    end
+
+    :ok
   end
 end
 
@@ -730,6 +857,7 @@ defmodule Mana.Verbs.Transformer do
 
       verbs ->
         with {:ok, dsl} <- add_offered(dsl),
+             {:ok, dsl} <- add_whens(dsl, verbs),
              {:ok, dsl} <- gate_knobs(dsl, verbs),
              {:ok, dsl} <- gate_collections(dsl, verbs) do
           gate_when(dsl, verbs)
@@ -745,6 +873,27 @@ defmodule Mana.Verbs.Transformer do
       description: "The verbs this record offers the actor now."
     )
   end
+
+  defp add_whens(dsl, verbs) do
+    verbs
+    |> Enum.filter(&(not &1.collection and Mana.Verbs.expression?(&1.when)))
+    |> Enum.reduce_while({:ok, dsl}, fn verb, {:ok, dsl} ->
+      case add_when(dsl, verb) do
+        {:ok, dsl} -> {:cont, {:ok, dsl}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp add_when(dsl, verb),
+    do:
+      Builder.add_new_calculation(
+        dsl,
+        Mana.Verbs.when_calculation(verb),
+        :boolean,
+        verb.when,
+        public?: false
+      )
 
   defp gate_knobs(dsl, verbs) do
     if Enum.any?(verbs, &(&1.knob || &1.feature)),
@@ -770,7 +919,11 @@ defmodule Mana.Verbs.Transformer do
   end
 
   defp gate_when(dsl, verbs) do
-    case for(verb <- verbs, verb.when && not verb.collection, do: Mana.Verbs.action(verb)) do
+    case for(
+           verb <- verbs,
+           not is_nil(verb.when) and not verb.collection and not verb.idempotent,
+           do: Mana.Verbs.action(verb)
+         ) do
       [] -> {:ok, dsl}
       rechecked -> recheck(dsl, rechecked)
     end
@@ -870,7 +1023,7 @@ defmodule Mana.Verbs.WhenGate do
   @impl true
   def validate(changeset, _opts, context) do
     with %{} = verb <- verb(changeset),
-         true <- changeset.valid?,
+         true <- changeset.valid? and not Mana.Verbs.offer_check?(changeset),
          {:ok, held} when held in [false, nil] <-
            Mana.Verbs.decide(verb.when, changeset.data, changeset.resource, context.actor) do
       {:error, unavailable(changeset.resource, verb)}
@@ -939,9 +1092,7 @@ defmodule Mana.Verbs.Recheck do
   end
 
   defp locked_recheck(changeset, verb, record, repo, actor) do
-    repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [
-      "#{Mana.Entity.type(changeset.resource)}:#{record.id}"
-    ])
+    Mana.Lock.record(repo, "#{Mana.Entity.type(changeset.resource)}:#{record.id}")
 
     holds? =
       changeset.resource
@@ -987,7 +1138,7 @@ defmodule Mana.Verbs.CollectionGate do
       verb ->
         input = Map.merge(changeset.attributes, changeset.arguments)
 
-        if not changeset.valid? or
+        if not changeset.valid? or Mana.Verbs.offer_check?(changeset) or
              Mana.Verbs.collection_holds?(changeset.resource, verb, context.actor, input),
            do: :ok,
            else: {:error, Mana.Verbs.refusal(changeset.resource, verb, context.actor, input)}

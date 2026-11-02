@@ -6,6 +6,7 @@ defmodule Mana.Privacy do
   erased last.
   """
   require Ash.Query
+  alias Mana.History.Log
 
   @doc "`%{\"vehicle_registration\" => [%{plate: ..}], ..}` for `subject_id`."
   def export(domains, subject_id) do
@@ -26,15 +27,28 @@ defmodule Mana.Privacy do
   @doc """
   Detaches the subject's rows of every `erase :detach` resource (their
   `detach` action), then deletes the rows of every `erase :delete` one;
-  `:keep` ones stay. A `Mana.Uploads` resource loses its stored objects (and thumbnails)
-  before its rows, so a storage failure stops the erasure with the rows still
-  pointing at what remains. `Mana.History` follows: the entries of the deleted
-  records go with them, and the entries of records that stay (the other
-  party's booking, a review) keep what happened but no longer say the subject
-  did it (`actor_id` cleared, `via: "erased"`).
+  `:keep` ones stay. A `Mana.Uploads` resource's stored objects (and
+  thumbnails) are deleted only once the destroy of their rows commits (see
+  `Mana.Uploads`): an erasure that rolls back keeps them, and one that
+  commits leaves them to a retried job (or, without Oban, to a notifier).
+  `Mana.History` follows: the entries of the deleted
+  records go with them, and the entries of records that stay (the subject's
+  kept or detached rows, and whatever the subject did to others' records)
+  keep what happened but no longer say the subject did it (`actor_id`
+  cleared, `via: "erased"`) nor what the subject's personal fields held:
+  every field the entry's resource declares personal (`privacy` `export`,
+  `history` `redact`) reads `"[erased]"` in its `params`, `before` and
+  `after`. The erasure's own changes notify like any other action
+  (`Mana.Entity` announcements, history telemetry).
   """
   def erase(domains, subject_id) do
     all = resources(domains)
+
+    kept =
+      for resource <- all,
+          ids = kept_subjects(resource, subject_id),
+          into: %{},
+          do: {resource, ids}
 
     for resource <- all, Mana.Resource.Info.privacy_erase!(resource) == :detach do
       resource
@@ -42,6 +56,7 @@ defmodule Mana.Privacy do
       |> Ash.bulk_update!(:detach, %{},
         authorize?: false,
         strategy: [:stream],
+        notify?: true,
         return_errors?: true
       )
     end
@@ -52,7 +67,6 @@ defmodule Mana.Privacy do
     erasable
     |> Enum.sort_by(&identity?/1)
     |> Enum.each(fn resource ->
-      if Mana.Uploads in Spark.extensions(resource), do: delete_objects(resource, subject_id)
       action = Ash.Resource.Info.primary_action!(resource, :destroy)
 
       resource
@@ -60,11 +74,21 @@ defmodule Mana.Privacy do
       |> Ash.bulk_destroy!(action.name, %{},
         authorize?: false,
         strategy: [:atomic, :atomic_batches, :stream],
+        notify?: true,
         return_errors?: true
       )
     end)
 
-    forget_history(domains, subject_id, erased)
+    forget_history(domains, subject_id, erased, kept)
+  end
+
+  # Read before `detach` cuts the rows from the subject.
+  defp kept_subjects(resource, subject_id) do
+    if Mana.Resource.Info.privacy_erase!(resource) != :delete and
+         Mana.History in Spark.extensions(resource) do
+      for row <- resource |> by_subject(subject_id) |> Ash.read!(authorize?: false),
+          do: to_string(row.id)
+    end
   end
 
   defp erased_subjects(resource, subject_id) do
@@ -78,10 +102,10 @@ defmodule Mana.Privacy do
     end
   end
 
-  defp forget_history(domains, subject_id, erased) do
+  defp forget_history(domains, subject_id, erased, kept) do
     for domain <- domains,
         log <- Ash.Domain.Info.resources(domain),
-        Mana.History.Log in Spark.extensions(log) do
+        Log in Spark.extensions(log) do
       erased
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
       |> Enum.each(fn {type, ids} ->
@@ -93,6 +117,8 @@ defmodule Mana.Privacy do
           return_errors?: true
         )
       end)
+
+      scrub(log, subject_id, kept)
 
       log
       |> Ash.Query.filter(actor_id == ^subject_id)
@@ -106,27 +132,46 @@ defmodule Mana.Privacy do
     :ok
   end
 
-  defp delete_objects(resource, subject_id) do
-    resource
-    |> by_subject(subject_id)
-    |> Ash.read!(authorize?: false)
-    |> Enum.flat_map(&[&1.storage_key, &1.thumbnail_key])
-    |> Enum.reject(&is_nil/1)
-    |> Enum.each(fn key ->
-      case Mana.Storage.delete(key) do
-        :ok -> :ok
-        {:error, reason} -> raise "could not delete stored object #{key}: #{inspect(reason)}"
-      end
-    end)
+  defp scrub(log, subject_id, kept) do
+    for subject <- Log.subjects(log),
+        fields = personal(subject),
+        fields != [] do
+      type = Mana.Entity.type(subject)
+      ids = Map.get(kept, subject, [])
+
+      log
+      |> Ash.Query.filter(
+        subject_type == ^type and (subject_id in ^ids or actor_id == ^subject_id)
+      )
+      |> Ash.bulk_update!(:scrub, %{fields: fields},
+        authorize?: false,
+        strategy: [:stream],
+        allow_stream_with: :full_read,
+        return_errors?: true
+      )
+    end
+  end
+
+  defp personal(resource) do
+    exported = if privacy?(resource), do: Mana.Resource.Info.privacy_export!(resource), else: []
+
+    redacted =
+      if Mana.History in Spark.extensions(resource), do: Mana.History.redact(resource), else: []
+
+    exported |> Enum.concat(redacted) |> Enum.uniq() |> Enum.map(&to_string/1)
   end
 
   defp resources(domains) do
     for domain <- domains,
         resource <- Ash.Domain.Info.resources(domain),
-        Mana.Resource in Spark.extensions(resource),
-        match?({:ok, _}, Mana.Resource.Info.privacy_subject(resource)),
+        privacy?(resource),
         do: resource
   end
+
+  defp privacy?(resource),
+    do:
+      Mana.Resource in Spark.extensions(resource) and
+        match?({:ok, _}, Mana.Resource.Info.privacy_subject(resource))
 
   defp by_subject(resource, id),
     do:

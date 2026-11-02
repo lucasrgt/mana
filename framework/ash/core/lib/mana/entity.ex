@@ -15,23 +15,40 @@ defmodule Mana.Entity do
         deadline :expire, action: :expire_unpaid, when: expr(status == :accepted), after: {15, :minute}
       end
 
-  After each create, update or destroy the record's topic
+  Once each create, update or destroy has committed, the record's topic
   `entity:<type>:<id>`, and `entity:<type>:for:<user>` for each `audience`
   field, receive `"changed"` with only the id: clients read the record again
   through the API, with their own authorization, so a subscriber never sees
-  data its policies would hide. `Mana.Entity.Channel` joins those topics after
-  checking the reader may read the record (or is the audience user).
+  data its policies would hide. The announcement comes from an Ash notifier,
+  so a change that rolls back is never announced, and one nested in a larger
+  transaction (`Ash.transact/3`) is announced when that one commits. Bulk
+  actions announce only with `notify?: true`, as for every Ash notifier.
+  `Mana.Entity.Channel` joins those topics after checking the reader may read
+  the record (or is the audience user).
 
-  A deadline is a durable Oban job scheduled when a change leaves the record
-  satisfying `when`; when it runs it performs `action` only if `when` still
-  holds, so a record that moved on is left alone. It survives deploys and
-  multiple nodes; it is not an in-memory timer. Changes to one record run one
-  at a time (a transaction lock per record on Postgres), as messages to one
-  process would: a second payment waits for the first, then finds it paid. `after` is `{amount, unit}` or
-  `{Module, :function}` returning the `DateTime` for a record.
+  A deadline is a durable Oban job inserted in the transaction of the change
+  that leaves the record satisfying `when` (a change that rolls back
+  schedules nothing), one per record and deadline while it waits: later
+  changes that keep `when` true do not move or repeat it. When it runs, its
+  update asks `when` again of the stored row once it holds the record's
+  lock, and a record that moved on (paid meanwhile) is left alone. It
+  survives deploys and multiple nodes; it is not an in-memory timer. `after`
+  is `{amount, unit}` or `{Module, :function}` returning the `DateTime` for
+  a record.
+
+  On AshPostgres, every update and destroy of a resource with deadlines
+  takes the record's transaction lock (`Mana.Lock`, the key `Mana.Verbs`
+  rechecks under), so a deadline and a payment run one after the other and
+  the later one finds the record as the earlier left it. The lock is a
+  `before_action` hook, which Ash cannot run in an atomic update, so exactly
+  those actions get `require_atomic?: false`; without deadlines, or on
+  another data layer, no lock is taken and actions stay atomic. Writes that
+  skip the actions (`Ash.Seed`, SQL) skip the lock and the announcement.
   """
   # Optional dependencies, called only when the app has them.
-  @compile {:no_warn_undefined, [AshJsonApi.Resource.Info, Mana.Entity.Worker, Oban]}
+  @compile {:no_warn_undefined,
+            [AshJsonApi.Resource.Info, AshPostgres.DataLayer.Info, Mana.Entity.Worker, Oban]}
+  @postgres AshPostgres.DataLayer
 
   alias Mana.Entity.Worker
   alias Spark.Dsl.Extension
@@ -216,55 +233,100 @@ defmodule Mana.Entity do
   defp insert(%{args: args, queue: queue, scheduled_at: at}),
     do: args |> Worker.new(queue: queue, scheduled_at: at) |> Oban.insert!()
 
-  @doc "Runs a passed deadline when its record still satisfies it; otherwise does nothing."
-  def run_deadline(resource, id, name) do
-    deadline = Enum.find(deadlines(resource), &(to_string(&1.name) == name))
+  @moved_on "deadline.moved_on"
 
-    with %{} <- deadline,
+  @doc """
+  Runs a passed deadline when its record still satisfies it; otherwise does
+  nothing. `when` is asked once more inside the update, under the record's
+  lock, so a change that committed meanwhile wins.
+  """
+  def run_deadline(resource, id, name) do
+    with %{} = deadline <- Enum.find(deadlines(resource), &(to_string(&1.name) == name)),
          {:ok, record} <- Ash.get(resource, id, authorize?: false),
          true <- holds?(deadline.when, record) do
-      Ash.update!(record, %{},
-        action: deadline.action,
+      record
+      |> Ash.Changeset.for_update(deadline.action, %{},
         authorize?: false,
         context: %{mana_deadline: deadline.name}
       )
-
-      :ok
+      |> recheck(deadline)
+      |> Ash.update()
+      |> ran()
     else
       _ -> :ok
     end
+  end
+
+  defp ran({:ok, _}), do: :ok
+
+  defp ran({:error, error}),
+    do: if(moved_on?(error), do: :ok, else: raise(Ash.Error.to_error_class(error)))
+
+  # Without the lock (no deadlines, or not Postgres) the action stays atomic,
+  # and a before_action hook would stop that.
+  defp recheck(changeset, deadline) do
+    if lock_repo(changeset.resource),
+      do: Ash.Changeset.before_action(changeset, &still_due(&1, deadline)),
+      else: changeset
+  end
+
+  # Runs after Mana.Entity.Changed's lock, which `for_update` added first.
+  defp still_due(changeset, deadline) do
+    if holds?(deadline.when, changeset.data),
+      do: changeset,
+      else:
+        Ash.Changeset.add_error(
+          changeset,
+          Mana.Error.new(@moved_on, "the record no longer satisfies the deadline", status: 409)
+        )
+  end
+
+  @doc false
+  # A deadline that found its record moved on changed nothing and failed no one.
+  def moved_on?(error) do
+    error
+    |> Ash.Error.to_error_class()
+    |> Map.get(:errors, [])
+    |> Enum.any?(&match?(%Mana.Error{code: @moved_on}, &1))
+  end
+
+  @doc false
+  def lock_key(resource, id), do: "#{type(resource)}:#{id}"
+
+  @doc false
+  # The repo whose transaction lock the changes of `resource`'s records take,
+  # nil when they take none.
+  def lock_repo(resource) do
+    if Ash.DataLayer.data_layer(resource) == @postgres and deadlines(resource) != [],
+      do: AshPostgres.DataLayer.Info.repo(resource, :mutate)
   end
 end
 
 defmodule Mana.Entity.Changed do
   @moduledoc false
+  # Added only to resources with deadlines: their jobs are inserted with the
+  # change, in its transaction, and on Postgres the record is locked first.
   use Ash.Resource.Change
-  alias AshPostgres.DataLayer.Info
 
   @impl true
   def change(changeset, _opts, _context) do
     changeset
     |> one_at_a_time()
     |> Ash.Changeset.after_action(fn _changeset, record ->
-      if Mana.Entity.deadlines(record.__struct__) != [], do: Mana.Entity.schedule(record)
-      Mana.Entity.announce(record)
+      Mana.Entity.schedule(record)
       {:ok, record}
     end)
   end
 
-  # Changes to one record run one at a time, like messages to one process:
-  # a second payment waits for the first and then finds the record paid.
   defp one_at_a_time(%{action_type: type, data: %{id: id}, resource: resource} = changeset)
        when type in [:update, :destroy] and not is_nil(id) do
-    case repo(resource) do
+    case Mana.Entity.lock_repo(resource) do
       nil ->
         changeset
 
       repo ->
-        key = "#{Mana.Entity.type(resource)}:#{id}"
-
         Ash.Changeset.before_action(changeset, fn changeset ->
-          repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [key])
+          Mana.Lock.record(repo, Mana.Entity.lock_key(resource, id))
           changeset
         end)
     end
@@ -272,23 +334,34 @@ defmodule Mana.Entity.Changed do
 
   defp one_at_a_time(changeset), do: changeset
 
-  # AshPostgres is the consumer's dependency, not this package's.
-  @compile {:no_warn_undefined, [AshPostgres.DataLayer.Info]}
-  @postgres AshPostgres.DataLayer
-
-  defp repo(resource) do
-    if Ash.DataLayer.data_layer(resource) == @postgres,
-      do: Info.repo(resource, :mutate)
-  end
-
   @impl true
   def atomic(changeset, opts, context), do: {:ok, change(changeset, opts, context)}
+end
+
+defmodule Mana.Entity.Notifier do
+  @moduledoc false
+  # An Ash notifier runs once the outermost transaction commits and never for
+  # one that rolls back, so "changed" never sends a client to read a write
+  # that is not there.
+  use Ash.Notifier
+
+  @impl true
+  def notify(%Ash.Notifier.Notification{data: %{} = record}), do: Mana.Entity.announce(record)
+  def notify(_notification), do: :ok
 end
 
 if Code.ensure_loaded?(Oban.Worker) do
   defmodule Mana.Entity.Worker do
     @moduledoc false
-    use Oban.Worker, max_attempts: 3
+    # One job per record and deadline while it waits: every change that keeps
+    # `when` true schedules again, and only the first stands.
+    use Oban.Worker,
+      max_attempts: 3,
+      unique: [
+        period: :infinity,
+        keys: [:resource, :id, :deadline],
+        states: [:available, :scheduled, :retryable]
+      ]
 
     @impl true
     def perform(%Oban.Job{args: %{"resource" => resource, "id" => id, "deadline" => name}}) do
@@ -311,11 +384,19 @@ defmodule Mana.Entity.Transformer do
   def before?(_), do: true
 
   def transform(dsl) do
-    configured? =
-      Transformer.get_option(dsl, [:entity], :broadcast) != nil or
-        Transformer.get_entities(dsl, [:entity]) != []
+    dsl =
+      if Transformer.get_option(dsl, [:entity], :broadcast),
+        do:
+          Transformer.persist(
+            dsl,
+            :simple_notifiers,
+            Enum.uniq(
+              Transformer.get_persisted(dsl, :simple_notifiers, []) ++ [Mana.Entity.Notifier]
+            )
+          ),
+        else: dsl
 
-    if configured? do
+    if Transformer.get_entities(dsl, [:entity]) != [] do
       with {:ok, dsl} <-
              Builder.add_change(dsl, Mana.Entity.Changed, on: [:create, :update, :destroy]),
            do: {:ok, Mana.NotAtomic.mark(dsl, fn _ -> true end)}

@@ -35,14 +35,19 @@ defmodule ReplayTest.Wallet do
       require_atomic?(false)
       argument(:amount, :integer, allow_nil?: false)
 
+      # Computed when the action runs, not while a changeset is built: an offer
+      # check builds one without input.
       change(fn changeset, _ ->
-        bonus = Application.get_env(:mana_core, :replay_test_bonus, 0)
+        Ash.Changeset.before_action(changeset, fn changeset ->
+          bonus = Application.get_env(:mana_core, :replay_test_bonus, 0)
+          amount = Ash.Changeset.get_argument(changeset, :amount)
 
-        Ash.Changeset.force_change_attribute(
-          changeset,
-          :balance,
-          changeset.data.balance + Ash.Changeset.get_argument(changeset, :amount) + bonus
-        )
+          Ash.Changeset.force_change_attribute(
+            changeset,
+            :balance,
+            changeset.data.balance + amount + bonus
+          )
+        end)
       end)
     end
 

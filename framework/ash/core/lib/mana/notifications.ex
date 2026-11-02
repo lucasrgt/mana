@@ -38,13 +38,26 @@ defmodule Mana.Notifications do
         notify :cancel, to: :counterpart, template: "reservation.cancelled", category: :reservations
       end
 
-  Once the action has committed (nothing is announced that rolled back),
-  `sender` (a `Mana.Notifications.Sender`) receives one notice per recipient. `to` is a user-id attribute, a list of
-  them, or `:counterpart` — every `Mana.Entity` audience member except the
-  actor. `when` (an expression over the record) can hold a notice back;
-  `channels` (`[:inbox]` by default) tell the sender where it goes. The
-  contract carries `x-mana-notifications`, so clients route `opens` and group
+  `sender` (a `Mana.Notifications.Sender`) receives one notice per
+  recipient. `to` is a user-id attribute, a list of them, or `:counterpart` —
+  every `Mana.Entity` audience member except the actor. `when` (an
+  expression over the record) can hold a notice back; `channels`
+  (`[:inbox]` by default) tell the sender where it goes. The contract
+  carries `x-mana-notifications`, so clients route `opens` and group
   preferences by `category` from the same declaration.
+
+  ## When a notice goes out
+
+  Nothing is announced that rolled back. Where the app runs Oban (the
+  `Oban` instance, on the repo the resource writes with), the action
+  inserts one job per notice in its own transaction: the notice commits
+  with the change, survives a crash after the commit, and a channel the
+  sender failed is tried again by a job of its own (three attempts), so the
+  channels that went out are not sent twice. Without Oban, or on another
+  repo, the notice is sent once the outermost transaction commits (an Ash
+  notifier), and a crash or a failing sender loses it. Through the outbox
+  the sender's `record` is the record as stored when the job runs (nil once
+  destroyed).
 
   Delivery follows the person, not the action: `preferences` drops the
   channels they turned off (the inbox always stays), `quiet_hours` holds
@@ -54,10 +67,19 @@ defmodule Mana.Notifications do
   in order (push, then email, then SMS) until the sender answers `:ok`.
   Each delivery joins the record's `Mana.History` when it has one: who was
   told, the channels that went out, those that failed and what was held.
+
+  `group_within` counts in `Mana.Notifications.Groups`, a child the app
+  starts in its supervision tree; without it the notifying actions of a
+  resource that groups are refused. Its windows are per node: on several
+  nodes a repeat may still reach outbound channels once per node. Grouping
+  spares people repeats; it is not a guarantee, so it costs no database
+  write per notice.
   """
   # Optional dependencies, called only when the app has them.
-  @compile {:no_warn_undefined, [Mana.Notifications.Worker, Oban]}
+  @compile {:no_warn_undefined, [Mana.Notifications.Worker, Oban, AshPostgres.DataLayer.Info]}
 
+  alias AshPostgres.DataLayer.Info, as: PostgresInfo
+  alias Mana.Notifications.Groups
   alias Mana.Notifications.Worker
   alias Spark.Dsl.Extension
 
@@ -129,8 +151,6 @@ defmodule Mana.Notifications do
     contract: "x-mana-notifications",
     catalog: "notifications",
     moments: [:observe, :fake]
-
-  @groups Mana.Notifications.Groups
 
   @doc "Moments `observe`: the notices `record` sends after `action` by `actor`, without sending them."
   def observe(record, action, actor),
@@ -244,6 +264,33 @@ defmodule Mana.Notifications do
     end
   end
 
+  @doc false
+  def enqueue_all(record, action, actor) do
+    for notice <- notices(record, action, actor),
+        do: enqueue(record.__struct__, notice, "deliver", nil)
+  end
+
+  @doc """
+  Whether `resource`'s notices go through the outbox: the `Oban` instance is
+  running and its jobs commit with the resource's writes (the same repo, or
+  a data layer without transactions).
+  """
+  def outbox?(resource) do
+    Code.ensure_loaded?(Oban) and Process.whereis(Oban.Registry) != nil and
+      Oban.whereis(Oban) != nil and commits_with?(resource, Oban.config().repo)
+  end
+
+  defp commits_with?(resource, repo) do
+    if Ash.DataLayer.data_layer_can?(resource, :transact),
+      do:
+        Ash.DataLayer.data_layer(resource) == AshPostgres.DataLayer and
+          PostgresInfo.repo(resource, :mutate) == repo,
+      else: true
+  end
+
+  @doc false
+  def grouped?(resource), do: opt(resource, :group_within) != nil
+
   defp opt(resource, key, default \\ nil),
     do: Extension.get_opt(resource, [:notifications], key, default)
 
@@ -254,12 +301,14 @@ defmodule Mana.Notifications do
   durable job), and with `fallback` the channels are tried in order until
   one delivers. Answers the channels that went out now.
   """
-  def deliver(resource, notice) do
+  def deliver(resource, notice), do: resource |> deliver_now(notice) |> elem(0)
+
+  defp deliver_now(resource, notice) do
     {notice, channels} = group(resource, notice, wanted_channels(resource, notice))
     {now, later} = Enum.split_with(channels, &(&1 == :inbox))
     {now, held_until} = quiet_hours(resource, notice, now, later)
 
-    if held_until, do: hold(resource, notice, later, held_until)
+    if held_until, do: enqueue(resource, %{notice | channels: later}, "send", held_until)
 
     {sent, failed} =
       send_channels(sender(resource), notice, now, fallback?(resource, notice.template))
@@ -272,7 +321,13 @@ defmodule Mana.Notifications do
       held_until && %{"channels" => later, "until" => held_until}
     )
 
-    sent
+    {sent, failed}
+  end
+
+  defp send_now(resource, notice, fallback) do
+    {sent, failed} = send_channels(sender(resource), notice, notice.channels, fallback)
+    record(resource, notice, sent, failed, nil)
+    {sent, failed}
   end
 
   defp wanted_channels(resource, notice) do
@@ -315,16 +370,13 @@ defmodule Mana.Notifications do
           "held" => held
         },
         outcome: if(sent == [] and failed != [], do: :failed, else: :done),
-        error:
-          if(failed != [],
-            do:
-              Enum.map_join(failed, "; ", fn {channel, reason} ->
-                "#{channel}: #{inspect(reason)}"
-              end)
-          )
+        error: if(failed != [], do: describe(failed))
       })
     end
   end
+
+  defp describe(failed),
+    do: Enum.map_join(failed, "; ", fn {channel, reason} -> "#{channel}: #{inspect(reason)}" end)
 
   defp fallback?(resource, template),
     do: Enum.any?(declared(resource), &(&1.template == template and &1.fallback))
@@ -357,62 +409,18 @@ defmodule Mana.Notifications do
   defp group(resource, notice, channels) do
     case opt(resource, :group_within) do
       {amount, unit} ->
-        key = {__MODULE__, :sent, notice.to, notice.template, notice.payload}
-        now = System.system_time(:millisecond)
-        window = System.convert_time_unit(1, :second, :millisecond) * seconds(amount, unit)
+        key = {notice.to, notice.template, notice.payload}
 
-        case :ets.lookup(groups(), key) do
-          [{^key, _, at, count}] when now - at < window ->
-            :ets.insert(@groups, {key, at + window, at, count + 1})
-            {Map.put(notice, :group, %{count: count + 1}), Enum.filter(channels, &(&1 == :inbox))}
-
-          _ ->
-            :ets.insert(@groups, {key, now + window, now, 1})
+        case Groups.count(key, :timer.seconds(seconds(amount, unit))) do
+          1 ->
             {notice, channels}
+
+          count ->
+            {Map.put(notice, :group, %{count: count}), Enum.filter(channels, &(&1 == :inbox))}
         end
 
       nil ->
         {notice, channels}
-    end
-  end
-
-  # One row per (recipient, template, payload) while its window is open, as
-  # {key, closes_at, opened_at, count}.
-  defp groups do
-    if :ets.whereis(@groups) == :undefined, do: own_groups(20)
-    @groups
-  end
-
-  # The table outlives the request that groups first: a process of its own
-  # owns it and drops the windows that closed.
-  defp own_groups(0), do: raise("#{inspect(@groups)} did not start")
-
-  defp own_groups(tries) do
-    spawn(fn ->
-      # Two first notices at once: only the one that takes the name owns it.
-      if claim_groups() do
-        :ets.new(@groups, [:named_table, :public, :set, write_concurrency: true])
-        sweep_groups()
-      end
-    end)
-
-    Process.sleep(5)
-    if :ets.whereis(@groups) == :undefined, do: own_groups(tries - 1)
-  end
-
-  defp claim_groups do
-    Process.register(self(), @groups)
-  rescue
-    ArgumentError -> false
-  end
-
-  defp sweep_groups do
-    receive do
-    after
-      60_000 ->
-        now = System.system_time(:millisecond)
-        :ets.select_delete(@groups, [{{:_, :"$1", :_, :_}, [{:<, :"$1", now}], [true]}])
-        sweep_groups()
     end
   end
 
@@ -421,47 +429,92 @@ defmodule Mana.Notifications do
   defp seconds(n, :hour), do: n * 3600
   defp seconds(n, :day), do: n * 86_400
 
-  defp hold(resource, notice, channels, until) do
-    args = %{
-      "resource" => inspect(resource),
-      "notice" =>
-        notice
-        |> Map.delete(:record)
-        |> Map.put(:channels, channels)
-        |> Map.update!(:category, &to_string/1)
-        |> Map.new(fn {k, v} -> {to_string(k), v} end)
-    }
-
+  defp enqueue(resource, notice, stage, at) do
+    args = %{"resource" => inspect(resource), "stage" => stage, "notice" => encode(notice)}
     inserter = Application.get_env(:mana_core, :deadline_inserter, &insert/1)
-    inserter.(%{args: args, queue: opt(resource, :queue, :default), scheduled_at: until})
+    inserter.(%{args: args, queue: opt(resource, :queue, :default), scheduled_at: at})
   end
 
   defp insert(%{args: args, queue: queue, scheduled_at: at}),
-    do: args |> Worker.new(queue: queue, scheduled_at: at) |> Oban.insert!()
+    do:
+      args
+      |> Worker.new([queue: queue] ++ if(at, do: [scheduled_at: at], else: []))
+      |> Oban.insert!()
 
-  @doc false
-  def deliver_held(resource, notice) do
-    notice = %{
+  defp encode(notice) do
+    notice
+    |> Map.delete(:record)
+    |> Map.update!(:category, &to_string/1)
+    |> Map.new(fn {k, v} -> {to_string(k), v} end)
+  end
+
+  defp decode(resource, notice) do
+    %{
       to: notice["to"],
       template: notice["template"],
       category: String.to_existing_atom(notice["category"]),
       channels: Enum.map(notice["channels"], &String.to_existing_atom/1),
       opens: notice["opens"],
       payload: notice["payload"],
-      record: nil
+      record: stored(resource, notice["payload"])
     }
+    |> then(
+      &if notice["group"], do: Map.put(&1, :group, %{count: notice["group"]["count"]}), else: &1
+    )
+  end
 
-    {sent, failed} =
-      send_channels(
-        sender(resource),
-        notice,
-        notice.channels,
-        fallback?(resource, notice.template)
-      )
+  defp stored(resource, payload) do
+    with id when not is_nil(id) <- payload["#{Mana.Entity.type(resource)}_id"],
+         {:ok, record} <- Ash.get(resource, id, authorize?: false, error?: false) do
+      record
+    else
+      _ -> nil
+    end
+  end
 
-    record(resource, notice, sent, failed, nil)
+  @doc false
+  def deliver_held(resource, notice) do
+    notice = decode(resource, notice)
+    {sent, _failed} = send_now(resource, notice, fallback?(resource, notice.template))
     sent
   end
+
+  @doc false
+  # A "deliver" job carries a notice from the outbox through every delivery
+  # rule; a "send" job (held for quiet hours, or a retry) goes to its channels
+  # as they are. Only the channels that failed are tried again, so none that
+  # went out is sent twice.
+  def perform(resource, notice, stage) do
+    notice = decode(resource, notice)
+    fallback = fallback?(resource, notice.template)
+
+    {sent, failed} =
+      if stage == "deliver",
+        do: deliver_now(resource, notice),
+        else: send_now(resource, notice, fallback)
+
+    case retry(sent, failed, fallback) do
+      [] ->
+        :ok
+
+      _ when stage == "send" and sent == [] ->
+        {:error, describe(failed)}
+
+      channels ->
+        enqueue(resource, %{notice | channels: channels}, "send", nil)
+        :ok
+    end
+  end
+
+  # With fallback, one outbound channel that delivered is enough.
+  defp retry(sent, failed, true) do
+    {inbox, outbound} =
+      failed |> Keyword.keys() |> Enum.uniq() |> Enum.split_with(&(&1 == :inbox))
+
+    if Enum.any?(sent, &(&1 != :inbox)), do: inbox, else: inbox ++ outbound
+  end
+
+  defp retry(_sent, failed, false), do: failed |> Keyword.keys() |> Enum.uniq()
 end
 
 if Code.ensure_loaded?(Oban.Worker) do
@@ -470,40 +523,57 @@ if Code.ensure_loaded?(Oban.Worker) do
     use Oban.Worker, max_attempts: 3
 
     @impl true
-    def perform(%Oban.Job{args: %{"resource" => resource, "notice" => notice}}) do
+    def perform(%Oban.Job{args: %{"resource" => resource, "notice" => notice} = args}) do
       resource
       |> String.trim_leading("Elixir.")
       |> String.split(".")
       |> Module.safe_concat()
-      |> Mana.Notifications.deliver_held(notice)
-
-      :ok
+      |> Mana.Notifications.perform(notice, Map.get(args, "stage", "send"))
     end
   end
 end
 
 defmodule Mana.Notifications.Send do
   @moduledoc false
-  # Delivery is Mana.Notifications.Notifier's, after the outermost commit. A
-  # dry run (Mana.Checkpoint, Moments' fake/1) is usually rolled back, so it
+  # A dry run (Mana.Checkpoint, Moments' fake/1) is usually rolled back, so it
   # never commits: what it would send is held here, as the action happens.
+  # The outbox's jobs are inserted here too, inside the action's transaction,
+  # so they commit or roll back with it.
   use Ash.Resource.Change
+  alias Mana.Notifications.Groups
 
   @impl true
   def change(changeset, _opts, context) do
-    if Enum.any?(
-         Mana.Notifications.declared(changeset.resource),
-         &(&1.action == changeset.action.name)
-       ),
-       do: Ash.Changeset.after_action(changeset, &hold_dry_run(&1, &2, context.actor)),
-       else: changeset
+    resource = changeset.resource
+
+    cond do
+      not Enum.any?(Mana.Notifications.declared(resource), &(&1.action == changeset.action.name)) ->
+        changeset
+
+      # Refused before anything is written, rather than raising after commit.
+      Mana.Notifications.grouped?(resource) and not Groups.started?() ->
+        Ash.Changeset.add_error(changeset, Groups.not_running())
+
+      true ->
+        Ash.Changeset.after_action(changeset, &queue(&1, &2, context.actor))
+    end
   end
 
-  defp hold_dry_run(changeset, record, actor) do
-    if Process.get(:mana_dry_run),
-      do: Mana.Notifications.send_all(record, changeset.action.name, actor)
+  defp queue(changeset, record, actor) do
+    name = changeset.action.name
 
-    {:ok, record}
+    cond do
+      Process.get(:mana_dry_run) ->
+        Mana.Notifications.send_all(record, name, actor)
+        {:ok, record}
+
+      Mana.Notifications.outbox?(changeset.resource) ->
+        Mana.Notifications.enqueue_all(record, name, actor)
+        {:ok, Ash.Resource.put_metadata(record, :mana_notices, :queued)}
+
+      true ->
+        {:ok, record}
+    end
   end
 
   @impl true
@@ -512,9 +582,9 @@ end
 
 defmodule Mana.Notifications.Notifier do
   @moduledoc false
-  # An Ash notifier runs once the outermost transaction commits and never for
-  # one that rolls back, so a notice never tells of a change that did not
-  # happen, however deep the action that made it.
+  # Without the outbox: an Ash notifier runs once the outermost transaction
+  # commits and never for one that rolls back, so a notice never tells of a
+  # change that did not happen, however deep the action that made it.
   use Ash.Notifier
 
   @impl true
@@ -525,6 +595,7 @@ defmodule Mana.Notifications.Notifier do
         actor: actor
       }) do
     if is_nil(Process.get(:mana_dry_run)) and
+         Ash.Resource.get_metadata(record, :mana_notices) != :queued and
          Enum.any?(Mana.Notifications.declared(resource), &(&1.action == name)),
        do: Mana.Notifications.send_all(record, name, actor)
 
