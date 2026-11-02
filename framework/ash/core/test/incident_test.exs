@@ -6,7 +6,7 @@ defmodule IncidentTest.Entry do
     extensions: [Mana.History.Log]
 
   history_log do
-    subjects([IncidentTest.Place, IncidentTest.Booking])
+    subjects([IncidentTest.Place, IncidentTest.Booking, IncidentTest.Badge])
   end
 end
 
@@ -121,6 +121,42 @@ defmodule IncidentTest.Booking do
   end
 end
 
+defmodule IncidentTest.Badge do
+  @moduledoc false
+  # Personal fields of every kind, next to an enum that holds one's text.
+  use Ash.Resource,
+    domain: IncidentTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.History, Mana.Resource]
+
+  history do
+    log(IncidentTest.Entry)
+  end
+
+  privacy do
+    subject(:holder_id)
+    export([:nickname, :lucky_number, :aliases, :newsletter, :kind])
+    personal([:nickname, :lucky_number, :aliases, :newsletter])
+    erase(:keep)
+    reason("badges are public")
+  end
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:holder_id, :uuid, public?: true)
+    attribute(:nickname, :string, public?: true)
+    attribute(:lucky_number, :integer, public?: true)
+    attribute(:aliases, {:array, :string}, public?: true)
+    attribute(:newsletter, :boolean, public?: true)
+    attribute(:kind, :atom, constraints: [one_of: [:host, :guest]], public?: true)
+  end
+
+  actions do
+    defaults([:read, :destroy])
+    create(:issue, accept: [:holder_id, :nickname, :lucky_number, :aliases, :newsletter, :kind])
+  end
+end
+
 defmodule IncidentTest.Domain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false
@@ -130,6 +166,7 @@ defmodule IncidentTest.Domain do
     resource(IncidentTest.Person)
     resource(IncidentTest.Place)
     resource(IncidentTest.Booking)
+    resource(IncidentTest.Badge)
   end
 end
 
@@ -277,6 +314,42 @@ defmodule Mana.IncidentTest do
 
     assert {copy.guest_name, copy.guest_email} ==
              {"guest_name-1", "guest_email-2@example.invalid"}
+  end
+
+  test "only personal values are replaced, each by a stand-in of its field's type" do
+    badge =
+      Ash.create!(
+        IncidentTest.Badge,
+        %{
+          holder_id: @traveler.id,
+          nickname: "host",
+          lucky_number: 7,
+          aliases: [],
+          newsletter: true,
+          kind: :host
+        },
+        action: :issue,
+        actor: @traveler
+      )
+
+    incident = Mana.Incident.export(Domain, "badge", badge.id)
+
+    assert [%{"state" => state}] = incident["records"]
+
+    assert %{
+             "nickname" => "[personal:nickname:1]",
+             "lucky_number" => "[personal:lucky_number:1]",
+             "aliases" => [],
+             "newsletter" => true,
+             "kind" => "host"
+           } = state
+
+    empty_store()
+
+    assert {:ok, copy, _} = Mana.Incident.replay(incident, [Domain], %{"person-1" => @traveler})
+
+    assert {copy.nickname, copy.lucky_number, copy.aliases, copy.newsletter, copy.kind} ==
+             {"nickname-1", 1, [], true, :host}
   end
 
   test "the same history exports the same bytes" do

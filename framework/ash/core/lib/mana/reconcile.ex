@@ -152,14 +152,21 @@ defmodule Mana.Reconcile do
     end
   end
 
+  # A record fails `holds` when it is not true (false or unknown). Said as
+  # `if`, which SQL writes as a parenthesized CASE: `is_nil(^holds)` would be
+  # written `<holds> IS NULL` unparenthesized, which binds tighter than the
+  # NOT or OR inside a negated or compound `holds`.
   defp failing(%{holds: holds, within: nil}, _resource),
-    do: Ash.Expr.expr(is_nil(^holds) or not (^holds))
+    do: Ash.Expr.expr(type(if(^holds, do: false, else: true), :boolean))
 
   defp failing(%{holds: holds} = rule, resource) do
     since = since(rule, struct(resource))
 
     if Info.field(resource, since),
-      do: Ash.Expr.expr(is_nil(^holds) or not (^holds) or is_nil(^Ash.Expr.ref(since))),
+      do:
+        Ash.Expr.expr(
+          type(if(^holds, do: false, else: true), :boolean) or is_nil(^Ash.Expr.ref(since))
+        ),
       else: true
   end
 

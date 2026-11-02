@@ -16,6 +16,15 @@ natively. `framework/catalog.toml` says what each one replaces and how to use it
 - `Mana.Lock` — `record(repo, "type:id")`: the per-record transaction lock
   (64-bit advisory key) that `Mana.Entity` and verb rechecks take. Only the
   update and destroy actions that take it are made non-atomic.
+- `Mana.Resource` — `privacy`: `export` (what the person receives) and
+  `personal` (which of those say who they are: what erasure scrubs from
+  history and an incident replaces).
+- `Mana.Search` — free-text search over string, string-array and embedded
+  fields (`services: :label`), accent-insensitive with `unaccent: true`, in
+  the query on AshPostgres.
+- `Mana.Webhook` — provider webhooks received over the raw body; events
+  delivered to another system's webhook through an Oban job inserted with
+  the change, signed and retried (`Mana.Webhook.deliver/4`).
 - `Mana.Verbs` — a read loading `verbs` answers every record's `when` in its
   own query; a policy or action that errors while the offer is checked goes to
   the `:error_reporter` instead of silently hiding the verb.
@@ -50,10 +59,15 @@ What the app knows about itself (`framework/docs/prd-self-knowing.md`):
   verbs, collection verbs, probes, the clock) and checks offer honesty,
   enforced refusals, idempotence, inverses, reconcile rules (timed ones on a
   moved clock), flows and history replay; violations shrink to their shortest
-  moves. `mix mana.explore`; `Mana.Explore.Lock` and `mix mana.affordances`
-  keep the affordance graph as a committed `affordances.json`.
+  moves. A record's history is replayed with the original set aside, so a
+  unique identity or an upsert never meets it. What it cannot use (a resource
+  without a primary read, a part that raises) is reported once, in the
+  report, never logged per move. `mix mana.explore`; `Mana.Explore.Lock` and
+  `mix mana.affordances` keep the affordance graph as a committed
+  `affordances.json`.
 - `Mana.Reconcile` — `within:`/`since:`: how long a record may stay in scope;
-  `holds: expr(...)` is asked in the query (only diverging records are read),
+  `holds: expr(...)` is asked in the query (only diverging records are read;
+  negated and compound expressions included),
   `{Module, :fun}` per streamed record; a crashing repair is reported.
 - `Mana.Snapshot` — Postgres template clones: a migrated base, scopes with
   their own pool, snapshots, forks and diffs; `Mana.Snapshot.Plug` runs a
@@ -65,14 +79,17 @@ What the app knows about itself (`framework/docs/prd-self-knowing.md`):
 - `Mana.Undo` — the newest change of a person taken back through its verb's
   inverse, recorded as `via: "undo:<id>"`.
 - `Mana.Incident` — a record's history up to a moment, with what it references,
-  anonymized (declared personal fields, people as roles) into a fixture a
-  recipe replays; `mix mana.incident booking:<id> --at <iso>`.
+  anonymized (privacy `personal` fields, people as roles with stand-ins made
+  once per role) into a fixture a recipe replays into the same situation;
+  `mix mana.incident booking:<id> --at <iso>`.
 
 Tests run on ETS. With `MANA_TEST_POSTGRES=ecto://user:pass@host/db` the
 `:postgres` tests also run, on AshPostgres resources (`test/support/postgres`):
 per-record locks and `Recheck` under contention, a deadline racing a payment,
 announcements, notices and history telemetry only after commit, history
 entries atomic with their change, erasure scrubbing history and deleting
-stored files only after commit, and
-`Mana.Explore` through `Mana.Snapshot` scopes. The database named in the URL
+stored files only after commit, negated and compound reconcile `holds` in
+SQL, embedded-field search, outbound webhooks after commit, an incident
+reopened into the same booking, and `Mana.Explore` through `Mana.Snapshot`
+scopes (records with a unique identity rebuilt beside the original). The database named in the URL
 is dropped and cloned from a migrated template for each test module.

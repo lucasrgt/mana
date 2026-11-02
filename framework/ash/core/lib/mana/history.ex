@@ -192,7 +192,8 @@ defmodule Mana.History do
   @doc """
   Rebuilds a record on `resource` by performing the done actions of `entries`
   (from `export/3` or `fixture/4`) again, in order: the first one creates
-  it, the rest update it. `actor` (a function or a map) maps a recorded actor
+  it, the rest update it (a later create is an upsert that landed on it, and
+  is performed as one again). `actor` (a function or a map) maps a recorded actor
   id or role to the actor that acts now
   (system entries act without one); `params` may fill or rewrite inputs per
   action (`fn action, params -> params end`) — redacted inputs cannot replay
@@ -202,8 +203,9 @@ defmodule Mana.History do
   the replay with `:external`, or is passed over with `external: :skip`; notes
   (`note/3`: a delivery, a webhook) are what happened around it and replay nothing;
   other effects run as the environment runs them (fakes in development and
-  tests). Answers `{:ok, record, applied}` or
-  `{:error, %{at: index, action: action, error: error}}`.
+  tests); `notify?: false` drops the replayed actions' notifications, for a
+  rebuild in a transaction that is rolled back. Answers `{:ok, record,
+  applied}` or `{:error, %{at: index, action: action, error: error}}`.
   """
   def replay(resource, entries, opts \\ []) do
     replay = %{
@@ -211,7 +213,8 @@ defmodule Mana.History do
       actor: replay_actor(Keyword.get(opts, :actor, fn _ -> nil end)),
       params: Keyword.get(opts, :params, fn _action, params -> params end),
       offset: offset(entries, Keyword.get(opts, :times, :shift)),
-      external: external_verbs(resource)
+      external: external_verbs(resource),
+      notify: if(Keyword.get(opts, :notify?, true), do: [], else: [return_notifications?: true])
     }
 
     skip_external? = Keyword.get(opts, :external) == :skip
@@ -261,13 +264,22 @@ defmodule Mana.History do
       Enum.any?(Map.values(input), &(&1 == @redacted)) ->
         {:error, :redacted_input}
 
-      is_nil(record) ->
-        replay.resource |> Ash.Changeset.for_create(opts[:action], input, opts) |> Ash.create()
+      # A create after the first is an upsert that landed on the record.
+      is_nil(record) or Ash.Resource.Info.action(replay.resource, opts[:action]).type == :create ->
+        replay.resource
+        |> Ash.Changeset.for_create(opts[:action], input, opts)
+        |> Ash.create(replay.notify)
 
       true ->
-        record |> Ash.Changeset.for_update(opts[:action], input, opts) |> Ash.update()
+        record
+        |> Ash.Changeset.for_update(opts[:action], input, opts)
+        |> Ash.update(replay.notify)
     end
+    |> dropping_notifications()
   end
+
+  defp dropping_notifications({:ok, record, _notifications}), do: {:ok, record}
+  defp dropping_notifications(result), do: result
 
   # Replayed now, a recording keeps its relation to time: every date in the
   # inputs moves by how long ago the first entry happened, so a stay that

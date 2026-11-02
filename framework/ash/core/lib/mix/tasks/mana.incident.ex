@@ -8,6 +8,8 @@ defmodule Mix.Tasks.Mana.Incident do
   personal value and every person replaced (`Mana.Incident.export/4`), to
   `<out>/<type>-<at>.json`, and prints the recipe line that replays it.
   `--role` names a person's role; the rest are `person-1`, `person-2`, ...
+  People are roles, never records: the recipe gives each role an actor, or
+  makes a stand-in with `person:` from what the fixture kept of them.
   The export reads the logs with authorization off: run it where the
   operator may read production.
   """
@@ -39,7 +41,9 @@ defmodule Mix.Tasks.Mana.Incident do
     Mix.shell().info("""
     mana.incident: #{length(incident["records"])} records → #{path}
     In a recipe (data_scope: true):
-      {:ok, #{type}, _records} = Mana.Incident.replay("#{path}", domains, %{#{actors}})\
+      {:ok, #{type}, _records} =
+        Mana.Incident.replay("#{path}", domains, %{#{actors}},
+          person: fn role, person -> ... end)\
     """)
   end
 

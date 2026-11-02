@@ -165,7 +165,8 @@ defmodule PostgresTest.Booking do
 
   privacy do
     subject(:traveler_id)
-    export([:guest_name, :phone])
+    export([:guest_name, :phone, :nights])
+    personal([:guest_name, :phone])
     erase(:keep)
     reason("the host keeps its bookings")
   end

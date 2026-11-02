@@ -84,11 +84,17 @@ defmodule Mana.Resource do
 
         privacy do
           subject :traveler_id
-          export [:plate, :vehicle, :created_at]
+          export [:owner_name, :plate, :vehicle, :created_at]
+          personal [:owner_name, :plate]
           erase :delete
         end
 
-    `export` is an explicit projection, never the raw row. `erase :keep` (a lawful
+    `export` is an explicit projection, never the raw row. `personal` names the
+    exported fields that say who the person is (a name, an e-mail, a plate):
+    what an erasure scrubs from the history that stays and an incident
+    replaces (`Mana.Privacy.personal/1`); the rest of the export (a status, a
+    total, the dates) is the person's record and stays readable. Without
+    `personal`, every exported field counts as personal. `erase :keep` (a lawful
     basis to retain) requires a `reason`. `erase :detach` keeps rows that other
     records still name (a place a booking was at) but cuts them from the person
     through the resource's `detach` update action (clearing the subject and
@@ -97,6 +103,10 @@ defmodule Mana.Resource do
     schema: [
       subject: [type: :atom, doc: "The attribute holding the person's user id."],
       export: [type: {:list, :atom}, default: []],
+      personal: [
+        type: {:list, :atom},
+        doc: "The exported fields that identify the person. Every `export` field when not given."
+      ],
       erase: [type: {:in, [:delete, :keep, :detach]}],
       reason: [type: :string]
     ]
@@ -235,6 +245,7 @@ defmodule Mana.Resource.Transformer do
       subject: option.(:subject),
       erase: option.(:erase),
       export: option.(:export) || [],
+      personal: option.(:personal) || [],
       reason: option.(:reason),
       attributes: MapSet.new(attributes, & &1.name),
       fields:
@@ -246,6 +257,7 @@ defmodule Mana.Resource.Transformer do
 
   defp first_privacy_problem(privacy) do
     missing = Enum.reject(privacy.export, &(&1 in privacy.fields))
+    unexported = Enum.reject(privacy.personal, &(&1 in privacy.export))
 
     Enum.find_value(
       [
@@ -254,6 +266,8 @@ defmodule Mana.Resource.Transformer do
         {is_nil(privacy.erase),
          "privacy must declare `erase :delete`, `erase :keep` or `erase :detach`"},
         {missing != [], "privacy export names unknown fields #{inspect(missing)}"},
+        {unexported != [],
+         "privacy personal names fields the export leaves out #{inspect(unexported)}: a person's own data is exported"},
         {privacy.erase in [:keep, :detach] and blank?(privacy.reason),
          "privacy `erase #{inspect(privacy.erase)}` needs the lawful `reason` to retain"},
         {privacy.erase == :detach and not privacy.detach?,

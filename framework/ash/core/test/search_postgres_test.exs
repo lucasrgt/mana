@@ -1,3 +1,12 @@
+defmodule SearchTest.Service do
+  @moduledoc false
+  use Ash.Resource, data_layer: :embedded
+
+  attributes do
+    attribute(:label, :string, public?: true)
+  end
+end
+
 defmodule SearchTest.Place do
   @moduledoc false
   use Ash.Resource, domain: SearchTest.Domain, data_layer: Ash.DataLayer.Ets
@@ -6,14 +15,16 @@ defmodule SearchTest.Place do
     uuid_primary_key(:id)
     attribute(:name, :string, public?: true)
     attribute(:tags, {:array, :string}, public?: true)
+    attribute(:services, {:array, SearchTest.Service}, public?: true)
+    attribute(:featured, SearchTest.Service, public?: true)
   end
 
   actions do
-    defaults([:read, :destroy, create: [:name, :tags]])
+    defaults([:read, :destroy, create: [:name, :tags, :services, :featured]])
 
     read :search do
       argument(:q, :string)
-      prepare({Mana.Search, fields: [:name, :tags]})
+      prepare({Mana.Search, fields: [:name, :tags, services: :label, featured: :label]})
     end
 
     read :search_unaccented do
@@ -64,6 +75,16 @@ defmodule Mana.SearchTest do
     assert search(nil) == ["100 natural", "100% natural", "Casa Azul"]
   end
 
+  test "on ETS, a field of an embedded value or array matches in memory" do
+    Ash.create!(Place, %{name: "Casa", services: [%{label: "Café da manhã"}, %{label: "Wi-Fi"}]})
+    Ash.create!(Place, %{name: "Sítio", featured: %{label: "Trilha"}, services: []})
+    Ash.create!(Place, %{name: "Chalé"})
+
+    assert search("wi-fi") == ["Casa"]
+    assert search("TRILHA") == ["Sítio"]
+    assert search("piscina") == []
+  end
+
   test "on ETS, unaccent refuses the read instead of matching accents" do
     assert_raise ArgumentError, ~r/`unaccent: true` needs AshPostgres/, fn ->
       search("", :search_unaccented)
@@ -73,6 +94,10 @@ defmodule Mana.SearchTest do
   test "unaccent must be a boolean" do
     assert {:error, _} = Mana.Search.init(fields: [:name], unaccent: :yes)
     assert {:error, _} = Mana.Search.init(fields: [])
+    assert {:error, _} = Mana.Search.init(fields: [:name, services: ["label"]])
+
+    assert {:ok, opts} = Mana.Search.init(fields: [:name, services: [:label, :note]])
+    assert opts[:fields] == [name: nil, services: :label, services: :note]
   end
 end
 
@@ -143,6 +168,38 @@ defmodule Mana.SearchPostgresTest do
     assert search("50%") == ["Casa Azul"]
     assert search("50%", :search_unaccented) == ["Casa Azul"]
     assert search("deserto") == []
+  end
+
+  test "a field of an embedded array or value matches in the query, with and without unaccent" do
+    Ash.create!(Place, %{
+      name: "Casa Azul",
+      services: [%{label: "Café da manhã", note: "às 8h"}, %{label: "Wi-Fi 50% mais rápido"}]
+    })
+
+    Ash.create!(Place, %{name: "Sítio", featured: %{label: "Trilha guiada"}, services: []})
+    Ash.create!(Place, %{name: "Chalé", services: [%{note: "sem rótulo"}]})
+    Ash.create!(Place, %{name: "Vazio"})
+
+    assert search("café", :search_services) == ["Casa Azul"]
+    assert search("cafe", :search_services) == []
+    assert search("cafe", :search_services_unaccented) == ["Casa Azul"]
+    assert search("ÀS 8", :search_services) == ["Casa Azul"]
+    assert search("50%", :search_services) == ["Casa Azul"]
+    assert search("50%", :search_services_unaccented) == ["Casa Azul"]
+    assert search("trilha", :search_services) == ["Sítio"]
+    assert search("TRILHA GUIADA", :search_services_unaccented) == ["Sítio"]
+    assert search("rotulo", :search_services_unaccented) == []
+    assert search("deserto", :search_services) == []
+
+    # filtered by Postgres: the query carries the match, no read in Elixir
+    query = Ash.Query.for_read(Place, :search_services, %{q: "cafe"})
+    assert inspect(query.filter) =~ "unnest"
+  end
+
+  test "an embedded field the embedded resource does not have raises at the read" do
+    assert_raise ArgumentError, ~r/not an embedded attribute with a field :cost/, fn ->
+      search("1", :search_service_price)
+    end
   end
 
   test "a blank text leaves the read alone" do

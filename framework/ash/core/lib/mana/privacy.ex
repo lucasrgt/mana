@@ -36,10 +36,13 @@ defmodule Mana.Privacy do
   kept or detached rows, and whatever the subject did to others' records)
   keep what happened but no longer say the subject did it (`actor_id`
   cleared, `via: "erased"`) nor what the subject's personal fields held:
-  every field the entry's resource declares personal (`privacy` `export`,
-  `history` `redact`) reads `"[erased]"` in its `params`, `before` and
-  `after`. The erasure's own changes notify like any other action
-  (`Mana.Entity` announcements, history telemetry).
+  every field of `personal/1` reads `"[erased]"` in the entry's `params`,
+  `before` and `after`. The erasure's own changes notify like any other
+  action (`Mana.Entity` announcements, history telemetry).
+
+  Everything it does follows the transaction it runs in, stored objects
+  included, so it belongs inside the one that also closes the account: an
+  erasure that rolls back leaves the person as they were.
   """
   def erase(domains, subject_id) do
     all = resources(domains)
@@ -152,13 +155,29 @@ defmodule Mana.Privacy do
     end
   end
 
-  defp personal(resource) do
-    exported = if privacy?(resource), do: Mana.Resource.Info.privacy_export!(resource), else: []
+  @doc """
+  The fields of `resource` that hold a person's own data, as strings: its
+  privacy `personal` fields (every `export` field when `personal` is not
+  given) and its history `redact` ones. What an erasure scrubs from the
+  history that stays and an incident (`Mana.Incident`) replaces; the rest
+  of an export (a status, a total) is the person's record, not who they
+  are.
+  """
+  def personal(resource) do
+    declared =
+      if Mana.Resource in Spark.extensions(resource) do
+        case Mana.Resource.Info.privacy_personal(resource) do
+          {:ok, fields} -> fields
+          :error -> Mana.Resource.Info.privacy_export!(resource)
+        end
+      else
+        []
+      end
 
     redacted =
       if Mana.History in Spark.extensions(resource), do: Mana.History.redact(resource), else: []
 
-    exported |> Enum.concat(redacted) |> Enum.uniq() |> Enum.map(&to_string/1)
+    declared |> Enum.concat(redacted) |> Enum.uniq() |> Enum.map(&to_string/1)
   end
 
   defp resources(domains) do

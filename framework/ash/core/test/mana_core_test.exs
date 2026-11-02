@@ -1141,6 +1141,18 @@ defmodule ManaCoreTest do
              compile(resource.("subject :owner_id\nexport [:ssn]\nerase :delete"))
 
     assert message =~ ":ssn"
+
+    assert :ok =
+             compile(
+               resource.(
+                 "subject :owner_id\nexport [:owner_id]\npersonal [:owner_id]\nerase :delete"
+               )
+             )
+
+    assert {:error, message} =
+             compile(resource.("subject :owner_id\npersonal [:owner_id]\nerase :delete"))
+
+    assert message =~ "personal names fields the export leaves out [:owner_id]"
   end
 
   test "a Mana.Shape is one component for its read copy and its create and update inputs" do
