@@ -21,7 +21,7 @@ defmodule Mana.Checkpoint do
 
       result =
         Ash.DataLayer.transaction(resources, fn ->
-          outcome = Mana.Verbs.run_all(steps, actor)
+          outcome = Mana.Verbs.run_all(steps, actor, rolled_back: true)
           Ash.DataLayer.rollback(resources, %{outcome: summary(outcome), history: history(steps)})
         end)
 

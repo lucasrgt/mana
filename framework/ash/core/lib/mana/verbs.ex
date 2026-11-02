@@ -388,11 +388,17 @@ defmodule Mana.Verbs do
   fails, the steps already done are undone through their verbs' `inverse`,
   newest first, and the answer says which failed and what was compensated;
   a done step without an inverse is reported in `uncompensated`.
+
+  `rolled_back: true` is for a run inside a transaction the caller rolls
+  back (`Mana.Checkpoint.dry_run/2`): the steps' Ash notifications are taken
+  and dropped with it, since nothing they announce will have happened.
   """
-  def run_all(steps, actor) do
-    case perform(steps, actor) do
+  def run_all(steps, actor, opts \\ []) do
+    update = if opts[:rolled_back], do: [return_notifications?: true], else: []
+
+    case perform(steps, actor, update) do
       {:failed, index, error, done} ->
-        {compensated, uncompensated} = compensate(done, actor)
+        {compensated, uncompensated} = compensate(done, actor, update)
 
         {:error,
          %{
@@ -407,34 +413,37 @@ defmodule Mana.Verbs do
     end
   end
 
-  defp perform(steps, actor) do
+  defp perform(steps, actor, update) do
     Enum.reduce_while(Enum.with_index(steps), [], fn {{record, name, params}, index}, done ->
       verb = verb!(record.__struct__, name)
 
-      case Ash.update(record, params, action: action(verb), actor: actor) do
+      case update(record, params, action(verb), actor, update) do
         {:ok, updated} -> {:cont, [{updated, verb} | done]}
         {:error, error} -> {:halt, {:failed, index, error, done}}
       end
     end)
   end
 
-  defp compensate(done, actor) do
+  defp compensate(done, actor, update) do
     Enum.reduce(done, {[], []}, fn {record, verb}, {compensated, uncompensated} ->
-      case undo(record, verb, actor) do
+      case undo(record, verb, actor, update) do
         {:ok, undone} -> {[undone | compensated], uncompensated}
         _ -> {compensated, [record | uncompensated]}
       end
     end)
   end
 
-  defp undo(_record, %{inverse: nil}, _actor), do: :no_inverse
+  defp undo(_record, %{inverse: nil}, _actor, _update), do: :no_inverse
 
-  defp undo(record, verb, actor),
-    do:
-      Ash.update(record, %{},
-        action: action(verb!(record.__struct__, verb.inverse)),
-        actor: actor
-      )
+  defp undo(record, verb, actor, update),
+    do: update(record, %{}, action(verb!(record.__struct__, verb.inverse)), actor, update)
+
+  defp update(record, params, action, actor, update) do
+    case Ash.update(record, params, [action: action, actor: actor] ++ update) do
+      {:ok, updated, _notifications} -> {:ok, updated}
+      result -> result
+    end
+  end
 
   defp verb!(resource, name),
     do:
