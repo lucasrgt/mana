@@ -1,6 +1,6 @@
 # PRD — Mana 9+
 
-Status: proposed · Owner: Mana · Baseline: an outside review scored Mana 7/10
+Status: delivered, except the first benchmark run (#31) · Owner: Mana · Baseline: an outside review scored Mana 7/10
 (idea ≈ 8.5, execution ≈ 6.5). This PRD lists every point that review raised,
 checked against the code, plus what this round of work found, so execution
 catches up with the idea.
@@ -314,3 +314,44 @@ results with the framework.
 The same review, rerun after P0–P2: no correctness finding open, Postgres
 paths and the runner's core under test in CI, and the Moments protocol
 conformance no longer `partial` for the capabilities it lists.
+
+## Delivered, and what remains
+
+Proven on Mana's own suites (every Elixir package against Postgres, the
+runner, the CLI, the Flutter packages; CI runs them all) and on Host Point,
+a real app migrated onto it: its backend suite, every sensor, and every
+Moments suite (hosts 69/69 three runs in a row, travelers, os,
+municipalities, partners).
+
+| # | Where | Proof | Limits that stay |
+|---|---|---|---|
+| 1–4 | `entity.ex`, `history.ex`, `privacy.ex` (notifiers after the outermost commit, deadline recheck under lock, savepointed history, history scrubbed on erasure) | `entity_postgres_test`, `history_postgres_test`, `privacy_postgres_test` | — |
+| 5 | `test/support/postgres` harness (`MANA_TEST_POSTGRES`) | every `*_postgres_test` | — |
+| 6 | `.github/workflows/ci.yml` (+ `moments-diff.yml`) | each job run locally as CI runs it | not yet run on GitHub |
+| 7 | session (46), contracts (15), runner sandbox/suite tests | mutation checks: each guarded line fails a test | — |
+| 8 | progress-following waits; one report at a time, out-of-order reports refused; a relaunch releases the previous app | `progress_test`, `moment_navigation_test`, `observations_test`; Host Point creation journeys 10/10 | — |
+| 9–10 | `notification_groups.ex`, `knob_cache.ex` (supervised) | `notice_groups_test`, `knob_cache_test` | grouping is per node |
+| 11 | `cli/lib/src/client.dart` on `package:analyzer`; `package:mana/runtime.dart` | `client_test` | — |
+| 12 | `moments/lib/src/child_process.dart` (process groups) | `process_group_test` | — |
+| 13 | fork, diff, trace, save; checkpoint composition, parent materialization, preparation recovery, navigation without criteria | `situations_test`, `conformance_test`; conformance **full** | the launcher runs one UI per app (fork is the situations profile's) |
+| 14 | `platform.dart` (Linux, macOS), `ios_transport.dart` | `platform_test`, `ios_transport_test` | macOS and iOS verified with fakes only |
+| 15 | `app:` per moment; Host Point's 172 Moments in 16 feature domains | `manifest_apps_test`; identical manifests before/after | — |
+| 16 | `ash/upgrade`, `mana upgrade` | upgrade tests | two codemods |
+| 17 | `ash/lint` (19 checks, no suppression comment; `mix mana.lint` folded in) | 69 lint tests; zero findings in Mana and Host Point | — |
+| 18–25 | history signal notifier; notice outbox; one-query offers; expression `holds:` in the query; `Mana.Lock`; typed rescues; `update :confirm`; unaccent and embedded-array search | the tests named in each package README | — |
+| 26 | pinned JRE in the contracts toolchain; `mana doctor` names missing tools | first-green from a cold HOME: 100.6 s (budget 300 s) | Docker image pull not measured |
+| 27 | `moments diff --base <ref>`: rows, history, observation, declared screen, offered verbs | `behaviour_diff_test`; Host Point price rule: R$ 80.00 → R$ 72.00 named, unchanged Moments silent | the screen shows what an app declares in its projection |
+| 28 | `Mana.Incident` with `personal [...]`, people as roles, recorded-order replay | `incident_postgres_test`; Host Point booking: no personal value, same projection reopened | collection follows `belongs_to` from the subject |
+| 29 | `explorations "dir"`; `mix mana.explore --save`; `/_explorations/check` | `exploration_moments_test`: a seeded bug's Moment fails, then passes once fixed | no screen (`up`/`open` refuse it) |
+| 30 | `Moments.ActionGraph`; recipe preparation traced; receipts | `effect_selection_test`, `action_graph_test`; Host Point: one change module selects 10 of 42 | screen loads give no evidence; per-file granularity |
+| 31 | `mana eval benchmark`, `framework/benchmark` (12 tasks, two conditions) | harness tests with a scripted agent; every task validated (no-op fails, the real fix passes) | **no model run yet**: it spends tokens and waits for the owner's go-ahead |
+| 32 | ash 3.37.2, ash_postgres 2.15.2, decimal, plug_crypto, assent 0.3.2 | `mix hex.audit` 0 everywhere; CI fails on any Hex, Dart or Flutter advisory | — |
+| 33 | `Mana.Uploads.Discard` (Oban job or notifier after commit) | `erasure_storage_test` | without Oban the deletion is not retried |
+
+Found while migrating Host Point and fixed in Mana: reconcile `holds:`
+negations (SQL precedence), explore rebuilds colliding with identities,
+explore log noise and determinism (record order, input draw order, first run
+on a new database), replays across records in recorded order and from a
+seed, incidents keeping business fields, notices dropped with quieted
+deadlines, lookups set aside as dependents.
+
