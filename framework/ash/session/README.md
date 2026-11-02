@@ -10,6 +10,14 @@ credential admission. It does not sign JWTs nor implement its own password hashi
 {:mana_session, path: "../../framework/ash/session"}
 ```
 
+AshAuthentication 4.15.0 caps assent below 0.3, and assent before 0.3.2 has
+EEF-CVE-2026-117656. This library overrides assent to `~> 0.3.2`; the override
+reaches an app that depends on it, also when the app declares
+`ash_authentication` itself. An app that uses AshAuthentication without this
+library declares `{:assent, "~> 0.3.2", override: true}` itself. Run
+`mix hex.audit` after `mix deps.get`: it fails on any locked version with an
+advisory.
+
 ## Explicit composition
 
 A local wrapper keeps the routes readable and names the application's resources:

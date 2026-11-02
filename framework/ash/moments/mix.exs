@@ -16,7 +16,7 @@ defmodule Moments.MixProject do
   # Verb steps read `Mana.Verbs` when the consumer has it; tests declare verbs with it.
   defp deps,
     do: [
-      {:ash, "~> 3.34 and >= 3.34.3"},
+      {:ash, "~> 3.37 and >= 3.37.2"},
       {:jason, "~> 1.4"},
       {:plug, "~> 1.16"},
       {:mana_core, path: "../core", only: :test},

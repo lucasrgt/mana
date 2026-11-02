@@ -10,7 +10,7 @@ defmodule Contracts.MixProject do
       config_path: "test/config.exs",
       elixirc_paths: if(Mix.env() == :test, do: ["lib", "test/support"], else: ["lib"]),
       deps: [
-        {:ash, "~> 3.34 and >= 3.34.3"},
+        {:ash, "~> 3.37 and >= 3.37.2"},
         {:ash_json_api, "~> 1.0"},
         {:open_api_spex, "~> 3.16"},
         {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

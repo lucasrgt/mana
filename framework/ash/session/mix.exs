@@ -12,7 +12,7 @@ defmodule ManaSession.MixProject do
       deps: [
         {:contracts, path: "../contracts"},
         {:ash_authentication, "~> 4.15.0"},
-        {:ash_postgres, "~> 2.0"},
+        {:ash_postgres, "~> 2.15 and >= 2.15.2"},
         {:plug, "~> 1.18"},
         {:jason, "~> 1.4"},
         # EEF-CVE-2026-117656 is fixed in assent 0.3.2; AshAuthentication 4.15.0 caps it below 0.3.

@@ -1,5 +1,6 @@
 .toolchain/
 **/_build/
 **/deps/
-# Per-agent build paths (MIX_BUILD_PATH=_build_<name>).
+# Per-agent build and deps paths (MIX_BUILD_PATH=_build_<name>, MIX_DEPS_PATH=deps_<name>).
 **/_build_*/
+**/deps_*/
