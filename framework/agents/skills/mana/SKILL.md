@@ -427,3 +427,11 @@ An exported history log replays against the code compiled now, each subject insi
 - **Instead of:** hoping a refactor keeps old behaviour; shadow traffic infrastructure
 - **Docs:** `framework/ash/core/lib/mana/replay.ex`
 
+### Formatting and lint (`elixir-style`)
+
+Every Elixir backend formats with mix format (the DSLs' calls without parentheses imported from their deps) and lints with Credo's default checks, strict; mana doctor refuses a missing .formatter.exs or .credo.exs, a Credo check switched off, or a finding silenced with credo:disable.
+
+- **Use:** Backend: .formatter.exs with import_deps: [:ash, :ash_postgres, :ash_json_api, :phoenix, :moments, :mana_core] and the default line length; .credo.exs with strict: true and nothing disabled; {:credo, "~> 1.7", only: [:dev, :test], runtime: false}. Run mix format and mix credo --strict (sensors in sensors.toml). A finding is fixed in the code: extract a function, alias a nested module, match in function heads; never credo:disable.
+- **Instead of:** style debates in review; silencing a linter warning; raising a complexity limit to make a file pass
+- **Docs:** `framework/ash/.credo.exs`
+

@@ -560,3 +560,14 @@ keywords = ["undo", "take back", "revert", "inverse", "desfazer", "history"]
 use = "Server: Mana.Undo.last(record, actor, within: {5, :minute}) / Mana.Undo.undo(record, actor). Flutter (mana_command): HistoryView(verbs: XVerbs.all, offered: record.verbs, me: userId, undo: (inverse) => ...) offers it on the newest entry (undoable/4 applies the same rules); VerbGate(showUndo:) offers it right after the verb ran."
 replaces = ["hand-written undo endpoints", "undo that ignores who made the change"]
 docs = "framework/ash/core/lib/mana/undo.ex"
+
+[[capability]]
+id = "elixir-style"
+name = "Formatting and lint"
+layer = "verification"
+status = "available"
+summary = "Every Elixir backend formats with mix format (the DSLs' calls without parentheses imported from their deps) and lints with Credo's default checks, strict; mana doctor refuses a missing .formatter.exs or .credo.exs, a Credo check switched off, or a finding silenced with credo:disable."
+keywords = ["format", "formatter", "lint", "linter", "credo", "style", "mix format", "code quality", "complexity"]
+use = "Backend: .formatter.exs with import_deps: [:ash, :ash_postgres, :ash_json_api, :phoenix, :moments, :mana_core] and the default line length; .credo.exs with strict: true and nothing disabled; {:credo, \"~> 1.7\", only: [:dev, :test], runtime: false}. Run mix format and mix credo --strict (sensors in sensors.toml). A finding is fixed in the code: extract a function, alias a nested module, match in function heads; never credo:disable."
+replaces = ["style debates in review", "silencing a linter warning", "raising a complexity limit to make a file pass"]
+docs = "framework/ash/.credo.exs"

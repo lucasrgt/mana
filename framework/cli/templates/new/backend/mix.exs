@@ -19,7 +19,8 @@ defmodule __Name__.MixProject do
       {:open_api_spex, "~> 3.16"},
       {:phoenix, "~> 1.8.0"},
       {:bandit, "~> 1.0"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 end

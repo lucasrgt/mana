@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import 'assets.dart';
 import 'capabilities.dart';
+import 'elixir_style.dart';
 import 'failure.dart';
 import 'features.dart';
 import 'manifest.dart';
@@ -213,6 +214,22 @@ Future<void> doctor(String root, Config config, List<String> names) async {
         );
       }
     }
+  }
+  final backends = {
+    for (final product in productPaths(root, config)) ?product.backend,
+  };
+  for (final backend in backends) {
+    final path = p.join(root, backend);
+    if (!File(p.join(path, 'mix.exs')).existsSync()) continue;
+    final gaps = elixirStyleGaps(path);
+    if (gaps.isNotEmpty) {
+      throw ManaFailure(
+        'The backend is not formatted and linted as Mana means it: ${gaps.join('; ')}',
+      );
+    }
+    stdout.writeln(
+      'elixir: $backend formats with mix format, lints with Credo (strict)',
+    );
   }
   if (FeatureMap.tryLoad(root) case final features?) {
     final report = features.check();
