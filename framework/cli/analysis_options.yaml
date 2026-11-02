@@ -1,3 +1,8 @@
+# templates/ is the project `mana new` writes; it only resolves inside one.
+analyzer:
+  exclude:
+    - templates/**
+
 linter:
   rules:
     - curly_braces_in_flow_control_structures

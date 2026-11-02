@@ -1,0 +1,55 @@
+{
+  "openapi": "3.0.0",
+  "info": {"title": "Client patches fixture", "version": "1"},
+  "paths": {
+    "/items/as-of": {
+      "get": {
+        "operationId": "itemAsOf",
+        "tags": ["items"],
+        "responses": {
+          "200": {"description": "OK", "content": {"application/json": {"schema": {"type": "object"}}}}
+        }
+      }
+    },
+    "/items": {
+      "get": {
+        "operationId": "listItems",
+        "tags": ["items"],
+        "parameters": [{"name": "kind", "in": "query", "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "OK", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}}}}
+        }
+      },
+      "put": {
+        "operationId": "replaceItems",
+        "tags": ["items"],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}}}},
+        "responses": {"204": {"description": "No content"}}
+      }
+    },
+    "/labels": {
+      "get": {
+        "operationId": "listLabels",
+        "tags": ["items"],
+        "responses": {
+          "200": {"description": "OK", "content": {"application/json": {"schema": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}}}}
+        }
+      }
+    },
+    "/notes": {
+      "get": {
+        "operationId": "listNotes",
+        "tags": ["notes"],
+        "responses": {
+          "200": {"description": "OK", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Note"}}}}}
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Item": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}},
+      "Note": {"type": "object", "required": ["body"], "properties": {"body": {"type": "string"}}}
+    }
+  }
+}

@@ -31,10 +31,7 @@ void main() {
       expect(catalog.search('profile photo').first.id, 'uploads');
       expect(catalog.search('séssion').first.id, 'session');
       expect(catalog.search('verb').first.id, 'verbs');
-      expect(
-        catalog.search('a').every((c) => c.status == 'available'),
-        isTrue,
-      );
+      expect(catalog.search('a').every((c) => c.status == 'available'), isTrue);
       expect(
         catalog.search('a', all: true).length,
         greaterThanOrEqualTo(catalog.search('a').length),

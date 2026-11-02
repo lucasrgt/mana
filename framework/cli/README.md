@@ -131,3 +131,13 @@ where exit 2 is undecided). `mana sense --changed` uses the diff since `--base` 
 new files; a failing sensor with `gate` stops the more expensive ones (`--keep-going`
 continues) and `--budget` leaves those that do not fit as `unresolved`. Logs and the
 verdict live in `.mana/sense/<date>/`.
+
+## Upgrades
+
+`mana upgrade verb-steps | timed-rules [paths...] [--dry-run]` runs a codemod of
+[`framework/ash/upgrade`](../ash/upgrade/README.md) over the backend's code (its
+`lib` by default) from the framework's own package, so the app needs no
+dependency on it; `--dry-run` prints the diff. `verb-steps` first scans the
+frontends' Dart (the same files as `mana graph`) for the keys each
+`VerbGate(verb: XVerbs.y)` places on its control and hands the codemod that
+mapping.

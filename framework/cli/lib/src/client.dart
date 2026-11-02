@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:analyzer/dart/analysis/utilities.dart';
+import 'package:analyzer/dart/ast/ast.dart';
+import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:path/path.dart' as p;
 
 import 'contracts.dart';
@@ -135,44 +138,7 @@ Future<Map<String, Object?>> generateClient({
       // structurally identical one (e.g. a phone code for an email code) misleads readers.
       '--inline-schema-options', 'SKIP_SCHEMA_REUSE=true',
     ]);
-    // An operation answering a free-form object imports json_object a second time.
-    final imported = RegExp(r"^import '[^']+';\n", multiLine: true);
-    // dart-dio declares a top-level array response as BuiltList but reads it as
-    // a BuiltSet, so the cast fails at runtime; read it as the list it declares.
-    final listed = <String>{};
-    for (final file in Directory(
-      p.join(stage, 'lib/src/api'),
-    ).listSync().whereType<File>()) {
-      final seen = <String>{};
-      file.writeAsStringSync(
-        file
-            .readAsStringSync()
-            .replaceAllMapped(
-              imported,
-              (match) => seen.add(match[0]!) ? match[0]! : '',
-            )
-            .replaceAllMapped(
-              RegExp(
-                r'FullType\(BuiltSet, \[FullType\((\w+)\)\]\),(\s*\) as BuiltList<)',
-              ),
-              (match) {
-                listed.add(match[1]!);
-                return 'FullType(BuiltList, [FullType(${match[1]})]),${match[2]}';
-              },
-            ),
-      );
-    }
-    final serializersFile = File(p.join(stage, 'lib/src/serializers.dart'));
-    var serializers = serializersFile.readAsStringSync();
-    for (final type in listed) {
-      if (!serializers.contains('FullType(BuiltList, [FullType($type)])')) {
-        serializers = serializers.replaceFirst(
-          RegExp(r'\n    \)\.build\(\);'),
-          '\n      ..addBuilderFactory(\n        const FullType(BuiltList, [FullType($type)]),\n        () => ListBuilder<$type>(),\n      )\n    ).build();',
-        );
-      }
-    }
-    serializersFile.writeAsStringSync(serializers);
+    patchGeneratedClient(stage);
     writePrimitives(
       stage,
       name,
@@ -262,3 +228,201 @@ Future<Map<String, Object?>> generateClient({
     }
   }
 }
+
+/// Fixes dart-dio's output in [stage] where it is wrong for Mana's contracts,
+/// on the parsed source (`package:analyzer`), each edit replacing only the
+/// characters it changes. The api files are read in name order, so the list
+/// builders' order does not depend on the directory listing.
+void patchGeneratedClient(String stage) {
+  final listed = <String>{};
+  final apis =
+      Directory(
+          p.join(stage, 'lib/src/api'),
+        ).listSync().whereType<File>().toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
+  for (final file in apis) {
+    final read = readListsAsLists(
+      withoutRepeatedImports(file.readAsStringSync()),
+    );
+    listed.addAll(read.types);
+    file.writeAsStringSync(read.source);
+  }
+  final serializers = File(p.join(stage, 'lib/src/serializers.dart'));
+  serializers.writeAsStringSync(
+    withListBuilders(serializers.readAsStringSync(), listed),
+  );
+}
+
+/// [source] without an import repeated word for word: an operation answering
+/// a free-form object imports `json_object` a second time.
+String withoutRepeatedImports(String source) {
+  final seen = <String>{};
+  final edits = <_Edit>[];
+  for (final directive in _parse(source).directives) {
+    final text = source.substring(directive.offset, directive.end);
+    if (directive is! ImportDirective ||
+        seen.add(text) ||
+        !_startsLine(source, directive.offset) ||
+        !source.startsWith('\n', directive.end)) {
+      continue;
+    }
+    edits.add((offset: directive.offset, end: directive.end + 1, text: ''));
+  }
+  return _apply(source, edits);
+}
+
+/// dart-dio declares a top-level array response as `BuiltList<T>` but reads
+/// it with `FullType(BuiltSet, [FullType(T)])`, so the cast fails at runtime:
+/// each such read asks for the list it declares. [types] are the `T`s, which
+/// the serializers then need a list builder for ([withListBuilders]).
+({String source, Set<String> types}) readListsAsLists(String source) {
+  final reads = _SetReadsAsList();
+  _parse(source).accept(reads);
+  return (
+    source: _apply(source, [
+      for (final container in reads.containers)
+        (offset: container.offset, end: container.end, text: 'BuiltList'),
+    ]),
+    types: reads.types,
+  );
+}
+
+/// [serializers] with a `ListBuilder<T>` factory for each of [types] it
+/// lacks, appended in order to the cascade `serializers` builds.
+String withListBuilders(String serializers, Iterable<String> types) {
+  final unit = _parse(serializers);
+  final cascade = _serializersCascade(unit);
+  final missing = [
+    for (final type in types)
+      if (cascade == null || !_buildsList(cascade, type)) type,
+  ];
+  if (missing.isEmpty) return serializers;
+  if (cascade == null) {
+    throw const ManaFailure(
+      'Generated serializers.dart has no serializers cascade to register list builders in',
+    );
+  }
+  return _apply(serializers, [
+    (
+      offset: cascade.end,
+      end: cascade.end,
+      text: [
+        for (final type in missing)
+          '\n      ..addBuilderFactory(\n        const FullType(BuiltList, [FullType($type)]),\n        () => ListBuilder<$type>(),\n      )',
+      ].join(),
+    ),
+  ]);
+}
+
+typedef _Edit = ({int offset, int end, String text});
+
+CompilationUnit _parse(String source) => parseString(content: source).unit;
+
+bool _startsLine(String source, int offset) =>
+    offset == 0 || source[offset - 1] == '\n';
+
+String _apply(String source, List<_Edit> edits) {
+  final buffer = StringBuffer();
+  var at = 0;
+  for (final edit in edits..sort((a, b) => a.offset.compareTo(b.offset))) {
+    buffer
+      ..write(source.substring(at, edit.offset))
+      ..write(edit.text);
+    at = edit.end;
+  }
+  return (buffer..write(source.substring(at))).toString();
+}
+
+/// `FullType(Container, [FullType(Element)])`, const or not, as its parts.
+({SimpleIdentifier container, String element})? _fullTypeOf(Argument e) {
+  final arguments = _fullTypeArguments(e);
+  if (arguments case [
+    SimpleIdentifier container,
+    ListLiteral(elements: [final Expression inner]),
+  ]) {
+    if (_fullTypeArguments(inner) case [SimpleIdentifier element]) {
+      return (container: container, element: element.name);
+    }
+  }
+  return null;
+}
+
+List<Argument>? _fullTypeArguments(Argument e) => switch (e) {
+  InstanceCreationExpression(
+    constructorName: ConstructorName(
+      type: NamedType(importPrefix: null, typeArguments: null),
+      name: null,
+    ),
+  )
+      when e.constructorName.type.name.lexeme == 'FullType' =>
+    e.argumentList.arguments,
+  MethodInvocation(target: null, typeArguments: null)
+      when e.methodName.name == 'FullType' =>
+    e.argumentList.arguments,
+  _ => null,
+};
+
+final class _SetReadsAsList extends RecursiveAstVisitor<void> {
+  final containers = <SimpleIdentifier>[];
+  final types = <String>{};
+
+  @override
+  void visitAsExpression(AsExpression node) {
+    final declared = node.type;
+    final read = node.expression;
+    if (declared is NamedType &&
+        declared.name.lexeme == 'BuiltList' &&
+        declared.question == null &&
+        read is MethodInvocation &&
+        read.methodName.name == 'deserialize') {
+      final element = switch (declared.typeArguments?.arguments) {
+        [NamedType(typeArguments: null, question: null) && final type] =>
+          type.name.lexeme,
+        _ => null,
+      };
+      for (final argument
+          in read.argumentList.arguments.whereType<NamedArgument>()) {
+        if (argument.name.lexeme != 'specifiedType') continue;
+        final type = _fullTypeOf(argument.argumentExpression);
+        if (type != null &&
+            type.container.name == 'BuiltSet' &&
+            type.element == element) {
+          containers.add(type.container);
+          types.add(element!);
+        }
+      }
+    }
+    super.visitAsExpression(node);
+  }
+}
+
+/// The cascade in `serializers = (_$serializers.toBuilder()..…).build()`.
+CascadeExpression? _serializersCascade(CompilationUnit unit) {
+  for (final declaration
+      in unit.declarations.whereType<TopLevelVariableDeclaration>()) {
+    for (final variable in declaration.variables.variables) {
+      if (variable.name.lexeme != 'serializers') continue;
+      if (variable.initializer case MethodInvocation(
+        methodName: SimpleIdentifier(name: 'build'),
+        target: ParenthesizedExpression(
+          expression: final CascadeExpression cascade,
+        ),
+      )) {
+        return cascade;
+      }
+    }
+  }
+  return null;
+}
+
+bool _buildsList(CascadeExpression cascade, String type) =>
+    cascade.cascadeSections.any((section) {
+      if (section case MethodInvocation(
+        methodName: SimpleIdentifier(name: 'addBuilderFactory'),
+        argumentList: ArgumentList(arguments: [final first, ...]),
+      )) {
+        final built = _fullTypeOf(first);
+        return built?.container.name == 'BuiltList' && built?.element == type;
+      }
+      return false;
+    });

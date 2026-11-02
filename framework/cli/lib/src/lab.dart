@@ -41,8 +41,10 @@ final class LabDatabase {
   String get recipeToken => _derived(password, 'moments-recipes');
 }
 
-String _derived(String password, String purpose) =>
-    Hmac(sha256, utf8.encode(password)).convert(utf8.encode(purpose)).toString();
+String _derived(String password, String purpose) => Hmac(
+  sha256,
+  utf8.encode(password),
+).convert(utf8.encode(purpose)).toString();
 
 /// The database of this run: the server `MANA_LAB_POSTGRES` names, or the
 /// sandbox whose `instance.json` is [instanceFile].
@@ -182,8 +184,7 @@ Future<void> lab(String root, List<String> arguments, {String? backend}) async {
       webUrl,
       ?Platform.environment['MOMENTS_SUITE_ORIGIN'],
     ].join(','),
-    'LAB_PORT':
-        '${Uri.parse(target.apiUrl ?? 'http://127.0.0.1:4000').port}',
+    'LAB_PORT': '${Uri.parse(target.apiUrl ?? 'http://127.0.0.1:4000').port}',
     'MOMENTS_RECIPE_TOKEN': target.recipeToken,
     'LAB_SERVER': operation == 'serve' ? 'true' : 'false',
     'MIX_ENV': operation == 'test' ? 'test' : 'dev',

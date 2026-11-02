@@ -17,23 +17,11 @@ final _generatedMember = RegExp(r'^(all|of|offered|values|byName)$');
 /// screens.
 Map<String, List<String>> screenVerbs(String root, Iterable<String> roots) {
   final found = <String, Set<String>>{};
-  for (final frontend in roots) {
-    final lib = Directory(p.join(root, frontend, 'lib'));
-    if (!lib.existsSync()) {
-      continue;
-    }
-    for (final file in lib.listSync(recursive: true).whereType<File>()) {
-      if (!file.path.endsWith('.dart') || file.path.endsWith('.g.dart')) {
-        continue;
-      }
-      final relative = p.relative(file.path, from: root);
-      for (final match in _reference.allMatches(file.readAsStringSync())) {
-        if (_generatedMember.hasMatch(match[2]!)) {
-          continue;
-        }
-        final verb = '${_snake(match[1]!)}.${_snake(match[2]!)}';
-        (found[verb] ??= {}).add(relative);
-      }
+  for (final file in screenFiles(root, roots)) {
+    final relative = p.relative(file.path, from: root);
+    for (final match in _reference.allMatches(file.readAsStringSync())) {
+      final verb = verbReference(match[1]!, match[2]!);
+      if (verb != null) (found[verb] ??= {}).add(relative);
     }
   }
   return {
@@ -41,6 +29,28 @@ Map<String, List<String>> screenVerbs(String root, Iterable<String> roots) {
       verb: found[verb]!.toList()..sort(),
   };
 }
+
+/// The hand-written Dart files under each frontend's `lib` in [roots].
+Iterable<File> screenFiles(String root, Iterable<String> roots) sync* {
+  for (final frontend in roots) {
+    final lib = Directory(p.join(root, frontend, 'lib'));
+    if (!lib.existsSync()) {
+      continue;
+    }
+    for (final file in lib.listSync(recursive: true).whereType<File>()) {
+      if (file.path.endsWith('.dart') && !file.path.endsWith('.g.dart')) {
+        yield file;
+      }
+    }
+  }
+}
+
+/// `type.verb` for `${Type}Verbs.member`, or null for the class's own
+/// members (`all`, `of`, ...).
+String? verbReference(String type, String member) =>
+    _generatedMember.hasMatch(member)
+    ? null
+    : '${_snake(type)}.${_snake(member)}';
 
 String _snake(String name) => name
     .replaceAllMapped(RegExp(r'(?<=[a-z0-9])([A-Z])'), (m) => '_${m[1]}')
