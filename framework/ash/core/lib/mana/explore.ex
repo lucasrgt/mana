@@ -1474,12 +1474,17 @@ defmodule Mana.Explore do
   end
 
   # `{resource, its field, the referenced field}` for every relationship that
-  # names `resource`'s records from a resource of the run.
+  # names `resource`'s records by their key from a resource of the run. A
+  # relationship keyed on another field (a profile looked up by `owner_id`)
+  # is a lookup the record makes, not a record that depends on it.
   defp dependents(ctx, resource) do
+    key = Ash.Resource.Info.primary_key(resource)
+
     named =
       for dependent <- ctx.all,
           %{type: :belongs_to, destination: ^resource} = relationship <-
             Ash.Resource.Info.relationships(dependent),
+          [relationship.destination_attribute] == key,
           do: {dependent, relationship.source_attribute, relationship.destination_attribute}
 
     owned =
@@ -1487,6 +1492,7 @@ defmodule Mana.Explore do
           relationship.type in [:has_one, :has_many, :many_to_many],
           not Map.get(relationship, :no_attributes?, false),
           is_nil(Map.get(relationship, :manual)),
+          [relationship.source_attribute] == key,
           dependent = Map.get(relationship, :through) || relationship.destination,
           dependent in ctx.all,
           do: {dependent, owning_field(relationship), relationship.source_attribute}
