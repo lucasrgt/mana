@@ -1,0 +1,18 @@
+defmodule MyApp.Bookings.Rules do
+  @moduledoc "What the booking rules ask."
+
+  # Fifteen minutes to pay.
+  def recently_accepted?(booking) do
+    DateTime.compare(DateTime.add(booking.accepted_at, 15, :minute), DateTime.utc_now()) == :gt
+  end
+
+  def charged?(booking), do: booking.charge_id != nil
+
+  def young_draft?(b), do: DateTime.after?(DateTime.add(b.inserted_at, 1, :day), DateTime.utc_now())
+
+  # Up to and including the tenth minute: not the shape.
+  def held?(booking),
+    do: DateTime.compare(DateTime.add(booking.held_at, 10, :minute), DateTime.utc_now()) != :lt
+
+  def remind(_booking), do: :ok
+end

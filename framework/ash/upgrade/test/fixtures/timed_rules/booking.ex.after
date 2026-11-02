@@ -1,0 +1,33 @@
+defmodule MyApp.Bookings.Booking do
+  @moduledoc "A booking."
+  use Ash.Resource, extensions: [Mana.Reconcile]
+
+  alias MyApp.Bookings.Rules
+
+  reconcile do
+    # An accepted booking is paid, or expires.
+    desired :accepted_resolves, "an accepted booking is paid or expires within 15 minutes",
+      scope: expr(status == :accepted),
+      within: {15, :minute}, since: :accepted_at
+
+    desired :request_answered, "a request is answered within two days",
+      scope: expr(status == :requested),
+      # the host is reminded first
+      within: {48, :hour}, since: :requested_at,
+      apply: {Rules, :remind}
+
+    desired :paid_has_charge, "every paid booking has a live charge",
+      scope: expr(status == :paid),
+      holds: {Rules, :charged?}
+
+    desired :draft_cleared, "a draft goes within a day",
+      scope: expr(status == :draft),
+      holds: {Rules, :young_draft?},
+      within: {1, :day}
+
+    desired :hold_released, "a hold is released", scope: expr(status == :held), holds: {Rules, :held?}
+    desired :elsewhere, "a rule of another app", scope: expr(true), holds: {Elsewhere, :fine?}
+  end
+
+  def fresh_request?(booking), do: DateTime.diff(DateTime.utc_now(), booking.requested_at, :hour) < 48
+end

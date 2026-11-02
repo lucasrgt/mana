@@ -37,6 +37,9 @@ mana intent list | show <id> | approve <id> --by <name> | check <id>
   An ask as situations and criteria (intents/<id>.toml), frozen on approval, checked as an AVP verdict.
 mana graph [verbs-without-moment | dead-verbs | proves <type.verb> | knob <name> | verb <type.verb>] [--json]
   The program graph (mix mana.graph) with the verbs each Dart screen refers to.
+mana upgrade verb-steps | timed-rules [paths...] [--dry-run]
+  Codemods (mix mana.upgrade) over the backend's lib: tap steps on a VerbGate's
+  key become verb: steps; timed holds: functions become within:/since:.
 mana examples [Module.fun] [--json]
   What each defexample function received and returned in each Moment
   (Mana.Examples), newest first, with what changed since the previous run.
@@ -355,6 +358,8 @@ Future<void> main(List<String> arguments) async {
       return _intent(arguments.skip(1).toList());
     case 'graph':
       return _graph(arguments.skip(1).toList());
+    case 'upgrade':
+      return _upgrade(arguments.skip(1).toList());
   }
   try {
     final parser = ArgParser()
@@ -567,6 +572,15 @@ Future<void> _new(List<String> arguments) async {
 Future<void> _graph(List<String> arguments) async {
   try {
     await graph(findProject(), arguments);
+  } on ManaFailure catch (error) {
+    stderr.writeln(error.message);
+    exitCode = 1;
+  }
+}
+
+Future<void> _upgrade(List<String> arguments) async {
+  try {
+    await upgrade(findProject(), arguments);
   } on ManaFailure catch (error) {
     stderr.writeln(error.message);
     exitCode = 1;

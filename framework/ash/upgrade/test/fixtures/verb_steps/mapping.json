@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "keys": {
+    "property-detail-publish": "property.publish",
+    "partner-ad-pause": "partner_ad.pause"
+  },
+  "conflicts": {
+    "shared-key": ["booking.cancel", "booking.pay"]
+  }
+}

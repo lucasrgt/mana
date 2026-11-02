@@ -17,6 +17,7 @@ export 'src/mcp.dart';
 export 'src/primitives.dart';
 export 'src/contracts.dart';
 export 'src/toolchain.dart';
+export 'src/upgrade.dart';
 export 'src/web.dart';
 export 'src/elixir.dart';
 export 'src/elixir_style.dart';
