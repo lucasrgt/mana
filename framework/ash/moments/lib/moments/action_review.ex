@@ -2,6 +2,10 @@ defmodule Moments.ActionReview do
   @moduledoc "Local review planning from compiled Ash metadata; never executes an action or approves it."
   alias Ash.Resource.Info
 
+  @compile {:no_warn_undefined, [AshOban.Info]}
+
+  @reviews [:authorization, :persistence, :transactions, :custom_execution, :jobs]
+
   def build(resource, name) when is_binary(name) do
     unless Info.resource?(resource), do: raise(ArgumentError, "Expected a compiled Ash resource")
 
@@ -17,69 +21,18 @@ defmodule Moments.ActionReview do
     notifiers = Info.notifiers(resource)
     jobs = jobs(resource, action)
 
-    questions = [
-      question(
-        "authorization",
-        "Action entry point",
-        "Follow actor, tenant and authorize? through actual callers; exercise denied and cross-owner paths. Configured authorizers alone do not prove enforcement."
-      )
-    ]
+    subject = %{
+      action: action,
+      layer: layer,
+      write: write,
+      manual: manual,
+      hooks: hooks,
+      notifiers: notifiers,
+      jobs: jobs
+    }
 
     questions =
-      if layer not in [nil, Ash.DataLayer.Simple] and action.type != :action do
-        questions ++
-          [
-            question(
-              "persistence",
-              "Configured data layer: #{inspect(layer)}",
-              "Inspect actual Repo/pool ownership and custom hooks for serialization, unbounded queries and N+1. Measure contention when the change affects it."
-            )
-          ]
-      else
-        questions
-      end
-
-    questions =
-      if write or Map.get(action, :transaction?, false) do
-        questions ++
-          [
-            question(
-              "transactions",
-              "#{action.type} action; transaction?=#{Map.get(action, :transaction?, false)}",
-              "Check the business invariant against database constraints, locking, nested calls and rollback behavior. A transaction flag does not prove concurrency safety or roll back remote effects."
-            )
-          ]
-      else
-        questions
-      end
-
-    questions =
-      if manual or hooks != [] or notifiers != [] or action.type == :action do
-        questions ++
-          [
-            question(
-              "custom-execution",
-              "Declared hooks, manual implementation or notifiers",
-              "Inspect the listed implementations and their callbacks for external effects, jobs, retries, global processes and authorization bypasses; select additional Moments from those actual dependencies."
-            )
-          ]
-      else
-        questions
-      end
-
-    questions =
-      if jobs != [] do
-        questions ++
-          [
-            question(
-              "jobs",
-              "AshOban declares references to this action",
-              "Review actor/tenant restoration, retry and idempotency, queue ownership and failure handling for the listed triggers. Database commit does not guarantee exactly-once external delivery."
-            )
-          ]
-      else
-        questions
-      end
+      @reviews |> Enum.filter(&review?(&1, subject)) |> Enum.map(&review(&1, subject))
 
     %{
       version: 1,
@@ -116,6 +69,61 @@ defmodule Moments.ActionReview do
       ]
     }
   end
+
+  defp review?(:authorization, _subject), do: true
+
+  defp review?(:persistence, %{layer: layer, action: action}),
+    do: layer not in [nil, Ash.DataLayer.Simple] and action.type != :action
+
+  defp review?(:transactions, %{write: write, action: action}),
+    do: write or Map.get(action, :transaction?, false)
+
+  defp review?(:custom_execution, subject) do
+    %{manual: manual, hooks: hooks, notifiers: notifiers, action: action} = subject
+    manual or hooks != [] or notifiers != [] or action.type == :action
+  end
+
+  defp review?(:jobs, %{jobs: jobs}), do: jobs != []
+
+  defp review(:authorization, _subject),
+    do:
+      question(
+        "authorization",
+        "Action entry point",
+        "Follow actor, tenant and authorize? through actual callers; exercise denied and cross-owner paths. Configured authorizers alone do not prove enforcement."
+      )
+
+  defp review(:persistence, %{layer: layer}),
+    do:
+      question(
+        "persistence",
+        "Configured data layer: #{inspect(layer)}",
+        "Inspect actual Repo/pool ownership and custom hooks for serialization, unbounded queries and N+1. Measure contention when the change affects it."
+      )
+
+  defp review(:transactions, %{action: action}),
+    do:
+      question(
+        "transactions",
+        "#{action.type} action; transaction?=#{Map.get(action, :transaction?, false)}",
+        "Check the business invariant against database constraints, locking, nested calls and rollback behavior. A transaction flag does not prove concurrency safety or roll back remote effects."
+      )
+
+  defp review(:custom_execution, _subject),
+    do:
+      question(
+        "custom-execution",
+        "Declared hooks, manual implementation or notifiers",
+        "Inspect the listed implementations and their callbacks for external effects, jobs, retries, global processes and authorization bypasses; select additional Moments from those actual dependencies."
+      )
+
+  defp review(:jobs, _subject),
+    do:
+      question(
+        "jobs",
+        "AshOban declares references to this action",
+        "Review actor/tenant restoration, retry and idempotency, queue ownership and failure handling for the listed triggers. Database commit does not guarantee exactly-once external delivery."
+      )
 
   defp question(id, reason, text),
     do: %{id: id, level: "reviewed", status: "pending", reason: reason, question: text}
@@ -196,27 +204,30 @@ defmodule Moments.ActionReview do
   defp module_name(module), do: inspect(module)
 
   defp jobs(resource, action) do
-    if AshOban in Spark.extensions(resource) do
-      unless Code.ensure_loaded?(AshOban.Info) and
-               function_exported?(AshOban.Info, :oban_triggers_and_scheduled_actions, 1),
-             do: raise(ArgumentError, "Installed AshOban introspection is unsupported")
+    if AshOban in Spark.extensions(resource), do: oban_jobs(resource, action), else: []
+  end
 
-      # AshOban is optional; rely on its native Info API when the resource uses it.
-      apply(AshOban.Info, :oban_triggers_and_scheduled_actions, [resource])
-      |> Enum.flat_map(fn trigger ->
-        for role <- [:action, :read_action, :worker_read_action, :on_error],
-            Map.get(trigger, role) == action.name do
-          %{
-            name: to_string(trigger.name),
-            kind: inspect(trigger.__struct__),
-            role: to_string(role),
-            worker: module_name(Map.get(trigger, :worker_module_name))
-          }
-        end
-      end)
-      |> Enum.sort_by(&{&1.name, &1.role})
-    else
-      []
+  defp oban_jobs(resource, action) do
+    unless Code.ensure_loaded?(AshOban.Info) and
+             function_exported?(AshOban.Info, :oban_triggers_and_scheduled_actions, 1),
+           do: raise(ArgumentError, "Installed AshOban introspection is unsupported")
+
+    # AshOban is optional; rely on its native Info API when the resource uses it.
+    resource
+    |> AshOban.Info.oban_triggers_and_scheduled_actions()
+    |> Enum.flat_map(&trigger_jobs(&1, action.name))
+    |> Enum.sort_by(&{&1.name, &1.role})
+  end
+
+  defp trigger_jobs(trigger, action_name) do
+    for role <- [:action, :read_action, :worker_read_action, :on_error],
+        Map.get(trigger, role) == action_name do
+      %{
+        name: to_string(trigger.name),
+        kind: inspect(trigger.__struct__),
+        role: to_string(role),
+        worker: module_name(Map.get(trigger, :worker_module_name))
+      }
     end
   end
 

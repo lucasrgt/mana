@@ -1,4 +1,8 @@
 defmodule Mix.Tasks.Contracts.Export do
+  @moduledoc """
+  Usage: `mix contracts.export MyApp.Domain[,MyApp.Other] /api output.json [MyApp.OpenApi]`.
+  An optional modifier module must export `modify/3` and replaces `Contracts.OpenApi`.
+  """
   use Mix.Task
   @shortdoc "Export a normalized JSON:API contract without starting the app"
 

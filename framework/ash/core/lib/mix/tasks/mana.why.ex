@@ -10,6 +10,9 @@ defmodule Mix.Tasks.Mana.Why do
   """
   use Mix.Task
 
+  alias Ash.Domain.Info
+  alias Mana.Why
+
   # Reading the history needs the repositories, not the server: a running
   # development server keeps its port.
   defp start(app) do
@@ -33,19 +36,8 @@ defmodule Mix.Tasks.Mana.Why do
     app = Mix.Project.config()[:app]
     start(app)
 
-    logs =
-      case Keyword.get_values(opts, :log) do
-        [] ->
-          for domain <- Application.fetch_env!(app, :ash_domains),
-              r <- Ash.Domain.Info.resources(domain),
-              Mana.History.Log in Spark.extensions(r),
-              do: r
-
-        names ->
-          Enum.map(names, &(&1 |> String.split(".") |> Module.safe_concat()))
-      end
-
-    slices = Mana.Why.explain(logs, value, root: Path.expand(opts[:root] || ".."))
+    logs = logs(app, Keyword.get_values(opts, :log))
+    slices = Why.explain(logs, value, root: Path.expand(opts[:root] || ".."))
 
     if opts[:json] do
       Mix.shell().info(Jason.encode!(slices, pretty: true))
@@ -53,15 +45,28 @@ defmodule Mix.Tasks.Mana.Why do
       if slices == [],
         do: Mix.shell().info("No recorded change set a field to #{inspect(value)}.")
 
-      for s <- slices do
-        Mix.shell().info(
-          "#{s.record} #{s.field}: #{inspect(s.before)} → #{inspect(s.after)} · #{s.set_by} (#{s.summary}) by #{s.actor.kind}#{if s.actor.via, do: " #{s.actor.via}", else: ""} at #{s.at}" <>
-            if(s.moment,
-              do: " · #{s.moment}",
-              else: if(s.gesture, do: " · gesture #{s.gesture}", else: "")
-            )
-        )
-      end
+      Enum.each(slices, &Mix.shell().info(sentence(&1)))
     end
   end
+
+  defp logs(app, []) do
+    for domain <- Application.fetch_env!(app, :ash_domains),
+        r <- Info.resources(domain),
+        Mana.History.Log in Spark.extensions(r),
+        do: r
+  end
+
+  defp logs(_app, names), do: Enum.map(names, &(&1 |> String.split(".") |> Module.safe_concat()))
+
+  defp sentence(s) do
+    "#{s.record} #{s.field}: #{inspect(s.before)} → #{inspect(s.after)} · #{s.set_by} (#{s.summary}) by #{s.actor.kind}#{via(s.actor.via)} at #{s.at}" <>
+      where(s)
+  end
+
+  defp via(via) when via in [nil, false], do: ""
+  defp via(via), do: " #{via}"
+
+  defp where(%{moment: moment}) when moment not in [nil, false], do: " · #{moment}"
+  defp where(%{gesture: gesture}) when gesture not in [nil, false], do: " · gesture #{gesture}"
+  defp where(_slice), do: ""
 end

@@ -17,26 +17,28 @@ defmodule Moments.ActionTrace.Plug do
     Moments.ActionTrace.discard()
 
     case get_req_header(conn, "x-mana-gesture") do
-      [id] when byte_size(id) == 36 ->
-        if Regex.match?(@gesture, id) do
-          Moments.ActionTrace.begin_request(id)
-
-          register_before_send(conn, fn conn ->
-            encoded =
-              Moments.ActionTrace.finish_request()
-              |> Jason.encode!()
-              |> Base.url_encode64(padding: false)
-
-            if byte_size(encoded) <= 7000,
-              do: put_resp_header(conn, "x-mana-actions", encoded),
-              else: conn
-          end)
-        else
-          conn
-        end
-
-      _ ->
-        conn
+      [id] when byte_size(id) == 36 -> trace(conn, id)
+      _ -> conn
     end
+  end
+
+  defp trace(conn, id) do
+    if Regex.match?(@gesture, id) do
+      Moments.ActionTrace.begin_request(id)
+      register_before_send(conn, &put_receipt/1)
+    else
+      conn
+    end
+  end
+
+  defp put_receipt(conn) do
+    encoded =
+      Moments.ActionTrace.finish_request()
+      |> Jason.encode!()
+      |> Base.url_encode64(padding: false)
+
+    if byte_size(encoded) <= 7000,
+      do: put_resp_header(conn, "x-mana-actions", encoded),
+      else: conn
   end
 end

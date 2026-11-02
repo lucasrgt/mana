@@ -22,6 +22,9 @@ defmodule Mana.Views do
   marks views whose screens follow `Mana.Entity` announcements.
   """
 
+  alias Ash.Resource.Info
+  alias Spark.Dsl.Extension
+
   @view %Spark.Dsl.Entity{
     name: :view,
     target: Mana.Views.View,
@@ -55,7 +58,7 @@ defmodule Mana.Views do
     Map.new(view!(resource, name).fields, &{to_string(&1), Map.get(loaded, &1)})
   end
 
-  def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:views])
+  def declared(resource), do: Extension.get_entities(resource, [:views])
 
   def view!(resource, name),
     do:
@@ -66,8 +69,7 @@ defmodule Mana.Views do
   def loads(resource, name) do
     loadable =
       MapSet.new(
-        Ash.Resource.Info.public_calculations(resource) ++
-          Ash.Resource.Info.public_aggregates(resource),
+        Info.public_calculations(resource) ++ Info.public_aggregates(resource),
         & &1.name
       )
 
@@ -77,7 +79,7 @@ defmodule Mana.Views do
   @impl Mana.Primitive
   def contract(resource) do
     required =
-      for attribute <- Ash.Resource.Info.public_attributes(resource),
+      for attribute <- Info.public_attributes(resource),
           not attribute.allow_nil? and attribute.name != :id,
           do: attribute.name
 
@@ -114,6 +116,7 @@ defmodule Mana.Views.Validate do
   @moduledoc false
   use Spark.Dsl.Transformer
   alias Spark.Dsl.Transformer
+  alias Spark.Error.DslError
 
   def after?(_), do: true
 
@@ -135,7 +138,7 @@ defmodule Mana.Views.Validate do
         missing ->
           {:halt,
            {:error,
-            Spark.Error.DslError.exception(
+            DslError.exception(
               module: module,
               path: [:views, view.name],
               message:

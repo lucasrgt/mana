@@ -23,6 +23,9 @@ defmodule Mana.Replay do
   verbs a subject's entries ran, else its type).
   """
 
+  alias Ash.Domain.Info
+  alias Mana.History
+
   @ignored ["id", "inserted_at", "updated_at", "created_at"]
 
   @doc "The entries of a JSON-lines export."
@@ -44,7 +47,7 @@ defmodule Mana.Replay do
   def run(entries, opts \\ []) do
     resources =
       for domain <- List.wrap(opts[:domains]),
-          resource <- Ash.Domain.Info.resources(domain),
+          resource <- Info.resources(domain),
           into: %{},
           do: {Mana.Entity.type(resource), resource}
 
@@ -109,7 +112,7 @@ defmodule Mana.Replay do
     recorded = recorded(entries)
 
     replayed =
-      Mana.History.replay(resource, Enum.map(entries, &as_export/1),
+      History.replay(resource, Enum.map(entries, &as_export/1),
         actor: opts[:actor] || fn _ -> nil end,
         params: opts[:params] || fn _action, params -> params end,
         times: opts[:times] || :as_recorded,
@@ -121,14 +124,7 @@ defmodule Mana.Replay do
         %{outcome: :same, detail: "nothing to rebuild"}
 
       {:ok, record, applied} ->
-        fields =
-          for {field, value} <- recorded,
-              field not in @ignored,
-              value != "[redacted]",
-              now = record |> Map.get(String.to_existing_atom(field)) |> Mana.History.encode(),
-              now != value,
-              do: %{field: field, recorded: value, replayed: now}
-
+        fields = diverged_fields(record, recorded)
         cleanup(record)
 
         if fields == [],
@@ -143,6 +139,15 @@ defmodule Mana.Replay do
     end
   rescue
     error -> %{outcome: :failed, detail: Exception.message(error) |> String.slice(0, 300)}
+  end
+
+  defp diverged_fields(record, recorded) do
+    for {field, value} <- recorded,
+        field not in @ignored,
+        value != "[redacted]",
+        now = record |> Map.get(String.to_existing_atom(field)) |> History.encode(),
+        now != value,
+        do: %{field: field, recorded: value, replayed: now}
   end
 
   # Without a transaction to roll back, the rebuilt record is removed.

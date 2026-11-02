@@ -47,7 +47,9 @@ end
 defmodule Mana.Domain.DefineErrors do
   @moduledoc false
   use Spark.Dsl.Transformer
+  alias Mana.Domain.Info
   alias Spark.Dsl.Transformer
+  alias Spark.Error.DslError
 
   def transform(dsl) do
     errors = Transformer.get_entities(dsl, [:errors])
@@ -70,7 +72,7 @@ defmodule Mana.Domain.DefineErrors do
            [],
            quote do
              def error(name, opts \\ []) do
-               case Enum.find(Mana.Domain.Info.errors(__MODULE__), &(&1.name == name)) do
+               case Enum.find(Info.errors(__MODULE__), &(&1.name == name)) do
                  nil ->
                    raise ArgumentError,
                          "#{inspect(__MODULE__)} declares no error #{inspect(name)}"
@@ -93,7 +95,7 @@ defmodule Mana.Domain.DefineErrors do
   defp error(dsl, message),
     do:
       {:error,
-       Spark.Error.DslError.exception(
+       DslError.exception(
          module: Transformer.get_persisted(dsl, :module),
          path: [:errors],
          message: message
@@ -106,6 +108,8 @@ defmodule Mana.Domain.OpenApi do
   one component per `Mana.Enum` in place of its inline copies, and one per
   `Mana.Shape`.
   """
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [AshJsonApi.Resource.Info]}
   @doc "Every Mana finishing step: error codes, enums, shapes and verbs."
   def finish(spec, domains),
     do:

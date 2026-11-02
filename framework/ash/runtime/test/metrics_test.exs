@@ -1,5 +1,7 @@
 defmodule Mana.Runtime.MetricsTest do
   use ExUnit.Case, async: false
+  alias Mana.Runtime.Metrics
+  alias Mana.Runtime.MetricsPlug
   import Plug.Test
   import Plug.Conn
   @name ManaMetricsTest
@@ -9,7 +11,7 @@ defmodule Mana.Runtime.MetricsTest do
 
   setup do
     start_supervised!(
-      {Mana.Runtime.Metrics,
+      {Metrics,
        name: @name,
        endpoint: @endpoint,
        repo_event: [:metrics_test, :repo, :query],
@@ -23,8 +25,8 @@ defmodule Mana.Runtime.MetricsTest do
     :ok
   end
 
-  defp scrape, do: @name |> Mana.Runtime.Metrics.scrape() |> IO.iodata_to_binary()
-  defp call(conn), do: Mana.Runtime.MetricsPlug.call(conn, {@app, @name})
+  defp scrape, do: @name |> Metrics.scrape() |> IO.iodata_to_binary()
+  defp call(conn), do: MetricsPlug.call(conn, {@app, @name})
 
   test "queue observations keep declared aggregate labels and distinguish failure from empty" do
     :telemetry.execute([:metrics_test, :queues, :queue], %{age: 170, discarded: 1}, %{

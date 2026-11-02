@@ -62,11 +62,13 @@ defmodule Mix.Tasks.Mana.Lint do
     [nil | lines]
     |> Enum.zip(lines)
     |> Enum.with_index(1)
-    |> Enum.flat_map(fn {{previous, text}, line} ->
-      if String.contains?(text, "mana:allow") or String.contains?(previous || "", "mana:allow"),
-        do: [],
-        else: for(idiom <- @idioms, Regex.match?(idiom.pattern, text), do: {file, line, idiom})
-    end)
+    |> Enum.flat_map(fn {{previous, text}, line} -> scan_line(file, line, previous, text) end)
+  end
+
+  defp scan_line(file, line, previous, text) do
+    if String.contains?(text, "mana:allow") or String.contains?(previous || "", "mana:allow"),
+      do: [],
+      else: for(idiom <- @idioms, Regex.match?(idiom.pattern, text), do: {file, line, idiom})
   end
 
   defp paths([]), do: Path.wildcard("lib/**/*.ex")

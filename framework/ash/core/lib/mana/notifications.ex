@@ -55,6 +55,11 @@ defmodule Mana.Notifications do
   Each delivery joins the record's `Mana.History` when it has one: who was
   told, the channels that went out, those that failed and what was held.
   """
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [Mana.Notifications.Worker, Oban]}
+
+  alias Mana.Notifications.Worker
+  alias Spark.Dsl.Extension
 
   @notify %Spark.Dsl.Entity{
     name: :notify,
@@ -147,8 +152,8 @@ defmodule Mana.Notifications do
     end
   end
 
-  def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:notifications])
-  def sender(resource), do: Spark.Dsl.Extension.get_opt(resource, [:notifications], :sender, nil)
+  def declared(resource), do: Extension.get_entities(resource, [:notifications])
+  def sender(resource), do: Extension.get_opt(resource, [:notifications], :sender, nil)
 
   @impl Mana.Primitive
   def contract(resource) do
@@ -240,7 +245,7 @@ defmodule Mana.Notifications do
   end
 
   defp opt(resource, key, default \\ nil),
-    do: Spark.Dsl.Extension.get_opt(resource, [:notifications], key, default)
+    do: Extension.get_opt(resource, [:notifications], key, default)
 
   @doc """
   Sends one notice the way the resource declares: channels the recipient
@@ -250,37 +255,14 @@ defmodule Mana.Notifications do
   one delivers. Answers the channels that went out now.
   """
   def deliver(resource, notice) do
-    sender = sender(resource)
-
-    channels =
-      case opt(resource, :preferences) do
-        {m, f} ->
-          Enum.filter(
-            notice.channels,
-            &(&1 == :inbox or apply(m, f, [notice.to, notice.category, &1]))
-          )
-
-        nil ->
-          notice.channels
-      end
-
-    {notice, channels} = group(resource, notice, channels)
+    {notice, channels} = group(resource, notice, wanted_channels(resource, notice))
     {now, later} = Enum.split_with(channels, &(&1 == :inbox))
-
-    {now, held_until} =
-      case {later, opt(resource, :quiet_hours)} do
-        {[_ | _], {m, f}} ->
-          case apply(m, f, [notice.to]) do
-            %DateTime{} = until -> {now, until}
-            _ -> {now ++ later, nil}
-          end
-
-        _ ->
-          {now ++ later, nil}
-      end
+    {now, held_until} = quiet_hours(resource, notice, now, later)
 
     if held_until, do: hold(resource, notice, later, held_until)
-    {sent, failed} = send_channels(sender, notice, now, fallback?(resource, notice.template))
+
+    {sent, failed} =
+      send_channels(sender(resource), notice, now, fallback?(resource, notice.template))
 
     record(
       resource,
@@ -291,6 +273,30 @@ defmodule Mana.Notifications do
     )
 
     sent
+  end
+
+  defp wanted_channels(resource, notice) do
+    case opt(resource, :preferences) do
+      {m, f} ->
+        Enum.filter(
+          notice.channels,
+          &(&1 == :inbox or apply(m, f, [notice.to, notice.category, &1]))
+        )
+
+      nil ->
+        notice.channels
+    end
+  end
+
+  defp quiet_hours(_resource, _notice, now, []), do: {now, nil}
+
+  defp quiet_hours(resource, notice, now, later) do
+    with {m, f} <- opt(resource, :quiet_hours),
+         %DateTime{} = until <- apply(m, f, [notice.to]) do
+      {now, until}
+    else
+      _ -> {now ++ later, nil}
+    end
   end
 
   # Each delivery joins the history of the record it is about: who was told,
@@ -312,9 +318,9 @@ defmodule Mana.Notifications do
         error:
           if(failed != [],
             do:
-              failed
-              |> Enum.map(fn {channel, reason} -> "#{channel}: #{inspect(reason)}" end)
-              |> Enum.join("; ")
+              Enum.map_join(failed, "; ", fn {channel, reason} ->
+                "#{channel}: #{inspect(reason)}"
+              end)
           )
       })
     end
@@ -431,7 +437,7 @@ defmodule Mana.Notifications do
   end
 
   defp insert(%{args: args, queue: queue, scheduled_at: at}),
-    do: args |> Mana.Notifications.Worker.new(queue: queue, scheduled_at: at) |> Oban.insert!()
+    do: args |> Worker.new(queue: queue, scheduled_at: at) |> Oban.insert!()
 
   @doc false
   def deliver_held(resource, notice) do
@@ -506,6 +512,7 @@ end
 defmodule Mana.Notifications.Transformer do
   @moduledoc false
   use Spark.Dsl.Transformer
+  alias Ash.Resource.Builder
   alias Spark.Dsl.Transformer
 
   def after?(_), do: false
@@ -517,9 +524,7 @@ defmodule Mana.Notifications.Transformer do
         {:ok, dsl}
 
       _ ->
-        Ash.Resource.Builder.add_change(dsl, Mana.Notifications.Send,
-          on: [:create, :update, :destroy]
-        )
+        Builder.add_change(dsl, Mana.Notifications.Send, on: [:create, :update, :destroy])
     end
   end
 end

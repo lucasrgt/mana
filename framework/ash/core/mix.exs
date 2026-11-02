@@ -19,7 +19,8 @@ defmodule ManaCore.MixProject do
         {:vix, "~> 0.35", optional: true},
         {:ecto_sql, "~> 3.12", optional: true},
         {:postgrex, "~> 0.20", optional: true},
-        {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+        {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+        {:simple_sat, "~> 0.1 and >= 0.1.1", only: :test}
       ]
     ]
 

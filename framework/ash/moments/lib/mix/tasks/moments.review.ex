@@ -1,4 +1,9 @@
 defmodule Mix.Tasks.Moments.Review do
+  @moduledoc """
+  Usage: `mix moments.review MyApp.Resource action output.json`. The report is
+  owner-only (0600) and refused when sources change while it is planned; its
+  questions are pending review, not findings or approvals.
+  """
   use Mix.Task
   @shortdoc "Plan a local architectural review of one compiled Ash action, without running it"
 

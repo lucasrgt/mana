@@ -1,5 +1,6 @@
 defmodule Moments.BackendGraph do
   @moduledoc "Optional, portable compiled dependency evidence for conservative impact planning."
+  alias Ash.Domain.Info
 
   def snapshot do
     paths = Mix.Project.config() |> Keyword.get(:elixirc_paths, ["lib"]) |> Enum.sort()
@@ -17,88 +18,88 @@ defmodule Moments.BackendGraph do
   end
 
   def build(modules, manifest, output, before) do
-    try do
-      unless is_map(before) and before == snapshot(),
-        do: raise(ArgumentError, "sources changed during compilation")
+    unless is_map(before) and before == snapshot(),
+      do: raise(ArgumentError, "sources changed during compilation")
 
-      temp =
-        Path.join(
-          System.tmp_dir!(),
-          "mana-xref-#{Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)}.dot"
-        )
+    temp =
+      Path.join(
+        System.tmp_dir!(),
+        "mana-xref-#{Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)}.dot"
+      )
 
-      graph =
-        try do
-          Mix.Task.reenable("xref")
-          Mix.Task.run("xref", ["graph", "--format", "dot", "--output", temp])
+    graph = xref_graph!(temp)
 
-          if File.stat!(temp).size > 16 * 1024 * 1024,
-            do: raise(ArgumentError, "xref graph exceeds bound")
+    unless Enum.sort(Map.keys(graph)) == Enum.sort(Map.keys(before.files)),
+      do: raise(ArgumentError, "xref source inventory is incomplete")
 
-          parse_dot!(File.read!(temp))
-        after
-          File.rm(temp)
-        end
+    root = output |> Path.expand() |> Path.dirname()
+    portable = fn file -> Path.relative_to(Path.expand(file), root, force: true) end
+    domain_roots = Map.new(modules, &domain_roots(&1, graph, portable))
 
-      unless Enum.sort(Map.keys(graph)) == Enum.sort(Map.keys(before.files)),
-        do: raise(ArgumentError, "xref source inventory is incomplete")
+    roots =
+      Map.new(manifest["moments"], fn {name, scene} ->
+        {name, Map.fetch!(domain_roots, scene["source"]["module"])}
+      end)
 
-      root = output |> Path.expand() |> Path.dirname()
-      portable = fn file -> Path.relative_to(Path.expand(file), root, force: true) end
+    files =
+      Map.new(graph, fn {file, dependencies} ->
+        {portable.(file),
+         %{
+           "sha256" => Map.fetch!(before.files, file),
+           "dependencies" => Enum.map(dependencies, portable) |> Enum.sort()
+         }}
+      end)
 
-      domain_roots =
-        Map.new(modules, fn domain ->
-          resources = Ash.Domain.Info.resources(domain)
-          # Declaration-only domains cannot establish ownership of an external API.
-          roots =
-            if resources == [],
-              do: [],
-              else:
-                Enum.map([domain | resources], fn module ->
-                  file =
-                    module.module_info(:compile)[:source]
-                    |> to_string()
-                    |> Path.relative_to(File.cwd!())
+    unless before == snapshot(), do: raise(ArgumentError, "sources changed during export")
 
-                  unless Map.has_key?(graph, file),
-                    do: raise(ArgumentError, "resource is outside compiled project")
+    %{
+      "version" => 1,
+      "status" => "available",
+      "engine" => "mix-xref+ash-resources",
+      "elixir" => System.version(),
+      "environment" => to_string(Mix.env()),
+      "project" => portable.("."),
+      "sourcePaths" => before.paths,
+      "files" => files,
+      "roots" => roots
+    }
+  rescue
+    _ -> %{"version" => 1, "status" => "unavailable"}
+  end
 
-                  portable.(file)
-                end)
+  defp xref_graph!(temp) do
+    Mix.Task.reenable("xref")
+    Mix.Task.run("xref", ["graph", "--format", "dot", "--output", temp])
 
-          {inspect(domain), Enum.uniq(roots) |> Enum.sort()}
-        end)
+    if File.stat!(temp).size > 16 * 1024 * 1024,
+      do: raise(ArgumentError, "xref graph exceeds bound")
 
-      roots =
-        Map.new(manifest["moments"], fn {name, scene} ->
-          {name, Map.fetch!(domain_roots, scene["source"]["module"])}
-        end)
+    parse_dot!(File.read!(temp))
+  after
+    File.rm(temp)
+  end
 
-      files =
-        Map.new(graph, fn {file, dependencies} ->
-          {portable.(file),
-           %{
-             "sha256" => Map.fetch!(before.files, file),
-             "dependencies" => Enum.map(dependencies, portable) |> Enum.sort()
-           }}
-        end)
+  defp domain_roots(domain, graph, portable) do
+    resources = Info.resources(domain)
+    # Declaration-only domains cannot establish ownership of an external API.
+    roots =
+      if resources == [],
+        do: [],
+        else: Enum.map([domain | resources], &source!(&1, graph, portable))
 
-      unless before == snapshot(), do: raise(ArgumentError, "sources changed during export")
+    {inspect(domain), Enum.uniq(roots) |> Enum.sort()}
+  end
 
-      %{
-        "version" => 1,
-        "status" => "available",
-        "engine" => "mix-xref+ash-resources",
-        "elixir" => System.version(),
-        "environment" => to_string(Mix.env()),
-        "project" => portable.("."),
-        "sourcePaths" => before.paths,
-        "files" => files,
-        "roots" => roots
-      }
-    rescue
-      _ -> %{"version" => 1, "status" => "unavailable"}
-    end
+  defp source!(module, graph, portable) do
+    file =
+      module.module_info(:compile)[:source]
+      |> to_string()
+      |> Path.relative_to(File.cwd!())
+
+    unless Map.has_key?(graph, file),
+      do: raise(ArgumentError, "resource is outside compiled project")
+
+    portable.(file)
   end
 
   # Parse only Mix's documented DOT output, never evaluate it. An unsupported

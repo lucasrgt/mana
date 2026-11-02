@@ -24,6 +24,9 @@ defmodule Mana.Attachments do
   file of the right kind.
   """
 
+  alias Ash.Resource.Info
+  alias Spark.Dsl.Extension
+
   @attach %Spark.Dsl.Entity{
     name: :attach,
     target: Mana.Attachments.Attach,
@@ -67,8 +70,8 @@ defmodule Mana.Attachments do
          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
        )
 
-  def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:attachments])
-  def files(resource), do: Spark.Dsl.Extension.get_opt(resource, [:attachments], :files, nil)
+  def declared(resource), do: Extension.get_entities(resource, [:attachments])
+  def files(resource), do: Extension.get_opt(resource, [:attachments], :files, nil)
 
   @doc "The attach declaration of `attribute`, or nil."
   def attach(resource, attribute) do
@@ -77,7 +80,7 @@ defmodule Mana.Attachments do
   end
 
   def many?(resource, attribute),
-    do: match?({:array, _}, Ash.Resource.Info.attribute(resource, attribute).type)
+    do: match?({:array, _}, Info.attribute(resource, attribute).type)
 
   @impl Mana.Primitive
   def contract(resource) do
@@ -85,37 +88,42 @@ defmodule Mana.Attachments do
     kinds = Map.new(Mana.Uploads.kinds(files), &{&1.name, &1})
 
     for attach <- declared(resource) do
-      %{
-        "attribute" => to_string(attach.attribute),
-        "many" => many?(resource, attach.attribute),
-        "kinds" =>
-          for name <- attach.kinds, kind = kinds[name] do
-            %{
-              "name" => to_string(name),
-              "accept" => Mana.Uploads.accepted(kind),
-              "max_bytes" => kind.max_bytes
-            }
-            |> Map.merge(
-              for {key, value} <- [max_side: kind.max_side, quality: kind.quality],
-                  value,
-                  into: %{},
-                  do: {to_string(key), value}
-            )
-          end
-      }
-      |> then(fn map ->
-        case Ash.Resource.Info.attribute(resource, attach.attribute) do
-          %{constraints: constraints} when is_list(constraints) ->
-            if is_integer(constraints[:max_length]),
-              do: Map.put(map, "max", constraints[:max_length]),
-              else: map
-
-          _ ->
-            map
-        end
-      end)
+      put_max_length(
+        %{
+          "attribute" => to_string(attach.attribute),
+          "many" => many?(resource, attach.attribute),
+          "kinds" => for(name <- attach.kinds, kind = kinds[name], do: kind_contract(name, kind))
+        },
+        Info.attribute(resource, attach.attribute)
+      )
     end
   end
+
+  defp kind_contract(name, kind) do
+    optional =
+      for {key, value} <- [max_side: kind.max_side, quality: kind.quality],
+          value,
+          into: %{},
+          do: {to_string(key), value}
+
+    Map.merge(
+      %{
+        "name" => to_string(name),
+        "accept" => Mana.Uploads.accepted(kind),
+        "max_bytes" => kind.max_bytes
+      },
+      optional
+    )
+  end
+
+  defp put_max_length(map, %{constraints: constraints}) when is_list(constraints) do
+    case constraints[:max_length] do
+      max when is_integer(max) -> Map.put(map, "max", max)
+      _ -> map
+    end
+  end
+
+  defp put_max_length(map, _attribute), do: map
 
   @doc """
   A stored, ready file for `attribute` of `resource`, owned by `owner_id`
@@ -157,12 +165,14 @@ defmodule Mana.Attachments.Check do
   @moduledoc false
   use Ash.Resource.Change
 
+  alias Mana.Uploads.Attached
+
   @impl true
   def change(changeset, _opts, context) do
     resource = changeset.resource
 
     Enum.reduce(Mana.Attachments.declared(resource), changeset, fn attach, changeset ->
-      case Mana.Uploads.Attached.validate(
+      case Attached.validate(
              changeset,
              [
                files: Mana.Attachments.files(resource),
@@ -191,6 +201,7 @@ end
 defmodule Mana.Attachments.Transformer do
   @moduledoc false
   use Spark.Dsl.Transformer
+  alias Ash.Resource.Builder
   alias Spark.Dsl.Transformer
 
   def after?(_), do: false
@@ -199,7 +210,7 @@ defmodule Mana.Attachments.Transformer do
   def transform(dsl) do
     case Transformer.get_entities(dsl, [:attachments]) do
       [] -> {:ok, dsl}
-      _ -> Ash.Resource.Builder.add_change(dsl, Mana.Attachments.Check, on: [:create, :update])
+      _ -> Builder.add_change(dsl, Mana.Attachments.Check, on: [:create, :update])
     end
   end
 end

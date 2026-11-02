@@ -144,7 +144,9 @@ end
 defmodule Mana.Resource.Transformer do
   @moduledoc false
   use Spark.Dsl.Transformer
+  alias Ash.Type.NewType
   alias Spark.Dsl.Transformer
+  alias Spark.Error.DslError
 
   def after?(_), do: true
 
@@ -166,7 +168,7 @@ defmodule Mana.Resource.Transformer do
 
       message ->
         {:error,
-         Spark.Error.DslError.exception(
+         DslError.exception(
            module: Transformer.get_persisted(dsl, :module),
            path: [:access],
            message: message
@@ -211,53 +213,56 @@ defmodule Mana.Resource.Transformer do
   end
 
   defp base_type(type) do
-    if Ash.Type.NewType.new_type?(type),
-      do: base_type(Ash.Type.NewType.subtype_of(type)),
+    if NewType.new_type?(type),
+      do: base_type(NewType.subtype_of(type)),
       else: Ash.Type.get_type(type)
   end
 
   defp privacy_problem(dsl, attributes) do
+    privacy = privacy(dsl, attributes)
+
+    if is_nil(privacy.subject) and is_nil(privacy.erase),
+      do: nil,
+      else: first_privacy_problem(privacy)
+  end
+
+  defp privacy(dsl, attributes) do
     option = &Transformer.get_option(dsl, [:privacy], &1)
+    actions = Transformer.get_entities(dsl, [:actions])
+    calculations = Transformer.get_entities(dsl, [:calculations])
 
-    fields =
-      MapSet.new(attributes, & &1.name)
-      |> MapSet.union(MapSet.new(Transformer.get_entities(dsl, [:calculations]), & &1.name))
+    %{
+      subject: option.(:subject),
+      erase: option.(:erase),
+      export: option.(:export) || [],
+      reason: option.(:reason),
+      attributes: MapSet.new(attributes, & &1.name),
+      fields:
+        MapSet.union(MapSet.new(attributes, & &1.name), MapSet.new(calculations, & &1.name)),
+      destroy?: Enum.any?(actions, &(&1.type == :destroy and &1.primary?)),
+      detach?: Enum.any?(actions, &(&1.type == :update and &1.name == :detach))
+    }
+  end
 
-    destroy? =
-      dsl
-      |> Transformer.get_entities([:actions])
-      |> Enum.any?(&(&1.type == :destroy and &1.primary?))
+  defp first_privacy_problem(privacy) do
+    missing = Enum.reject(privacy.export, &(&1 in privacy.fields))
 
-    detach? =
-      dsl
-      |> Transformer.get_entities([:actions])
-      |> Enum.any?(&(&1.type == :update and &1.name == :detach))
-
-    cond do
-      is_nil(option.(:subject)) and is_nil(option.(:erase)) ->
-        nil
-
-      option.(:subject) not in MapSet.new(attributes, & &1.name) ->
-        "privacy subject `#{option.(:subject)}` must be an attribute"
-
-      is_nil(option.(:erase)) ->
-        "privacy must declare `erase :delete`, `erase :keep` or `erase :detach`"
-
-      (missing = Enum.reject(option.(:export) || [], &(&1 in fields))) != [] ->
-        "privacy export names unknown fields #{inspect(missing)}"
-
-      option.(:erase) in [:keep, :detach] and blank?(option.(:reason)) ->
-        "privacy `erase #{inspect(option.(:erase))}` needs the lawful `reason` to retain"
-
-      option.(:erase) == :detach and not detach? ->
-        "privacy `erase :detach` needs an update action `detach` that cuts the row from the person"
-
-      option.(:erase) == :delete and not destroy? ->
-        "privacy `erase :delete` needs a primary destroy action"
-
-      true ->
-        nil
-    end
+    Enum.find_value(
+      [
+        {privacy.subject not in privacy.attributes,
+         "privacy subject `#{privacy.subject}` must be an attribute"},
+        {is_nil(privacy.erase),
+         "privacy must declare `erase :delete`, `erase :keep` or `erase :detach`"},
+        {missing != [], "privacy export names unknown fields #{inspect(missing)}"},
+        {privacy.erase in [:keep, :detach] and blank?(privacy.reason),
+         "privacy `erase #{inspect(privacy.erase)}` needs the lawful `reason` to retain"},
+        {privacy.erase == :detach and not privacy.detach?,
+         "privacy `erase :detach` needs an update action `detach` that cuts the row from the person"},
+        {privacy.erase == :delete and not privacy.destroy?,
+         "privacy `erase :delete` needs a primary destroy action"}
+      ],
+      fn {problem?, message} -> if problem?, do: message end
+    )
   end
 
   defp add_rate_limit(dsl, false), do: dsl
@@ -279,13 +284,15 @@ defmodule Mana.RateLimit do
   @moduledoc "Counts calls of rate-limited actions. Keys never contain request bodies."
   use Ash.Resource.Validation
 
+  alias Mana.Resource.Info
+
   @impl true
   def supports(_), do: [Ash.Changeset, Ash.ActionInput]
 
   @impl true
   def validate(subject, _opts, context) do
     with true <- Application.get_env(:mana_core, :rate_limits?, true),
-         %{} = limit <- Mana.Resource.Info.limit(subject.resource, subject.action.name) do
+         %{} = limit <- Info.limit(subject.resource, subject.action.name) do
       key = {subject.resource, subject.action.name, subject_key(limit.per, context)}
       limiter = Application.fetch_env!(:mana_core, :limiter)
 
@@ -315,6 +322,8 @@ end
 
 defmodule Mana.Router do
   @moduledoc "Derives transport facts from the resources' `access` declarations."
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [AshJsonApi.Domain.Info]}
 
   @doc "The `{method, path_info}` patterns of public AshJsonApi routes under `prefix`."
   def public_routes(domains, prefix) do

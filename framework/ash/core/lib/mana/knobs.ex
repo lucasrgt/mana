@@ -71,6 +71,12 @@ defmodule Mana.Knobs do
     quote do
       def __knobs__, do: unquote(Macro.escape(knobs))
       def __knob_store__, do: unquote(store)
+      unquote(delegates())
+    end
+  end
+
+  defp delegates do
+    quote do
       def knobs, do: Mana.Knobs.declared(__MODULE__)
       def get(name), do: Mana.Knobs.get(__MODULE__, name)
       def enabled?(name, actor \\ nil), do: Mana.Knobs.enabled?(__MODULE__, name, actor)
@@ -204,16 +210,23 @@ defmodule Mana.Knobs do
 
   @doc "Whether a boolean knob is on for `actor`: its value, the listed actors, or its rollout percent."
   def enabled?(module, name, actor \\ nil) do
-    id = actor && Map.get(actor, :id) && to_string(actor.id)
+    id = actor_id(actor)
     rollout = stored(module, name) || %{}
 
     get(module, name) == true or
-      (id != nil and id in (rollout["actors"] || [])) or
-      (id != nil and is_integer(rollout["percent"]) and
-         :erlang.phash2({name, id}, 100) < rollout["percent"])
+      (id != nil and (listed?(rollout, id) or rolled_out?(rollout, name, id)))
   end
 
-  @doc "Stores `value` (or `%{\"value\" => v, \"actors\" => [...], \"percent\" => n}`) as changed by `by`."
+  defp actor_id(actor), do: actor && Map.get(actor, :id) && to_string(actor.id)
+
+  defp listed?(rollout, id), do: id in (rollout["actors"] || [])
+
+  defp rolled_out?(%{"percent" => percent}, name, id) when is_integer(percent),
+    do: :erlang.phash2({name, id}, 100) < percent
+
+  defp rolled_out?(_rollout, _name, _id), do: false
+
+  @doc ~s|Stores `value` (or `%{"value" => v, "actors" => [...], "percent" => n}`) as changed by `by`.|
   def set(module, name, value, by) do
     knob = knob!(module, name)
     value = if is_map(value), do: value, else: %{"value" => value}

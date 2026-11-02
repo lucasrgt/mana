@@ -37,7 +37,7 @@ if Code.ensure_loaded?(Oban.Job) do
       end
     end
 
-    @doc "`\"3d\"`, `\"12h\"`, `\"30m\"` → `{3, :day}`…"
+    @doc ~s(`"3d"`, `"12h"`, `"30m"` → `{3, :day}`…)
     def parse(text) do
       case Regex.run(~r/^(\d+)([dhm])$/, text) do
         [_, n, "d"] -> {String.to_integer(n), :day}

@@ -1,7 +1,9 @@
 defmodule Mana.Session.RecoveryOpenApi do
   @moduledoc "Opt-in recovery contract; existing session-only apps keep their contract."
+  alias Mana.Session.OpenApi
+
   def modify(spec, conn, opts) do
-    spec = Mana.Session.OpenApi.modify(spec, conn, opts)
+    spec = OpenApi.modify(spec, conn, opts)
     password = spec["components"]["schemas"]["SignUpInput"]["properties"]["password"]
 
     schemas =

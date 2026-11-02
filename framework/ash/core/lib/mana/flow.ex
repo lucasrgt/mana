@@ -46,6 +46,11 @@ defmodule Mana.Flow do
   step, of the resource or of a query narrowing it. The contract carries `x-mana-flow`; the client gets
   `<Type>Flow.flow`.
   """
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [Mana.Flow.Worker, Oban]}
+
+  alias Mana.Flow.Worker
+  alias Spark.Dsl.Extension
 
   @step %Spark.Dsl.Entity{
     name: :step,
@@ -123,10 +128,10 @@ defmodule Mana.Flow do
     }
   end
 
-  def steps(resource), do: Spark.Dsl.Extension.get_entities(resource, [:flow])
+  def steps(resource), do: Extension.get_entities(resource, [:flow])
 
   defp opt(resource, key, default \\ nil),
-    do: Spark.Dsl.Extension.get_opt(resource, [:flow], key, default)
+    do: Extension.get_opt(resource, [:flow], key, default)
 
   def cursor(resource), do: opt(resource, :cursor)
   def done(resource), do: opt(resource, :done)
@@ -203,42 +208,39 @@ defmodule Mana.Flow do
   end
 
   @doc false
-  def advance(%{action_type: :create} = changeset) do
-    Ash.Changeset.after_action(changeset, fn _changeset, record ->
-      schedule(record)
-      {:ok, record}
-    end)
-  end
+  def advance(%{action_type: :create} = changeset),
+    do: Ash.Changeset.after_action(changeset, &scheduled/2)
 
   def advance(changeset) do
     resource = changeset.resource
-    steps = steps(resource)
 
-    case Enum.find(steps, &(&1.action == changeset.action.name)) do
-      nil ->
-        changeset
-
-      step ->
-        field = cursor(resource)
-        current = Map.get(changeset.data, field)
-        order = order(resource)
-
-        cond do
-          current in opt(resource, :before, []) or not reached?(order, current, step.name) ->
-            Ash.Changeset.add_error(changeset, not_reached(resource))
-
-          current == step.name ->
-            changeset
-            |> Ash.Changeset.force_change_attribute(field, next(resource, step.name, changeset))
-            |> Ash.Changeset.after_action(fn _changeset, record ->
-              schedule(record)
-              {:ok, record}
-            end)
-
-          true ->
-            changeset
-        end
+    case Enum.find(steps(resource), &(&1.action == changeset.action.name)) do
+      nil -> changeset
+      step -> advance_step(changeset, resource, step)
     end
+  end
+
+  defp advance_step(changeset, resource, step) do
+    field = cursor(resource)
+    current = Map.get(changeset.data, field)
+
+    cond do
+      current in opt(resource, :before, []) or not reached?(order(resource), current, step.name) ->
+        Ash.Changeset.add_error(changeset, not_reached(resource))
+
+      current == step.name ->
+        changeset
+        |> Ash.Changeset.force_change_attribute(field, next(resource, step.name, changeset))
+        |> Ash.Changeset.after_action(&scheduled/2)
+
+      true ->
+        changeset
+    end
+  end
+
+  defp scheduled(_changeset, record) do
+    schedule(record)
+    {:ok, record}
   end
 
   defp reached?(order, current, step) do
@@ -314,7 +316,7 @@ defmodule Mana.Flow do
   end
 
   defp insert(%{args: args, queue: queue, scheduled_at: at}),
-    do: args |> Mana.Flow.Worker.new(queue: queue, scheduled_at: at) |> Oban.insert!()
+    do: args |> Worker.new(queue: queue, scheduled_at: at) |> Oban.insert!()
 
   @doc """
   When `record` still sits at `step`, diagnoses why (`diagnose/2`), emits
@@ -335,20 +337,19 @@ defmodule Mana.Flow do
         verdict: diagnosis.verdict
       })
 
-      case opt(resource, :on_stuck) do
-        {module, function} ->
-          if function_exported?(module, function, 3),
-            do: apply(module, function, [record, step, diagnosis]),
-            else: apply(module, function, [record, step])
-
-        nil ->
-          :ok
-      end
-
+      notify_stuck(opt(resource, :on_stuck), record, step, diagnosis)
       diagnosis.verdict
     else
       _ -> :moved
     end
+  end
+
+  defp notify_stuck(nil, _record, _step, _diagnosis), do: :ok
+
+  defp notify_stuck({module, function}, record, step, diagnosis) do
+    if function_exported?(module, function, 3),
+      do: apply(module, function, [record, step, diagnosis]),
+      else: apply(module, function, [record, step])
   end
 
   @technical ~w(unknown framework exception error)
@@ -364,30 +365,9 @@ defmodule Mana.Flow do
   with a reminder.
   """
   def diagnose(record, step) do
-    require Ash.Query
     resource = record.__struct__
-    declared = Enum.find(steps(resource), &(&1.name == step))
-
-    actions =
-      if declared, do: Enum.map([declared.action | declared.attempts], &to_string/1), else: []
-
-    bugs = if declared, do: Enum.map(declared.bugs, &to_string/1), else: []
-
-    entries =
-      if Mana.History in Spark.extensions(resource) and actions != [] do
-        type = Mana.Entity.type(resource)
-        id = to_string(record.id)
-
-        resource
-        |> Mana.History.log()
-        |> Ash.Query.for_read(:read)
-        |> Ash.Query.filter(subject_type == ^type and subject_id == ^id and action in ^actions)
-        |> Ash.Query.sort(at: :asc)
-        |> Ash.read!(authorize?: false)
-      else
-        []
-      end
-
+    {actions, bugs} = step_actions(Enum.find(steps(resource), &(&1.name == step)))
+    entries = attempts(record, resource, actions)
     failed = Enum.filter(entries, &(&1.outcome == :failed))
     technical? = Enum.any?(failed, &(&1.error in @technical or &1.action in bugs))
 
@@ -397,6 +377,32 @@ defmodule Mana.Flow do
       attempts: length(entries),
       failures: Enum.map(failed, &(&1.error || &1.action))
     }
+  end
+
+  defp step_actions(nil), do: {[], []}
+
+  defp step_actions(declared) do
+    {Enum.map([declared.action | declared.attempts], &to_string/1),
+     Enum.map(declared.bugs, &to_string/1)}
+  end
+
+  defp attempts(record, resource, actions) do
+    if Mana.History in Spark.extensions(resource) and actions != [],
+      do: logged(record, resource, actions),
+      else: []
+  end
+
+  defp logged(record, resource, actions) do
+    require Ash.Query
+    type = Mana.Entity.type(resource)
+    id = to_string(record.id)
+
+    resource
+    |> Mana.History.log()
+    |> Ash.Query.for_read(:read)
+    |> Ash.Query.filter(subject_type == ^type and subject_id == ^id and action in ^actions)
+    |> Ash.Query.sort(at: :asc)
+    |> Ash.read!(authorize?: false)
   end
 end
 
@@ -447,6 +453,7 @@ end
 defmodule Mana.Flow.Transformer do
   @moduledoc false
   use Spark.Dsl.Transformer
+  alias Ash.Resource.Builder
   alias Spark.Dsl.Transformer
 
   def before?(_), do: true
@@ -466,8 +473,8 @@ defmodule Mana.Flow.Transformer do
         ]
 
         with {:ok, dsl} <-
-               Ash.Resource.Builder.add_change(dsl, Mana.Flow.Advance, on: [:create, :update]) do
-          Ash.Resource.Builder.add_new_calculation(dsl, :flow, :map, Mana.Flow.Position,
+               Builder.add_change(dsl, Mana.Flow.Advance, on: [:create, :update]) do
+          Builder.add_new_calculation(dsl, :flow, :map, Mana.Flow.Position,
             public?: true,
             constraints: [fields: position],
             description: "Where the record stands in its flow."

@@ -71,11 +71,13 @@ end
 defmodule Mana.ReplayUndoTest do
   use ExUnit.Case, async: false
 
+  alias Ash.Domain.Info
+
   @me %{id: "0d4c7a52-5d2f-4a8e-9f61-3b2a1c0e9a01"}
   @other %{id: "6f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"}
 
   setup do
-    for r <- Ash.Domain.Info.resources(ReplayTest.Domain), do: Mana.Explore.empty_ets(r)
+    for r <- Info.resources(ReplayTest.Domain), do: Mana.Explore.empty_ets(r)
     on_exit(fn -> Application.delete_env(:mana_core, :replay_test_bonus) end)
   end
 

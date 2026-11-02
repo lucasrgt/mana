@@ -554,6 +554,9 @@ end
 defmodule Mana.ExploreTest do
   use ExUnit.Case, async: false
 
+  alias Ash.Domain.Info
+  alias Mana.Explore.Lock
+
   @domains [ExploreTest.Domain]
   @actors %{
     ana: %{id: "0d4c7a52-5d2f-4a8e-9f61-3b2a1c0e9a01"},
@@ -708,7 +711,7 @@ defmodule Mana.ExploreTest do
 
     assert %{"property" => "invariant", "moves" => [_ | _]} = Jason.decode!(File.read!(path))
 
-    for resource <- Ash.Domain.Info.resources(ExploreTest.Domain),
+    for resource <- Info.resources(ExploreTest.Domain),
         do: Mana.Explore.empty_ets(resource)
 
     records = Mana.Explore.replay_file(path, @domains, @actors)
@@ -730,13 +733,13 @@ defmodule Mana.ExploreTest do
 
   describe "affordance lock" do
     test "is stable for a seed and names what each actor is offered in each shape" do
-      lock = ExploreTest.Card |> explore(runs: 20) |> Mana.Explore.Lock.build()
-      again = ExploreTest.Card |> explore(runs: 20) |> Mana.Explore.Lock.build()
+      lock = ExploreTest.Card |> explore(runs: 20) |> Lock.build()
+      again = ExploreTest.Card |> explore(runs: 20) |> Lock.build()
 
-      assert Mana.Explore.Lock.encode(lock) == Mana.Explore.Lock.encode(again)
+      assert Lock.encode(lock) == Lock.encode(again)
       assert lock["resources"]["card"]["archived=false,status=open"]["ana"] == ["close"]
 
-      assert Mana.Explore.Lock.diff(lock, lock |> Mana.Explore.Lock.encode() |> Jason.decode!()) ==
+      assert Lock.diff(lock, lock |> Lock.encode() |> Jason.decode!()) ==
                []
     end
 
@@ -753,7 +756,7 @@ defmodule Mana.ExploreTest do
         }
       }
 
-      assert Mana.Explore.Lock.diff(old, new) == [
+      assert Lock.diff(old, new) == [
                "booking when status=gone is no longer reached",
                "booking when status=new is newly reached",
                "`cancel` is no longer offered to host on booking when status=paid",

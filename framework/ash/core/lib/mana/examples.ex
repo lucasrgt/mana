@@ -23,6 +23,10 @@ defmodule Mana.Examples do
   Arguments may hold real data: keep the directory private.
   """
 
+  alias Mana.Intervene.Rules
+
+  @compile {:no_warn_undefined, [Moments.ActionTrace]}
+
   defmacro __using__(_opts) do
     quote do
       import Mana.Examples, only: [defexample: 2]
@@ -37,7 +41,7 @@ defmodule Mana.Examples do
     quote do
       def unquote(name)(unquote_splicing(vars)) do
         result =
-          case Mana.Intervene.Rules.override(__MODULE__, unquote(name)) do
+          case Rules.override(__MODULE__, unquote(name)) do
             :raise -> raise "intervention: #{inspect(__MODULE__)}.#{unquote(name)} raised"
             {:return, value} -> value
             :none -> (fn unquote_splicing(args) -> unquote(body) end).(unquote_splicing(vars))
@@ -129,7 +133,7 @@ defmodule Mana.Examples do
 
   defp gesture do
     if Code.ensure_loaded?(Moments.ActionTrace) do
-      case apply(Moments.ActionTrace, :get_span_context, []) do
+      case Moments.ActionTrace.get_span_context() do
         %{gesture: gesture} -> gesture
         _ -> nil
       end

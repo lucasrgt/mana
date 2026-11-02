@@ -1,6 +1,7 @@
 defmodule Mana.Session.Recovery do
   @moduledoc "Optional recovery transport. The app owns asynchronous delivery."
   import Plug.Conn
+  alias Mana.Session.PasswordReset
 
   def init(options), do: Map.new(options)
 
@@ -26,7 +27,7 @@ defmodule Mana.Session.Recovery do
          true <- is_binary(password) and byte_size(password) <= 72,
          true <- is_binary(confirmation) and byte_size(confirmation) <= 72,
          :ok <-
-           Mana.Session.PasswordReset.reset(resource, %{
+           PasswordReset.reset(resource, %{
              "reset_token" => token,
              "password" => password,
              "password_confirmation" => confirmation

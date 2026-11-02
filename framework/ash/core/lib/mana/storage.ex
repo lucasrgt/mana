@@ -59,6 +59,8 @@ end
 
 defmodule Mana.Storage.S3 do
   @moduledoc "Any S3-compatible store (AWS S3, Cloudflare R2, MinIO); SigV4 from Req."
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [Req, ReqS3]}
   use Mana.Integration.Adapter,
     slot: Mana.Storage,
     env: ["S3_ENDPOINT", "S3_BUCKET_DEFAULT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"]
@@ -190,6 +192,9 @@ if Code.ensure_loaded?(Plug.Conn) do
   defmodule Mana.Storage.LocalPlug do
     @moduledoc "Serves `Mana.Storage.Local` signed URLs. Mount only in development."
     import Plug.Conn
+    alias Mana.Storage.Local
+    alias Plug.Crypto
+
     def init(options), do: options
 
     def call(%{method: method, path_info: parts} = conn, _)
@@ -201,10 +206,7 @@ if Code.ensure_loaded?(Plug.Conn) do
            {unix, ""} <- Integer.parse(expires),
            true <- unix > System.os_time(:second),
            true <-
-             Plug.Crypto.secure_compare(
-               signature,
-               Mana.Storage.Local.signature(method, key, unix)
-             ) do
+             Crypto.secure_compare(signature, Local.signature(method, key, unix)) do
         serve(conn, method, key)
       else
         _ -> conn |> send_resp(403, "") |> halt()
@@ -225,16 +227,16 @@ if Code.ensure_loaded?(Plug.Conn) do
 
     defp serve(conn, "PUT", key) do
       {:ok, body, conn} = read_body(conn, length: 30_000_000)
-      :ok = Mana.Storage.Local.put(key, body, "")
+      :ok = Local.put(key, body, "")
       conn |> put_resp_header("access-control-allow-origin", "*") |> send_resp(200, "") |> halt()
     end
 
     defp serve(conn, "GET", key) do
-      if Mana.Storage.Local.exists?(key),
+      if Local.exists?(key),
         do:
           conn
           |> put_resp_header("access-control-allow-origin", "*")
-          |> send_file(200, Mana.Storage.Local.path(key))
+          |> send_file(200, Local.path(key))
           |> halt(),
         else: conn |> send_resp(404, "") |> halt()
     end

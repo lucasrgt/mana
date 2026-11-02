@@ -37,6 +37,11 @@ defmodule Moments.Recipes do
   """
   import Plug.Conn
   require Logger
+  alias Mana.Snapshot
+  alias Moments.RecipeSet
+
+  # mana_core is optional: data_scope recipes check for Mana.Snapshot at runtime.
+  @compile {:no_warn_undefined, [Mana.Snapshot]}
 
   def init(options), do: Map.new(options)
 
@@ -44,49 +49,45 @@ defmodule Moments.Recipes do
       when operation in ["prepare", "observe"] do
     with {:ok, module} <- Map.fetch(options.recipes, name),
          true <- authorized?(conn, options.token) do
-      params = conn.body_params
-
-      {repo, open_opts} =
-        case Map.get(options, :repo) do
-          {repo, opts} -> {repo, opts}
-          repo -> {repo, []}
-        end
-
-      result =
-        case {module, operation} do
-          {{set, key}, "prepare"} ->
-            in_data_scope(set.__recipe__(:data_scope?, key), repo, open_opts, fn ->
-              set.__recipe__(:prepare, key, params["context"] || %{})
-            end)
-
-          {{set, key}, "observe"} ->
-            scoped(params["launch"], repo, fn ->
-              set.__recipe__(:observe, key, params["launch"] || %{}, params["projection"] || %{})
-            end)
-
-          {module, "prepare"} ->
-            module.prepare(params["context"] || %{})
-
-          {module, "observe"} ->
-            scoped(params["launch"], repo, fn ->
-              module.observe(params["launch"] || %{}, params["projection"] || %{})
-            end)
-        end
-
-      case result do
-        {:ok, value} when is_map(value) ->
-          reply(conn, 200, value)
-
-        other ->
-          Logger.warning("Moment recipe #{name} #{operation} failed: #{inspect(other)}")
-          reply(conn, 422, %{error: "recipe_failed"})
-      end
+      result = run(module, operation, conn.body_params, repo(Map.get(options, :repo)))
+      respond(conn, name, operation, result)
     else
       _ -> reply(conn, 404, %{error: "not_found"})
     end
   end
 
   def call(conn, _options), do: reply(conn, 404, %{error: "not_found"})
+
+  defp repo({repo, opts}), do: {repo, opts}
+  defp repo(repo), do: {repo, []}
+
+  defp run({set, key}, "prepare", params, {repo, open_opts}) do
+    in_data_scope(set.__recipe__(:data_scope?, key), repo, open_opts, fn ->
+      set.__recipe__(:prepare, key, params["context"] || %{})
+    end)
+  end
+
+  defp run({set, key}, "observe", params, {repo, _open_opts}) do
+    scoped(params["launch"], repo, fn ->
+      set.__recipe__(:observe, key, params["launch"] || %{}, params["projection"] || %{})
+    end)
+  end
+
+  defp run(module, "prepare", params, _repo), do: module.prepare(params["context"] || %{})
+
+  defp run(module, "observe", params, {repo, _open_opts}) do
+    scoped(params["launch"], repo, fn ->
+      module.observe(params["launch"] || %{}, params["projection"] || %{})
+    end)
+  end
+
+  defp respond(conn, _name, _operation, {:ok, value}) when is_map(value),
+    do: reply(conn, 200, value)
+
+  defp respond(conn, name, operation, other) do
+    Logger.warning("Moment recipe #{name} #{operation} failed: #{inspect(other)}")
+    reply(conn, 422, %{error: "recipe_failed"})
+  end
 
   defp scoped(launch, repo, observe) do
     data_scoped(launch, repo, fn -> knob_scoped(launch, observe) end)
@@ -107,7 +108,7 @@ defmodule Moments.Recipes do
 
   defp data_scoped(%{"dataScope" => scope}, repo, observe)
        when is_binary(scope) and not is_nil(repo),
-       do: apply(Mana.Snapshot, :with_scope, [repo, scope, observe])
+       do: Snapshot.with_scope(repo, scope, observe)
 
   defp data_scoped(_launch, _repo, observe), do: observe.()
 
@@ -124,12 +125,12 @@ defmodule Moments.Recipes do
                "a data_scope recipe needs repo: on Moments.Recipes and config :mana_core, data_scopes: true"
              )
 
-    scope = apply(Mana.Snapshot, :open, [repo, :base, opts])
+    scope = Snapshot.open(repo, :base, opts)
     forget_old_scopes(repo, scope)
 
-    case apply(Mana.Snapshot, :with_scope, [repo, scope, prepare]) |> Moments.RecipeSet.wrap() do
+    case RecipeSet.wrap(Snapshot.with_scope(repo, scope, prepare)) do
       {:ok, launch} -> {:ok, Map.put(launch, "dataScope", scope)}
-      error -> apply(Mana.Snapshot, :drop, [repo, scope]) && error
+      error -> Snapshot.drop(repo, scope) && error
     end
   end
 
@@ -139,7 +140,7 @@ defmodule Moments.Recipes do
     key = {__MODULE__, :scopes, repo}
     {kept, old} = Enum.split([scope | :persistent_term.get(key, [])], @kept_scopes)
     :persistent_term.put(key, kept)
-    Enum.each(old, &apply(Mana.Snapshot, :drop, [repo, &1]))
+    Enum.each(old, &Snapshot.drop(repo, &1))
   end
 
   defp authorized?(conn, {module, function, args}) do
@@ -203,34 +204,9 @@ defmodule Moments.RecipeSet do
     recipes = env.module |> Module.get_attribute(:moments_recipes) |> Enum.reverse()
     default = Module.get_attribute(env.module, :moments_observe)
 
-    prepares =
-      for {name, _, _, block, _} <- recipes do
-        quote do
-          def __recipe__(:prepare, unquote(name), var!(context)) do
-            _ = var!(context)
-            Moments.RecipeSet.wrap(unquote(block))
-          end
-        end
-      end
-
-    observes =
-      for {name, _, own, _, _} <- recipes do
-        observe =
-          own || default ||
-            raise ArgumentError, "recipe #{name} needs `observe:` (on the set or the recipe)"
-
-        quote do
-          def __recipe__(:observe, unquote(name), launch, projection),
-            do: unquote(observe)(launch, projection)
-        end
-      end
-
-    scoped =
-      for {name, _, _, _, data_scope} <- recipes do
-        quote do
-          def __recipe__(:data_scope?, unquote(name)), do: unquote(data_scope) == true
-        end
-      end
+    prepares = Enum.map(recipes, &prepare_clause/1)
+    observes = Enum.map(recipes, &observe_clause(&1, default))
+    scoped = Enum.map(recipes, &data_scope_clause/1)
 
     quote do
       unquote_splicing(prepares)
@@ -253,6 +229,32 @@ defmodule Moments.RecipeSet do
               )
             )
           )
+    end
+  end
+
+  defp prepare_clause({name, _, _, block, _}) do
+    quote do
+      def __recipe__(:prepare, unquote(name), var!(context)) do
+        _ = var!(context)
+        Moments.RecipeSet.wrap(unquote(block))
+      end
+    end
+  end
+
+  defp observe_clause({name, _, own, _, _}, default) do
+    observe =
+      own || default ||
+        raise ArgumentError, "recipe #{name} needs `observe:` (on the set or the recipe)"
+
+    quote do
+      def __recipe__(:observe, unquote(name), launch, projection),
+        do: unquote(observe)(launch, projection)
+    end
+  end
+
+  defp data_scope_clause({name, _, _, _, data_scope}) do
+    quote do
+      def __recipe__(:data_scope?, unquote(name)), do: unquote(data_scope) == true
     end
   end
 

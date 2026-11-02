@@ -101,10 +101,12 @@ end
 if Code.ensure_loaded?(Plug.Conn) do
   defmodule Mana.Intervene.Plug do
     @moduledoc "Applies `latency:` interventions (`Mana.Intervene.Rules`); mount it in the development endpoint."
+    alias Mana.Intervene.Rules
+
     def init(opts), do: opts
 
     def call(conn, _opts) do
-      case Mana.Intervene.Rules.latency(conn.request_path) do
+      case Rules.latency(conn.request_path) do
         0 ->
           conn
 

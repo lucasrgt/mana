@@ -1,6 +1,7 @@
 defmodule Mana.Runtime.MetricsPlug do
   @moduledoc "Explicit internal scrape endpoint; disabled without a dedicated token."
   import Plug.Conn
+  alias Mana.Runtime.Metrics
   @behaviour Plug
 
   def init(options), do: {Keyword.fetch!(options, :otp_app), Keyword.fetch!(options, :name)}
@@ -21,7 +22,7 @@ defmodule Mana.Runtime.MetricsPlug do
       true ->
         conn
         |> put_resp_content_type("text/plain", "utf-8")
-        |> respond(200, Mana.Runtime.Metrics.scrape(name))
+        |> respond(200, Metrics.scrape(name))
     end
   end
 

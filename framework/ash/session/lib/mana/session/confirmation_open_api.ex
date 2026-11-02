@@ -1,7 +1,9 @@
 defmodule Mana.Session.ConfirmationOpenApi do
   @moduledoc "Explicit adoption changes signup to 202/pending; existing session contracts stay unchanged."
+  alias Mana.Session.RecoveryOpenApi
+
   def modify(spec, conn, opts) do
-    spec = Mana.Session.RecoveryOpenApi.modify(spec, conn, opts)
+    spec = RecoveryOpenApi.modify(spec, conn, opts)
 
     signup =
       spec["paths"]["/auth/sign-up"]["post"]["responses"]

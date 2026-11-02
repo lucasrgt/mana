@@ -51,25 +51,21 @@ defmodule Moments.ActionTrace.Telemetry do
 
   def handle_event([:ash, domain_name, kind, :stop], measurements, metadata, mapping) do
     if Moments.ActionTrace.get_span_context() do
-      case Map.get(mapping, {domain_name, metadata[:resource_short_name]}) do
-        {domain, resource} ->
-          action = metadata[:action]
-
-          if is_atom(action) and !is_nil(action) and Ash.Resource.Info.action(resource, action),
-            do:
-              Moments.ActionTrace.observe_bulk(
-                kind,
-                domain,
-                resource,
-                action,
-                measurements[:duration]
-              )
-
-        _ ->
-          :ok
-      end
+      mapping
+      |> Map.get({domain_name, metadata[:resource_short_name]})
+      |> observe_stop(kind, metadata, measurements)
     end
 
     :ok
   end
+
+  defp observe_stop({domain, resource}, kind, metadata, measurements) do
+    action = metadata[:action]
+
+    if is_atom(action) and !is_nil(action) and Ash.Resource.Info.action(resource, action),
+      do:
+        Moments.ActionTrace.observe_bulk(kind, domain, resource, action, measurements[:duration])
+  end
+
+  defp observe_stop(_mapping, _kind, _metadata, _measurements), do: :ok
 end

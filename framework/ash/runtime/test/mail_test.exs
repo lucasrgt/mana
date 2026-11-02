@@ -1,5 +1,6 @@
 defmodule Mana.Runtime.MailTest do
   use ExUnit.Case, async: true
+  alias Mana.Runtime.Mail
 
   defp settings do
     %{
@@ -11,7 +12,7 @@ defmodule Mana.Runtime.MailTest do
     }
   end
 
-  defp load(values), do: Mana.Runtime.Mail.load!(&Map.get(values, &1))
+  defp load(values), do: Mail.load!(&Map.get(values, &1))
 
   test "mail is disabled unless explicitly selected and SMTP never downgrades" do
     assert load(%{}) == %{mode: :disabled, mailer: [], from: nil}

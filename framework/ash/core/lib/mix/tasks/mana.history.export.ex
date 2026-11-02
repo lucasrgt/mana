@@ -12,6 +12,8 @@ defmodule Mix.Tasks.Mana.History.Export do
   use Mix.Task
   require Ash.Query
 
+  alias Ash.Domain.Info
+
   @impl true
   def run(args) do
     {opts, _, _} = OptionParser.parse(args, strict: [since: :string, out: :string])
@@ -21,7 +23,7 @@ defmodule Mix.Tasks.Mana.History.Export do
 
     lines =
       for domain <- Application.fetch_env!(app, :ash_domains),
-          log <- Ash.Domain.Info.resources(domain),
+          log <- Info.resources(domain),
           Mana.History.Log in Spark.extensions(log),
           entry <-
             log

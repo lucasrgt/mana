@@ -12,7 +12,10 @@ defmodule Mana.Feature do
   `minutes` (60) per feature: requests, server errors, refusals and the 95th
   percentile in milliseconds.
   """
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [AshJsonApi.Domain.Info]}
   use GenServer
+  alias AshJsonApi.Domain.Info
 
   @table __MODULE__
   @kept 2_000
@@ -76,7 +79,7 @@ defmodule Mana.Feature do
   @doc "The routes of `domains` under `prefix`, each with the feature it belongs to."
   def routes(domains, prefix) do
     for domain <- domains,
-        route <- AshJsonApi.Domain.Info.routes(domain),
+        route <- Info.routes(domain),
         feature = feature(route.resource, route.action),
         feature != nil do
       {String.upcase(to_string(route.method)), segments(prefix <> route.route), feature}

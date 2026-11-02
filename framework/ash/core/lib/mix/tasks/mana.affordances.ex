@@ -11,6 +11,9 @@ defmodule Mix.Tasks.Mana.Affordances do
   """
   use Mix.Task
 
+  alias Mana.Explore.Lock
+  alias Mix.Tasks.Mana.Explore, as: ExploreTask
+
   @impl true
   def run(args) do
     {cli, _} =
@@ -20,15 +23,15 @@ defmodule Mix.Tasks.Mana.Affordances do
 
     Mix.Task.run("app.start")
     path = cli[:out] || "affordances.json"
-    {domains, opts} = Mix.Tasks.Mana.Explore.options(Keyword.take(cli, [:runs, :depth]))
+    {domains, opts} = ExploreTask.options(Keyword.take(cli, [:runs, :depth]))
 
     lock =
-      domains |> Mana.Explore.run(Keyword.put(opts, :shrink, false)) |> Mana.Explore.Lock.build()
+      domains |> Mana.Explore.run(Keyword.put(opts, :shrink, false)) |> Lock.build()
 
     if cli[:check] do
       committed = if File.exists?(path), do: path |> File.read!() |> Jason.decode!(), else: %{}
 
-      case Mana.Explore.Lock.diff(committed, lock) do
+      case Lock.diff(committed, lock) do
         [] ->
           Mix.shell().info("#{path} is current")
 
@@ -41,7 +44,7 @@ defmodule Mix.Tasks.Mana.Affordances do
           exit({:shutdown, 1})
       end
     else
-      File.write!(path, Mana.Explore.Lock.encode(lock))
+      File.write!(path, Lock.encode(lock))
       Mix.shell().info("wrote #{path}")
     end
   end

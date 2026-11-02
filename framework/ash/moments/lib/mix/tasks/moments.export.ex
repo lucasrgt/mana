@@ -1,4 +1,5 @@
 defmodule Mix.Tasks.Moments.Export do
+  @moduledoc "Usage: `mix moments.export MyApp.Domain[,MyApp.Other] output.json`."
   use Mix.Task
   @shortdoc "Export an Ash Moments declaration for the local Flutter bridge"
   def run([module, output]) do

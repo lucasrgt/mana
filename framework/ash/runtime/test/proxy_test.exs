@@ -1,5 +1,6 @@
 defmodule Mana.Runtime.ProxyTest do
   use ExUnit.Case, async: false
+  alias Mana.Runtime.Proxy
   import Plug.Conn
   import Plug.Test
 
@@ -9,7 +10,7 @@ defmodule Mana.Runtime.ProxyTest do
     :ok
   end
 
-  defp call(conn), do: Mana.Runtime.Proxy.call(conn, :mana_runtime_proxy_test)
+  defp call(conn), do: Proxy.call(conn, :mana_runtime_proxy_test)
 
   defp forwarded(conn, ip \\ "198.51.100.9"),
     do:

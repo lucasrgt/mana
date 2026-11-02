@@ -89,17 +89,19 @@ defmodule Mana.Uploads do
 
   use Spark.Dsl.Extension, sections: [@uploads], transformers: [Mana.Uploads.Transformer]
 
+  alias Spark.Dsl.Extension
+
   def images, do: @images
 
   @doc "The content types a kind accepts."
   def accepted(%Mana.Uploads.Kind{accept: accept}),
     do: accept |> List.wrap() |> Enum.flat_map(&if(&1 == :images, do: @images, else: [&1]))
 
-  def kinds(resource), do: Spark.Dsl.Extension.get_entities(resource, [:uploads])
-  def prefix(resource), do: Spark.Dsl.Extension.get_opt(resource, [:uploads], :prefix, "uploads")
+  def kinds(resource), do: Extension.get_entities(resource, [:uploads])
+  def prefix(resource), do: Extension.get_opt(resource, [:uploads], :prefix, "uploads")
 
   def thumbnail_queue(resource),
-    do: Spark.Dsl.Extension.get_opt(resource, [:uploads], :thumbnail_queue, :default)
+    do: Extension.get_opt(resource, [:uploads], :thumbnail_queue, :default)
 
   @doc "The file ids a record or changeset holds in `attributes`, in order, each once."
   def ids(%Ash.Changeset{} = changeset, attributes),
@@ -284,24 +286,22 @@ defmodule Mana.Uploads.Transformer do
              arguments: [kind_arg, type_arg, size_arg],
              run: {Mana.Uploads.Request, []}
            ),
-         {:ok, id_arg} <- Builder.build_action_argument(:id, :uuid, allow_nil?: false),
-         {:ok, dsl} <-
-           Builder.add_new_action(dsl, :action, :confirm,
-             returns: :map,
-             constraints: [
-               fields: [
-                 asset_id: [type: :uuid, allow_nil?: false],
-                 status: [
-                   type: :atom,
-                   allow_nil?: false,
-                   constraints: [one_of: [:uploading, :ready]]
-                 ]
-               ]
-             ],
-             arguments: [id_arg],
-             run: {Mana.Uploads.Confirm, []}
-           ) do
-      {:ok, dsl}
+         {:ok, id_arg} <- Builder.build_action_argument(:id, :uuid, allow_nil?: false) do
+      Builder.add_new_action(dsl, :action, :confirm,
+        returns: :map,
+        constraints: [
+          fields: [
+            asset_id: [type: :uuid, allow_nil?: false],
+            status: [
+              type: :atom,
+              allow_nil?: false,
+              constraints: [one_of: [:uploading, :ready]]
+            ]
+          ]
+        ],
+        arguments: [id_arg],
+        run: {Mana.Uploads.Confirm, []}
+      )
     end
   end
 end
@@ -360,6 +360,7 @@ defmodule Mana.Uploads.Confirm do
   @moduledoc "Ready only once the object exists in storage; confirming again is a no-op."
   use Ash.Resource.Actions.Implementation
   require Ash.Query
+  alias Mana.Uploads.Thumbnail
 
   @impl true
   def run(input, _, %{actor: actor}) do
@@ -376,7 +377,7 @@ defmodule Mana.Uploads.Confirm do
       file ->
         if Mana.Storage.exists?(file.storage_key) do
           ready = Ash.update!(file, %{}, action: :mark_ready, authorize?: false)
-          Mana.Uploads.Thumbnail.enqueue(input.resource, ready)
+          Thumbnail.enqueue(input.resource, ready)
           {:ok, %{asset_id: ready.id, status: ready.status}}
         else
           {:error, Mana.Uploads.error(:not_uploaded)}
@@ -427,6 +428,7 @@ defmodule Mana.Uploads.Urls do
   """
   use Ash.Resource.Calculation
   require Ash.Query
+  alias Mana.Uploads.Url
 
   @impl true
   def load(_, opts, _), do: List.wrap(opts[:attributes])
@@ -436,7 +438,7 @@ defmodule Mana.Uploads.Urls do
 
   def calculate([record | _] = records, opts, _) do
     attributes = List.wrap(opts[:attributes])
-    opts = Mana.Uploads.Url.attached(record.__struct__, attributes, opts)
+    opts = Url.attached(record.__struct__, attributes, opts)
     ordered = &Mana.Uploads.ids(&1, attributes)
     ttl = opts[:ttl] || 3600
 
@@ -507,7 +509,14 @@ defmodule Mana.Uploads.Thumbnail do
   original (`<key>.thumb.jpg`). An image libvips cannot read keeps no thumbnail
   and its readers keep the original.
   """
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined,
+            [Mana.Uploads.Thumbnail.Worker, Oban, Vix.Vips.Image, Vix.Vips.Operation]}
   require Logger
+  alias Ash.Resource.Info
+  alias Mana.Uploads.Thumbnail.Worker
+  alias Vix.Vips.Image
+  alias Vix.Vips.Operation
 
   def enqueue(resource, file) do
     case job(resource, file) do
@@ -522,7 +531,7 @@ defmodule Mana.Uploads.Thumbnail do
       %{thumbnail: size} when is_integer(size) and is_binary(file.content_type) ->
         if file.content_type in Mana.Uploads.images() and Code.ensure_loaded?(Oban) do
           %{"resource" => inspect(resource), "id" => file.id, "size" => size}
-          |> Mana.Uploads.Thumbnail.Worker.new(queue: Mana.Uploads.thumbnail_queue(resource))
+          |> Worker.new(queue: Mana.Uploads.thumbnail_queue(resource))
         end
 
       _ ->
@@ -539,14 +548,14 @@ defmodule Mana.Uploads.Thumbnail do
       Ash.update(file, %{thumbnail_key: key},
         action: :attach_thumbnail,
         authorize?: false,
-        domain: Ash.Resource.Info.domain(resource)
+        domain: Info.domain(resource)
       )
     end
   end
 
   defp resize(original, size) do
-    with {:ok, image} <- Vix.Vips.Operation.thumbnail_buffer(original, size),
-         do: Vix.Vips.Image.write_to_buffer(image, ".jpg[Q=82,strip]")
+    with {:ok, image} <- Operation.thumbnail_buffer(original, size),
+         do: Image.write_to_buffer(image, ".jpg[Q=82,strip]")
   end
 end
 
@@ -554,6 +563,7 @@ if Code.ensure_loaded?(Oban.Worker) do
   defmodule Mana.Uploads.Thumbnail.Worker do
     @moduledoc false
     use Oban.Worker, max_attempts: 5
+    alias Mana.Uploads.Thumbnail
 
     @impl Oban.Worker
     def perform(%Oban.Job{args: %{"resource" => resource, "id" => id, "size" => size}}) do
@@ -561,7 +571,7 @@ if Code.ensure_loaded?(Oban.Worker) do
 
       case Ash.get(resource, id, authorize?: false) do
         {:ok, %{status: :ready, thumbnail_key: nil} = file} ->
-          case Mana.Uploads.Thumbnail.make(resource, file, size) do
+          case Thumbnail.make(resource, file, size) do
             {:ok, _} -> :ok
             # libvips answers an image it cannot read with a message; retrying will not help.
             {:error, reason} when is_binary(reason) -> {:cancel, reason}

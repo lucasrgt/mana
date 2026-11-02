@@ -23,6 +23,12 @@ defmodule Mana.History do
   whoever may read the record itself.
   """
 
+  alias Mana.History.Log
+  alias Spark.Dsl.Extension
+
+  # Moments is an optional companion; every call is guarded by `Code.ensure_loaded?`.
+  @compile {:no_warn_undefined, [AshJsonApi.Resource.Info, Moments.ActionTrace]}
+
   @history %Spark.Dsl.Section{
     name: :history,
     schema: [
@@ -56,9 +62,9 @@ defmodule Mana.History do
 
   @redacted "[redacted]"
 
-  def log(resource), do: Spark.Dsl.Extension.get_opt(resource, [:history], :log, nil)
-  def redact(resource), do: Spark.Dsl.Extension.get_opt(resource, [:history], :redact, [])
-  def ignore(resource), do: Spark.Dsl.Extension.get_opt(resource, [:history], :ignore, [])
+  def log(resource), do: Extension.get_opt(resource, [:history], :log, nil)
+  def redact(resource), do: Extension.get_opt(resource, [:history], :redact, [])
+  def ignore(resource), do: Extension.get_opt(resource, [:history], :ignore, [])
 
   @impl Mana.Primitive
   def contract(resource) do
@@ -117,7 +123,7 @@ defmodule Mana.History do
   (redacted values stay `"[redacted]"`). Nil when the actor may not read it.
   """
   def as_of(log, subject_type, subject_id, %DateTime{} = at, actor) do
-    with subject when not is_nil(subject) <- Mana.History.Log.subject(log, subject_type),
+    with subject when not is_nil(subject) <- Log.subject(log, subject_type),
          {:ok, record} <- Ash.get(subject, subject_id, actor: actor) do
       now =
         for attribute <- Ash.Resource.Info.public_attributes(subject),
@@ -146,7 +152,7 @@ defmodule Mana.History do
   """
   def fixture(log, subject_type, subject_id, roles) do
     actions =
-      for action <- Ash.Resource.Info.actions(Mana.History.Log.subject(log, subject_type)),
+      for action <- Ash.Resource.Info.actions(Log.subject(log, subject_type)),
           into: MapSet.new(),
           do: to_string(action.name)
 
@@ -176,20 +182,13 @@ defmodule Mana.History do
   `{:error, %{at: index, action: action, error: error}}`.
   """
   def replay(resource, entries, opts \\ []) do
-    actor =
-      case Keyword.get(opts, :actor, fn _ -> nil end) do
-        actors when is_map(actors) -> &Map.get(actors, &1)
-        fun -> fun
-      end
-
-    params = Keyword.get(opts, :params, fn _action, params -> params end)
-    offset = offset(entries, Keyword.get(opts, :times, :shift))
-
-    external =
-      for verb <- Mana.Verbs.declared(resource),
-          verb.external,
-          into: MapSet.new(),
-          do: to_string(verb.name)
+    replay = %{
+      resource: resource,
+      actor: replay_actor(Keyword.get(opts, :actor, fn _ -> nil end)),
+      params: Keyword.get(opts, :params, fn _action, params -> params end),
+      offset: offset(entries, Keyword.get(opts, :times, :shift)),
+      external: external_verbs(resource)
+    }
 
     skip_external? = Keyword.get(opts, :external) == :skip
 
@@ -200,34 +199,50 @@ defmodule Mana.History do
 
     entries
     |> Enum.filter(&(&1["outcome"] == "done" and MapSet.member?(actions, &1["action"])))
-    |> Enum.reject(&(skip_external? and MapSet.member?(external, &1["verb"])))
+    |> Enum.reject(&(skip_external? and MapSet.member?(replay.external, &1["verb"])))
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, nil, []}, fn {entry, index}, {:ok, record, applied} ->
-      action = String.to_existing_atom(entry["action"])
-      input = params.(action, shift(entry["params"] || %{}, offset))
-      who = if entry["actor_kind"] == "user" and entry["actor_id"], do: actor.(entry["actor_id"])
-      opts = [action: action, actor: who, authorize?: not is_nil(who)]
+    |> Enum.reduce_while({:ok, nil, []}, &replay_entry(&1, &2, replay))
+  end
 
-      result =
-        cond do
-          MapSet.member?(external, entry["verb"]) ->
-            {:error, :external}
+  defp replay_actor(actors) when is_map(actors), do: &Map.get(actors, &1)
+  defp replay_actor(fun), do: fun
 
-          Enum.any?(Map.values(input), &(&1 == @redacted)) ->
-            {:error, :redacted_input}
+  defp external_verbs(resource) do
+    for verb <- Mana.Verbs.declared(resource),
+        verb.external,
+        into: MapSet.new(),
+        do: to_string(verb.name)
+  end
 
-          is_nil(record) ->
-            resource |> Ash.Changeset.for_create(action, input, opts) |> Ash.create()
+  defp replay_entry({entry, index}, {:ok, record, applied}, replay) do
+    action = String.to_existing_atom(entry["action"])
+    input = replay.params.(action, shift(entry["params"] || %{}, replay.offset))
 
-          true ->
-            record |> Ash.Changeset.for_update(action, input, opts) |> Ash.update()
-        end
+    who =
+      if entry["actor_kind"] == "user" and entry["actor_id"], do: replay.actor.(entry["actor_id"])
 
-      case result do
-        {:ok, record} -> {:cont, {:ok, record, applied ++ [action]}}
-        {:error, error} -> {:halt, {:error, %{at: index, action: action, error: error}}}
-      end
-    end)
+    opts = [action: action, actor: who, authorize?: not is_nil(who)]
+
+    case perform(replay, entry, record, input, opts) do
+      {:ok, record} -> {:cont, {:ok, record, applied ++ [action]}}
+      {:error, error} -> {:halt, {:error, %{at: index, action: action, error: error}}}
+    end
+  end
+
+  defp perform(replay, entry, record, input, opts) do
+    cond do
+      MapSet.member?(replay.external, entry["verb"]) ->
+        {:error, :external}
+
+      Enum.any?(Map.values(input), &(&1 == @redacted)) ->
+        {:error, :redacted_input}
+
+      is_nil(record) ->
+        replay.resource |> Ash.Changeset.for_create(opts[:action], input, opts) |> Ash.create()
+
+      true ->
+        record |> Ash.Changeset.for_update(opts[:action], input, opts) |> Ash.update()
+    end
   end
 
   # Replayed now, a recording keeps its relation to time: every date in the
@@ -334,7 +349,7 @@ defmodule Mana.History do
   # The Moments gesture the change happened in, when one is being traced.
   defp trace do
     if Code.ensure_loaded?(Moments.ActionTrace) do
-      case apply(Moments.ActionTrace, :get_span_context, []) do
+      case Moments.ActionTrace.get_span_context() do
         %{gesture: gesture} -> "gesture:#{gesture}"
         _ -> nil
       end
@@ -487,6 +502,9 @@ defmodule Mana.History.Record do
   @moduledoc false
   use Ash.Resource.Change
 
+  # Moments is an optional companion; every call is guarded by `Code.ensure_loaded?`.
+  @compile {:no_warn_undefined, [Moments.ActionTrace]}
+
   @impl true
   def change(changeset, _opts, _context) do
     cond do
@@ -577,15 +595,13 @@ defmodule Mana.History.Record do
   defp trace(resource, entry) do
     if Code.ensure_loaded?(Moments.ActionTrace) and
          function_exported?(Moments.ActionTrace, :annotate_change, 1) do
-      apply(Moments.ActionTrace, :annotate_change, [
-        %{
-          resource: resource,
-          subject: entry.subject_id,
-          action: entry.action,
-          outcome: to_string(entry.outcome),
-          fields: Enum.uniq(Map.keys(entry.before) ++ Map.keys(entry.after))
-        }
-      ])
+      Moments.ActionTrace.annotate_change(%{
+        resource: resource,
+        subject: entry.subject_id,
+        action: entry.action,
+        outcome: to_string(entry.outcome),
+        fields: Enum.uniq(Map.keys(entry.before) ++ Map.keys(entry.after))
+      })
     end
   end
 
@@ -614,6 +630,7 @@ end
 defmodule Mana.History.Transformer do
   @moduledoc false
   use Spark.Dsl.Transformer
+  alias Ash.Resource.Builder
   alias Spark.Dsl.Transformer
 
   def after?(_), do: false
@@ -621,10 +638,7 @@ defmodule Mana.History.Transformer do
 
   def transform(dsl) do
     if Transformer.get_option(dsl, [:history], :log),
-      do:
-        Ash.Resource.Builder.add_change(dsl, Mana.History.Record,
-          on: [:create, :update, :destroy]
-        ),
+      do: Builder.add_change(dsl, Mana.History.Record, on: [:create, :update, :destroy]),
       else: {:ok, dsl}
   end
 end
@@ -661,8 +675,9 @@ defmodule Mana.History.Log do
   }
 
   use Spark.Dsl.Extension, sections: [@log], transformers: [Mana.History.Log.Transformer]
+  alias Spark.Dsl.Extension
 
-  def subjects(log), do: Spark.Dsl.Extension.get_opt(log, [:history_log], :subjects, [])
+  def subjects(log), do: Extension.get_opt(log, [:history_log], :subjects, [])
 
   @doc "The subject resource whose `Mana.Entity.type/1` is `type`."
   def subject(log, type), do: Enum.find(subjects(log), &(Mana.Entity.type(&1) == type))
@@ -784,6 +799,8 @@ end
 defmodule Mana.History.AsOf do
   @moduledoc false
   use Ash.Resource.Actions.Implementation
+  alias Ash.Error.Changes.InvalidArgument
+  alias Ash.Error.Query.NotFound
 
   @impl true
   def run(input, _opts, context) do
@@ -800,13 +817,13 @@ defmodule Mana.History.AsOf do
     else
       {:error, _} ->
         {:error,
-         Ash.Error.Changes.InvalidArgument.exception(
+         InvalidArgument.exception(
            field: :at,
            message: "is not an ISO 8601 moment"
          )}
 
       nil ->
-        {:error, Ash.Error.Query.NotFound.exception(resource: input.resource)}
+        {:error, NotFound.exception(resource: input.resource)}
     end
   end
 end
@@ -815,12 +832,13 @@ defmodule Mana.History.Readable do
   @moduledoc false
   use Ash.Resource.Preparation
   require Ash.Query
+  alias Mana.History.Log
 
   @impl true
   def prepare(query, _opts, context) do
     type = Ash.Query.get_argument(query, :subject_type)
     id = Ash.Query.get_argument(query, :subject_id)
-    subject = Mana.History.Log.subject(query.resource, type)
+    subject = Log.subject(query.resource, type)
 
     readable? =
       subject != nil and

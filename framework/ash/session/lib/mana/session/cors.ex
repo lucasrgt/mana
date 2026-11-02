@@ -1,4 +1,8 @@
 defmodule Mana.Session.Cors do
+  @moduledoc """
+  CORS for the single `:web_origin` configured for `:otp_app`. Every `OPTIONS`
+  request halts here with 204, so mount it before the router.
+  """
   import Plug.Conn
   def init(options), do: options
 

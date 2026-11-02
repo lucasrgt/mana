@@ -839,6 +839,14 @@ end
 defmodule ManaCoreTest do
   use ExUnit.Case, async: false
 
+  alias Mana.Domain.Info
+  alias Mana.Domain.OpenApi
+  alias Mana.Flow.Advance
+  alias Mana.Intervene.Plug, as: InterventionPlug
+  alias Mana.Intervene.Rules
+  alias Mana.Knobs.Scope
+  alias Mana.Storage.LocalPlug
+
   setup_all do
     Application.put_env(:mana_core, :knobs, ManaCoreTest.Knobs)
     Application.put_env(:mana_core, :knob_ttl_ms, 0)
@@ -859,7 +867,7 @@ defmodule ManaCoreTest do
     assert %Mana.Error{code: "demo.taken", status: 409, message: "already taken"} = error
     assert ManaCoreTest.Domain.error(:taken, field: :email).field == :email
     assert_raise ArgumentError, fn -> ManaCoreTest.Domain.error(:missing) end
-    assert Mana.Domain.Info.codes([ManaCoreTest.Domain]) == ["demo.taken"]
+    assert Info.codes([ManaCoreTest.Domain]) == ["demo.taken"]
   end
 
   test "error codes must be namespaced, unique and 4xx" do
@@ -1032,7 +1040,7 @@ defmodule ManaCoreTest do
 
       Plug.Test.conn(method, "/" <> path <> "?" <> query, body)
       |> Map.put(:path_info, String.split(path, "/"))
-      |> Mana.Storage.LocalPlug.call([])
+      |> LocalPlug.call([])
     end
 
     upload = Mana.Storage.upload_url("photos/a.jpg", "image/jpeg", 60)
@@ -1164,7 +1172,7 @@ defmodule ManaCoreTest do
       }
     }
 
-    shaped = Mana.Domain.OpenApi.put_shapes(spec, [ManaCoreTest.Domain])
+    shaped = OpenApi.put_shapes(spec, [ManaCoreTest.Domain])
     schemas = shaped["components"]["schemas"]
     assert schemas["Part"] == create
 
@@ -1188,7 +1196,7 @@ defmodule ManaCoreTest do
       "paths" => %{"/a" => %{"get" => %{"schema" => %{"items" => inline}, "other" => inline}}}
     }
 
-    hoisted = Mana.Domain.OpenApi.put_enums(spec)
+    hoisted = OpenApi.put_enums(spec)
     assert hoisted["paths"]["/a"]["get"]["other"] == %{"$ref" => "#/components/schemas/Color"}
 
     assert hoisted["components"]["schemas"]["Color"] == %{
@@ -1227,7 +1235,7 @@ defmodule ManaCoreTest do
     }
 
     part =
-      Mana.Domain.OpenApi.put_shapes(spec, [ManaCoreTest.Domain])["components"]["schemas"]["Part"]
+      OpenApi.put_shapes(spec, [ManaCoreTest.Domain])["components"]["schemas"]["Part"]
 
     assert part["required"] == ["label"]
     assert part["properties"]["label"] == %{"type" => "string"}
@@ -1236,12 +1244,12 @@ defmodule ManaCoreTest do
   test "alternatives that ended up identical collapse into one" do
     list = %{"type" => "array", "items" => %{"$ref" => "#/components/schemas/Part"}}
 
-    assert Mana.Domain.OpenApi.collapse_alternatives(%{"x" => %{"anyOf" => [list, list]}}) == %{
+    assert OpenApi.collapse_alternatives(%{"x" => %{"anyOf" => [list, list]}}) == %{
              "x" => list
            }
 
     two = %{"anyOf" => [list, %{"type" => "string"}]}
-    assert Mana.Domain.OpenApi.collapse_alternatives(two) == two
+    assert OpenApi.collapse_alternatives(two) == two
   end
 
   test "an inline object with exactly a shape's fields becomes that shape's component" do
@@ -1265,7 +1273,7 @@ defmodule ManaCoreTest do
     }
 
     shaped =
-      Mana.Domain.OpenApi.put_inline_shapes(spec, [ManaCoreTest.Domain], [ManaCoreTest.Part])
+      OpenApi.put_inline_shapes(spec, [ManaCoreTest.Domain], [ManaCoreTest.Part])
 
     assert shaped["paths"]["/a"]["get"]["schema"]["items"] == ref
     assert shaped["paths"]["/b"]["post"]["schema"] == wider
@@ -2180,7 +2188,7 @@ defmodule ManaCoreTest do
 
     test "only a step's action gives up atomic updates" do
       signup = Ash.create!(ManaCoreTest.Signup, %{})
-      atomic = &Mana.Flow.Advance.atomic(Ash.Changeset.for_update(signup, &1, %{}), [], %{})
+      atomic = &Advance.atomic(Ash.Changeset.for_update(signup, &1, %{}), [], %{})
       assert {:ok, _} = atomic.(:relabel)
       assert {:not_atomic, _} = atomic.(:accept_terms)
     end
@@ -2424,12 +2432,12 @@ defmodule ManaCoreTest do
       scope = ManaCoreTest.Knobs.scoped(%{page_size: 5})
       conn = Plug.Test.conn(:get, "/") |> Plug.Conn.put_req_header("x-mana-knob-scope", scope)
 
-      Mana.Knobs.Scope.call(conn, [])
+      Scope.call(conn, [])
       assert ManaCoreTest.Knobs.get(:page_size) == 5
 
       Mana.Knobs.put_scope(nil)
       Application.put_env(:mana_core, :knob_scopes, false)
-      Mana.Knobs.Scope.call(conn, [])
+      Scope.call(conn, [])
       assert ManaCoreTest.Knobs.get(:page_size) == 20
       assert_raise ArgumentError, fn -> ManaCoreTest.Knobs.scoped(%{}) end
     end
@@ -2566,39 +2574,39 @@ defmodule ManaCoreTest do
   describe "server interventions" do
     test "fn: makes a marked function raise or answer a value; latency: delays matching paths; nothing without the switch" do
       on_exit(fn ->
-        Mana.Intervene.Rules.set([])
+        Rules.set([])
         Application.delete_env(:mana_core, :interventions)
       end)
 
-      Mana.Intervene.Rules.set([
+      Rules.set([
         "fn:ManaCoreTest.Pricing.total=7",
         "latency:/api/slow/**=25",
         "nonsense"
       ])
 
       assert ManaCoreTest.Pricing.total([1], %{rate: 3}) == 3
-      assert Mana.Intervene.Rules.latency("/api/slow/a") == 0
+      assert Rules.latency("/api/slow/a") == 0
 
       Application.put_env(:mana_core, :interventions, true)
       assert ManaCoreTest.Pricing.total([1], %{rate: 3}) == 7
-      assert Mana.Intervene.Rules.latency("/api/slow/a/b") == 25
-      assert Mana.Intervene.Rules.latency("/api/fast") == 0
+      assert Rules.latency("/api/slow/a/b") == 25
+      assert Rules.latency("/api/fast") == 0
 
-      Mana.Intervene.Rules.set(["fn:ManaCoreTest.Pricing.total=raise"])
+      Rules.set(["fn:ManaCoreTest.Pricing.total=raise"])
 
       assert_raise RuntimeError, ~r/intervention/, fn ->
         ManaCoreTest.Pricing.total([1], %{rate: 3})
       end
 
-      Mana.Intervene.Rules.set(["fn:ManaCoreTest.Pricing.total=nil"])
+      Rules.set(["fn:ManaCoreTest.Pricing.total=nil"])
       assert ManaCoreTest.Pricing.total([1], %{rate: 3}) == nil
-      Mana.Intervene.Rules.set(["fn:ManaCoreTest.Pricing.total=not json"])
+      Rules.set(["fn:ManaCoreTest.Pricing.total=not json"])
       assert ManaCoreTest.Pricing.total([1], %{rate: 3}) == "not json"
 
-      Mana.Intervene.Rules.set(["latency:/x=5"])
+      Rules.set(["latency:/x=5"])
       conn = Plug.Test.conn(:get, "/x")
       started = System.monotonic_time(:millisecond)
-      assert Mana.Intervene.Plug.call(conn, []) == conn
+      assert InterventionPlug.call(conn, []) == conn
       assert System.monotonic_time(:millisecond) - started >= 5
     end
   end

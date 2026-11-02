@@ -10,43 +10,10 @@ defmodule Mana.Runtime.Mail do
   end
 
   defp smtp!(get) do
-    relay = required!(get, "SMTP_HOST")
-
-    # Accept a relay hostname, never a URL, credentials or SMTP command text.
-    unless byte_size(relay) <= 253 and
-             Regex.match?(~r/\A[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\z/, relay),
-           do: invalid!("SMTP_HOST")
-
-    from = required!(get, "MAIL_FROM")
-
-    unless byte_size(from) <= 254 and
-             Regex.match?(~r/\A[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+\z/u, from),
-           do: invalid!("MAIL_FROM")
-
-    trust =
-      case get.("SMTP_CA_CERT") do
-        nil ->
-          [cacerts: :public_key.cacerts_get()]
-
-        path ->
-          unless File.regular?(path), do: invalid!("SMTP_CA_CERT")
-          [cacertfile: String.to_charlist(path)]
-      end
-
-    tls =
-      [
-        versions: [:"tlsv1.2", :"tlsv1.3"],
-        verify: :verify_peer,
-        server_name_indication: String.to_charlist(relay),
-        depth: 10,
-        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
-      ] ++ trust
-
-    port =
-      case Integer.parse(get.("SMTP_PORT") || "587") do
-        {value, ""} when value in 1..65535 -> value
-        _ -> invalid!("SMTP_PORT")
-      end
+    relay = relay!(required!(get, "SMTP_HOST"))
+    from = from!(required!(get, "MAIL_FROM"))
+    tls = tls_options(relay) ++ trust!(get.("SMTP_CA_CERT"))
+    port = port!(get.("SMTP_PORT") || "587")
 
     %{
       mode: :smtp,
@@ -66,6 +33,44 @@ defmodule Mana.Runtime.Mail do
         retries: 0
       ]
     }
+  end
+
+  # Accept a relay hostname, never a URL, credentials or SMTP command text.
+  defp relay!(relay) do
+    if byte_size(relay) <= 253 and
+         Regex.match?(~r/\A[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\z/, relay),
+       do: relay,
+       else: invalid!("SMTP_HOST")
+  end
+
+  defp from!(from) do
+    if byte_size(from) <= 254 and Regex.match?(~r/\A[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+\z/u, from),
+      do: from,
+      else: invalid!("MAIL_FROM")
+  end
+
+  defp tls_options(relay) do
+    [
+      versions: [:"tlsv1.2", :"tlsv1.3"],
+      verify: :verify_peer,
+      server_name_indication: String.to_charlist(relay),
+      depth: 10,
+      customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
+    ]
+  end
+
+  defp trust!(nil), do: [cacerts: :public_key.cacerts_get()]
+
+  defp trust!(path) do
+    unless File.regular?(path), do: invalid!("SMTP_CA_CERT")
+    [cacertfile: String.to_charlist(path)]
+  end
+
+  defp port!(value) do
+    case Integer.parse(value) do
+      {port, ""} when port in 1..65_535 -> port
+      _ -> invalid!("SMTP_PORT")
+    end
   end
 
   defp required!(get, key) do

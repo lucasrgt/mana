@@ -1,6 +1,8 @@
 defmodule Moments.ActionTraceTest do
   use ExUnit.Case, async: true
+  alias Ash.Domain.Info
   alias Moments.ActionTrace, as: Trace
+  alias Moments.ActionTrace.Telemetry
 
   defmodule Item do
     use Ash.Resource,
@@ -66,7 +68,7 @@ defmodule Moments.ActionTraceTest do
   end
 
   test "native bulk paths identify the declared action without pretending to prove each row" do
-    start_supervised!({Moments.ActionTrace.Telemetry, id: make_ref(), domains: [Domain]})
+    start_supervised!({Telemetry, id: make_ref(), domains: [Domain]})
     Trace.begin_request(id())
 
     result =
@@ -191,21 +193,27 @@ defmodule Moments.ActionTraceTest do
 
   test "telemetry registration is supervised and ambiguous identities do not become evidence" do
     handler_id = make_ref()
-    child = start_supervised!({Moments.ActionTrace.Telemetry, id: handler_id, domains: [Domain]})
-    event = [:ash, Ash.Domain.Info.short_name(Domain), :bulk_update, :stop]
+    # Temporary, so stopping it below is final: the handlers it detaches are
+    # not attached again by a restart before the refute.
+    child =
+      start_supervised!(
+        Supervisor.child_spec({Telemetry, id: handler_id, domains: [Domain]}, restart: :temporary)
+      )
+
+    event = [:ash, Info.short_name(Domain), :bulk_update, :stop]
 
     assert Enum.any?(
              :telemetry.list_handlers(event),
-             &(&1.id == {Moments.ActionTrace.Telemetry, handler_id})
+             &(&1.id == {Telemetry, handler_id})
            )
 
     Trace.begin_request(id())
 
-    Moments.ActionTrace.Telemetry.handle_event(
+    Telemetry.handle_event(
       event,
       %{},
       %{resource_short_name: :ambiguous, action: :read},
-      %{{Ash.Domain.Info.short_name(Domain), :ambiguous} => nil}
+      %{{Info.short_name(Domain), :ambiguous} => nil}
     )
 
     assert Trace.finish_request().actions == []
@@ -213,7 +221,7 @@ defmodule Moments.ActionTraceTest do
 
     refute Enum.any?(
              :telemetry.list_handlers(event),
-             &(&1.id == {Moments.ActionTrace.Telemetry, handler_id})
+             &(&1.id == {Telemetry, handler_id})
            )
   end
 
@@ -238,9 +246,7 @@ defmodule Moments.ActionTraceTest do
   test "request profile aggregates only attributed Repo events, including native Ash task context" do
     event = [:action_trace_test, :repo, :query]
 
-    start_supervised!(
-      {Moments.ActionTrace.Telemetry, id: make_ref(), domains: [Domain], repo_event: event}
-    )
+    start_supervised!({Telemetry, id: make_ref(), domains: [Domain], repo_event: event})
 
     Trace.begin_request(id())
     read()

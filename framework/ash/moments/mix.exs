@@ -2,7 +2,14 @@ defmodule Moments.MixProject do
   use Mix.Project
 
   def project do
-    [app: :moments, version: "0.1.0", elixir: "~> 1.18", deps: deps()]
+    # Tests declare resources after compilation; protocols stay open for them.
+    [
+      app: :moments,
+      version: "0.1.0",
+      elixir: "~> 1.18",
+      consolidate_protocols: Mix.env() != :test,
+      deps: deps()
+    ]
   end
 
   def application, do: [extra_applications: [:logger, :crypto]]
@@ -15,6 +22,7 @@ defmodule Moments.MixProject do
       {:mana_core, path: "../core", only: :test},
       {:ecto_sql, "~> 3.12", only: :test},
       {:postgrex, "~> 0.20", only: :test},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:simple_sat, "~> 0.1 and >= 0.1.1", only: :test}
     ]
 end

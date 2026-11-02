@@ -55,6 +55,11 @@ defmodule Mana.Verbs do
   `feature` reach the contract as `x-mana-verbs` on the resource schema
   (`Mana.Domain.OpenApi.finish/2`).
   """
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [AshJsonApi.Domain.Info]}
+
+  alias Ash.Type.NewType
+  alias Spark.Dsl.Extension
 
   @verb %Spark.Dsl.Entity{
     name: :verb,
@@ -163,10 +168,10 @@ defmodule Mana.Verbs do
   @doc "Moments `observe`: what `record` offers `actor` now."
   def observe(record, actor), do: %{"offered" => offered(record, actor)}
 
-  def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:verbs])
+  def declared(resource), do: Extension.get_entities(resource, [:verbs])
 
   def calculation(resource),
-    do: Spark.Dsl.Extension.get_opt(resource, [:verbs], :calculation, :verbs)
+    do: Extension.get_opt(resource, [:verbs], :calculation, :verbs)
 
   def action(%Mana.Verbs.Verb{action: nil, name: name}), do: name
   def action(%Mana.Verbs.Verb{action: action}), do: action
@@ -385,29 +390,9 @@ defmodule Mana.Verbs do
   a done step without an inverse is reported in `uncompensated`.
   """
   def run_all(steps, actor) do
-    Enum.reduce_while(Enum.with_index(steps), [], fn {{record, name, params}, index}, done ->
-      verb = verb!(record.__struct__, name)
-
-      case Ash.update(record, params, action: action(verb), actor: actor) do
-        {:ok, updated} -> {:cont, [{updated, verb} | done]}
-        {:error, error} -> {:halt, {:failed, index, error, done}}
-      end
-    end)
-    |> case do
+    case perform(steps, actor) do
       {:failed, index, error, done} ->
-        {compensated, uncompensated} =
-          Enum.reduce(done, {[], []}, fn {record, verb}, {compensated, uncompensated} ->
-            with inverse when not is_nil(inverse) <- verb.inverse,
-                 {:ok, undone} <-
-                   Ash.update(record, %{},
-                     action: action(verb!(record.__struct__, inverse)),
-                     actor: actor
-                   ) do
-              {[undone | compensated], uncompensated}
-            else
-              _ -> {compensated, [record | uncompensated]}
-            end
-          end)
+        {compensated, uncompensated} = compensate(done, actor)
 
         {:error,
          %{
@@ -421,6 +406,35 @@ defmodule Mana.Verbs do
         {:ok, done |> Enum.reverse() |> Enum.map(&elem(&1, 0))}
     end
   end
+
+  defp perform(steps, actor) do
+    Enum.reduce_while(Enum.with_index(steps), [], fn {{record, name, params}, index}, done ->
+      verb = verb!(record.__struct__, name)
+
+      case Ash.update(record, params, action: action(verb), actor: actor) do
+        {:ok, updated} -> {:cont, [{updated, verb} | done]}
+        {:error, error} -> {:halt, {:failed, index, error, done}}
+      end
+    end)
+  end
+
+  defp compensate(done, actor) do
+    Enum.reduce(done, {[], []}, fn {record, verb}, {compensated, uncompensated} ->
+      case undo(record, verb, actor) do
+        {:ok, undone} -> {[undone | compensated], uncompensated}
+        _ -> {compensated, [record | uncompensated]}
+      end
+    end)
+  end
+
+  defp undo(_record, %{inverse: nil}, _actor), do: :no_inverse
+
+  defp undo(record, verb, actor),
+    do:
+      Ash.update(record, %{},
+        action: action(verb!(record.__struct__, verb.inverse)),
+        actor: actor
+      )
 
   defp verb!(resource, name),
     do:
@@ -492,24 +506,30 @@ defmodule Mana.Verbs do
         "offline" => to_string(verb.offline),
         "archetypes" => archetypes(verb)
       }
-      |> then(&if verb.inverse, do: Map.put(&1, "inverse", to_string(verb.inverse)), else: &1)
-      |> then(&if verb.feature, do: Map.put(&1, "feature", verb.feature), else: &1)
-      |> then(&if verb.describe, do: Map.put(&1, "describe", verb.describe), else: &1)
-      |> then(&if verb.because, do: Map.put(&1, "because", verb.because), else: &1)
-      |> then(&if verb.external, do: Map.put(&1, "external", verb.external), else: &1)
-      |> then(&if verb.collection, do: Map.put(&1, "collection", true), else: &1)
-      |> then(fn map ->
-        case verb.from do
-          {parent, field} ->
-            Map.merge(map, %{"from" => Mana.Entity.type(parent), "field" => to_string(field)})
-
-          nil ->
-            map
-        end
-      end)
+      |> Map.merge(described(verb))
+      |> Map.merge(collection_fields(verb.collection))
+      |> Map.merge(from_fields(verb.from))
       |> Map.put("inputs", inputs(resource, action(verb)))
     end
   end
+
+  @described [:inverse, :feature, :describe, :because, :external]
+
+  defp described(verb) do
+    for key <- @described,
+        value = Map.fetch!(verb, key),
+        value,
+        into: %{},
+        do: {to_string(key), to_string(value)}
+  end
+
+  defp collection_fields(true), do: %{"collection" => true}
+  defp collection_fields(_), do: %{}
+
+  defp from_fields({parent, field}),
+    do: %{"from" => Mana.Entity.type(parent), "field" => to_string(field)}
+
+  defp from_fields(nil), do: %{}
 
   @doc """
   What a verb's action takes, with the rules the server enforces, so a client
@@ -522,32 +542,38 @@ defmodule Mana.Verbs do
   """
   def inputs(resource, action_name) do
     action = Ash.Resource.Info.action(resource, action_name)
+    unique = unique_keys(resource)
 
-    attributes =
-      for name <- Map.get(action, :accept) || [],
-          attribute = Ash.Resource.Info.attribute(resource, name),
-          attribute.public?,
-          do:
-            {attribute,
-             action.type == :create and not attribute.allow_nil? and is_nil(attribute.default) and
-               name not in (Map.get(action, :allow_nil_input) || [])}
-
-    arguments =
-      for argument <- action.arguments,
-          argument.public?,
-          do: {argument, not argument.allow_nil? and is_nil(argument.default)}
-
-    unique =
-      for identity <- Ash.Resource.Info.identities(resource),
-          [key] <- [identity.keys],
-          into: MapSet.new(),
-          do: key
-
-    for {field, required} <- attributes ++ arguments do
+    for {field, required} <- accepted(resource, action) ++ arguments(action) do
       %{"name" => to_string(field.name), "required" => required}
       |> Map.merge(rules(field.type, field.constraints || []))
       |> then(&if MapSet.member?(unique, field.name), do: Map.put(&1, "unique", true), else: &1)
     end
+  end
+
+  defp accepted(resource, action) do
+    for name <- Map.get(action, :accept) || [],
+        attribute = Ash.Resource.Info.attribute(resource, name),
+        attribute.public?,
+        do: {attribute, required_attribute?(action, attribute)}
+  end
+
+  defp required_attribute?(action, attribute) do
+    action.type == :create and not attribute.allow_nil? and is_nil(attribute.default) and
+      attribute.name not in (Map.get(action, :allow_nil_input) || [])
+  end
+
+  defp arguments(action) do
+    for argument <- action.arguments,
+        argument.public?,
+        do: {argument, not argument.allow_nil? and is_nil(argument.default)}
+  end
+
+  defp unique_keys(resource) do
+    for identity <- Ash.Resource.Info.identities(resource),
+        [key] <- [identity.keys],
+        into: MapSet.new(),
+        do: key
   end
 
   defp rules({:array, type}, constraints) do
@@ -561,54 +587,69 @@ defmodule Mana.Verbs do
   defp rules(type, constraints) do
     type = Ash.Type.get_type(type)
 
+    if br_format?(type),
+      do: %{"type" => "string", "format" => type.format()},
+      else: builtin_rules(type, constraints)
+  end
+
+  defp builtin_rules(type, constraints) when type in [Ash.Type.String, Ash.Type.CiString] do
+    %{"type" => "string"}
+    |> put("min_length", constraints[:min_length])
+    |> put("max_length", constraints[:max_length])
+    |> put("match", match_source(constraints[:match]))
+  end
+
+  defp builtin_rules(Ash.Type.Integer, constraints), do: number_rules("integer", constraints)
+
+  defp builtin_rules(type, constraints) when type in [Ash.Type.Float, Ash.Type.Decimal],
+    do: number_rules("number", constraints)
+
+  defp builtin_rules(Ash.Type.Boolean, _constraints), do: %{"type" => "boolean"}
+  defp builtin_rules(Ash.Type.UUID, _constraints), do: %{"type" => "string", "format" => "uuid"}
+
+  defp builtin_rules(Ash.Type.Atom = type, constraints) do
+    case constraints[:one_of] do
+      values when is_list(values) ->
+        %{"type" => "string", "one_of" => Enum.map(values, &to_string/1)}
+
+      _ ->
+        custom_rules(type, constraints)
+    end
+  end
+
+  defp builtin_rules(type, constraints), do: custom_rules(type, constraints)
+
+  defp custom_rules(type, constraints) do
     cond do
-      function_exported?(type, :format, 0) and match?("br-" <> _, safe_format(type)) ->
-        %{"type" => "string", "format" => type.format()}
-
-      type == Ash.Type.String or type == Ash.Type.CiString ->
-        %{"type" => "string"}
-        |> put("min_length", constraints[:min_length])
-        |> put("max_length", constraints[:max_length])
-        |> put("match", match_source(constraints[:match]))
-
-      type == Ash.Type.Integer or type == Ash.Type.Float or type == Ash.Type.Decimal ->
-        %{"type" => if(type == Ash.Type.Integer, do: "integer", else: "number")}
-        |> put("min", number(constraints[:min]))
-        |> put("max", number(constraints[:max]))
-
-      type == Ash.Type.Boolean ->
-        %{"type" => "boolean"}
-
-      type == Ash.Type.UUID ->
-        %{"type" => "string", "format" => "uuid"}
-
-      type == Ash.Type.Atom and is_list(constraints[:one_of]) ->
-        %{"type" => "string", "one_of" => Enum.map(constraints[:one_of], &to_string/1)}
-
-      Ash.Type.NewType.new_type?(type) ->
+      NewType.new_type?(type) ->
         rules(
-          Ash.Type.NewType.subtype_of(type),
-          Keyword.merge(Ash.Type.NewType.constraints(type, constraints), constraints)
+          NewType.subtype_of(type),
+          Keyword.merge(NewType.constraints(type, constraints), constraints)
         )
 
       function_exported?(type, :values, 0) ->
         %{"type" => "string", "one_of" => Enum.map(type.values(), &to_string/1)}
 
-      Ash.Type.storage_type(type, constraints) in [
-        :utc_datetime,
-        :utc_datetime_usec,
-        :naive_datetime,
-        :naive_datetime_usec
-      ] ->
-        %{"type" => "string", "format" => "date-time"}
-
-      Ash.Type.storage_type(type, constraints) == :date ->
-        %{"type" => "string", "format" => "date"}
-
       true ->
-        %{"type" => "object"}
+        storage_rules(Ash.Type.storage_type(type, constraints))
     end
   end
+
+  defp storage_rules(storage)
+       when storage in [:utc_datetime, :utc_datetime_usec, :naive_datetime, :naive_datetime_usec],
+       do: %{"type" => "string", "format" => "date-time"}
+
+  defp storage_rules(:date), do: %{"type" => "string", "format" => "date"}
+  defp storage_rules(_storage), do: %{"type" => "object"}
+
+  defp number_rules(json_type, constraints) do
+    %{"type" => json_type}
+    |> put("min", number(constraints[:min]))
+    |> put("max", number(constraints[:max]))
+  end
+
+  defp br_format?(type),
+    do: function_exported?(type, :format, 0) and match?("br-" <> _, safe_format(type))
 
   defp safe_format(type) do
     type.format()
@@ -640,6 +681,7 @@ end
 defmodule Mana.Verbs.Transformer do
   @moduledoc false
   use Spark.Dsl.Transformer
+  alias Ash.Resource.Builder
   alias Spark.Dsl.Transformer
 
   defp guard_generic(dsl, verbs) do
@@ -677,64 +719,65 @@ defmodule Mana.Verbs.Transformer do
       [] ->
         {:ok, dsl}
 
-      _ ->
-        name = Transformer.get_option(dsl, [:verbs], :calculation) || :verbs
-
-        with {:ok, dsl} <-
-               Ash.Resource.Builder.add_new_calculation(
-                 dsl,
-                 name,
-                 {:array, :string},
-                 Mana.Verbs.Offered,
-                 public?: true,
-                 description: "The verbs this record offers the actor now."
-               ) do
-          verbs = Transformer.get_entities(dsl, [:verbs])
-
-          with {:ok, dsl} <-
-                 if(Enum.any?(verbs, &(&1.knob || &1.feature)),
-                   do:
-                     Ash.Resource.Builder.add_change(dsl, Mana.Verbs.KnobGate,
-                       on: [:create, :update, :destroy]
-                     ),
-                   else: {:ok, dsl}
-                 ) do
-            dsl =
-              if Enum.any?(verbs, & &1.collection) do
-                {:ok, gate} =
-                  Transformer.build_entity(Ash.Resource.Dsl, [:validations], :validate,
-                    validation: Mana.Verbs.CollectionGate,
-                    on: [:create]
-                  )
-
-                dsl
-                |> Transformer.add_entity([:validations], gate, type: :append)
-                |> guard_generic(verbs)
-              else
-                dsl
-              end
-
-            if Enum.any?(verbs, &(&1.when && not &1.collection)) do
-              with {:ok, gate} <-
-                     Transformer.build_entity(Ash.Resource.Dsl, [:validations], :validate,
-                       validation: Mana.Verbs.WhenGate,
-                       on: [:update, :destroy]
-                     ),
-                   dsl = Transformer.add_entity(dsl, [:validations], gate, type: :append),
-                   {:ok, dsl} <-
-                     Ash.Resource.Builder.add_change(dsl, Mana.Verbs.Recheck,
-                       on: [:update, :destroy]
-                     ) do
-                rechecked =
-                  for verb <- verbs, verb.when && not verb.collection, do: Mana.Verbs.action(verb)
-
-                {:ok, Mana.NotAtomic.mark(dsl, &(&1.name in rechecked))}
-              end
-            else
-              {:ok, dsl}
-            end
-          end
+      verbs ->
+        with {:ok, dsl} <- add_offered(dsl),
+             {:ok, dsl} <- gate_knobs(dsl, verbs),
+             {:ok, dsl} <- gate_collections(dsl, verbs) do
+          gate_when(dsl, verbs)
         end
+    end
+  end
+
+  defp add_offered(dsl) do
+    name = Transformer.get_option(dsl, [:verbs], :calculation) || :verbs
+
+    Builder.add_new_calculation(dsl, name, {:array, :string}, Mana.Verbs.Offered,
+      public?: true,
+      description: "The verbs this record offers the actor now."
+    )
+  end
+
+  defp gate_knobs(dsl, verbs) do
+    if Enum.any?(verbs, &(&1.knob || &1.feature)),
+      do: Builder.add_change(dsl, Mana.Verbs.KnobGate, on: [:create, :update, :destroy]),
+      else: {:ok, dsl}
+  end
+
+  defp gate_collections(dsl, verbs) do
+    if Enum.any?(verbs, & &1.collection) do
+      {:ok, gate} =
+        Transformer.build_entity(Ash.Resource.Dsl, [:validations], :validate,
+          validation: Mana.Verbs.CollectionGate,
+          on: [:create]
+        )
+
+      {:ok,
+       dsl
+       |> Transformer.add_entity([:validations], gate, type: :append)
+       |> guard_generic(verbs)}
+    else
+      {:ok, dsl}
+    end
+  end
+
+  defp gate_when(dsl, verbs) do
+    case for(verb <- verbs, verb.when && not verb.collection, do: Mana.Verbs.action(verb)) do
+      [] -> {:ok, dsl}
+      rechecked -> recheck(dsl, rechecked)
+    end
+  end
+
+  defp recheck(dsl, rechecked) do
+    with {:ok, gate} <-
+           Transformer.build_entity(Ash.Resource.Dsl, [:validations], :validate,
+             validation: Mana.Verbs.WhenGate,
+             on: [:update, :destroy]
+           ),
+         {:ok, dsl} <-
+           dsl
+           |> Transformer.add_entity([:validations], gate, type: :append)
+           |> Builder.add_change(Mana.Verbs.Recheck, on: [:update, :destroy]) do
+      {:ok, Mana.NotAtomic.mark(dsl, &(&1.name in rechecked))}
     end
   end
 end
@@ -866,7 +909,10 @@ defmodule Mana.Verbs.Recheck do
   # now, so the second one is refused instead of applying over the first.
   use Ash.Resource.Change
   require Ash.Query
+  alias Ash.Resource.Info
 
+  # AshPostgres is the consumer's dependency, not this package's.
+  @compile {:no_warn_undefined, [AshPostgres.DataLayer.Info]}
   @postgres AshPostgres.DataLayer
 
   @impl true
@@ -874,27 +920,29 @@ defmodule Mana.Verbs.Recheck do
     with %{} = verb <- verb(changeset),
          %{} = record when not is_nil(record.id) <- changeset.data,
          repo when not is_nil(repo) <- repo(changeset.resource) do
-      Ash.Changeset.before_action(changeset, fn changeset ->
-        repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [
-          "#{Mana.Entity.type(changeset.resource)}:#{record.id}"
-        ])
-
-        holds? =
-          changeset.resource
-          |> Ash.Query.do_filter(
-            Map.to_list(Map.take(record, Ash.Resource.Info.primary_key(changeset.resource)))
-          )
-          |> Ash.Query.do_filter(Mana.Verbs.condition(verb.when, context.actor))
-          |> Ash.exists?(authorize?: false)
-
-        if holds?,
-          do: changeset,
-          else:
-            Ash.Changeset.add_error(changeset, Mana.Verbs.unavailable(changeset.resource, verb))
-      end)
+      Ash.Changeset.before_action(
+        changeset,
+        &locked_recheck(&1, verb, record, repo, context.actor)
+      )
     else
       _ -> changeset
     end
+  end
+
+  defp locked_recheck(changeset, verb, record, repo, actor) do
+    repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      "#{Mana.Entity.type(changeset.resource)}:#{record.id}"
+    ])
+
+    holds? =
+      changeset.resource
+      |> Ash.Query.do_filter(Map.to_list(Map.take(record, Info.primary_key(changeset.resource))))
+      |> Ash.Query.do_filter(Mana.Verbs.condition(verb.when, actor))
+      |> Ash.exists?(authorize?: false)
+
+    if holds?,
+      do: changeset,
+      else: Ash.Changeset.add_error(changeset, Mana.Verbs.unavailable(changeset.resource, verb))
   end
 
   @impl true
@@ -910,7 +958,7 @@ defmodule Mana.Verbs.Recheck do
 
   defp repo(resource) do
     if Ash.DataLayer.data_layer(resource) == @postgres,
-      do: apply(Module.concat(@postgres, Info), :repo, [resource, :mutate])
+      do: AshPostgres.DataLayer.Info.repo(resource, :mutate)
   end
 end
 
@@ -947,72 +995,92 @@ defmodule Mana.Verbs.Validate do
   # stops compilation, unlike a verifier's.
   use Spark.Dsl.Transformer
   alias Spark.Dsl.Transformer
+  alias Spark.Error.DslError
 
   def after?(_), do: true
+
+  @rules [
+    :action,
+    :inverse,
+    :retry,
+    :queue_idempotent,
+    :queue_money,
+    :queue_external,
+    :from,
+    :record_less_when,
+    :own_record_when
+  ]
 
   def transform(dsl) do
     module = Transformer.get_persisted(dsl, :module)
     verbs = Transformer.get_entities(dsl, [:verbs])
-    actions = dsl |> Transformer.get_entities([:actions]) |> MapSet.new(& &1.name)
-    names = MapSet.new(verbs, & &1.name)
 
-    Enum.reduce_while(verbs, {:ok, dsl}, fn verb, ok ->
-      cond do
-        Mana.Verbs.action(verb) not in actions ->
-          {:halt, error(module, verb, "has no action #{inspect(Mana.Verbs.action(verb))}")}
+    declared = %{
+      actions: dsl |> Transformer.get_entities([:actions]) |> MapSet.new(& &1.name),
+      names: MapSet.new(verbs, & &1.name)
+    }
 
-        verb.inverse && verb.inverse not in names ->
-          {:halt,
-           error(
-             module,
-             verb,
-             "names an inverse #{inspect(verb.inverse)} that is not a declared verb"
-           )}
-
-        verb.retry > 0 and not verb.idempotent ->
-          {:halt,
-           error(module, verb, "retries but is not idempotent; a resend could apply it twice")}
-
-        verb.offline == :queue and not verb.idempotent ->
-          {:halt,
-           error(
-             module,
-             verb,
-             "queues offline but is not idempotent; a replay could apply it twice"
-           )}
-
-        verb.offline == :queue and verb.risk == :money ->
-          {:halt, error(module, verb, "moves money and cannot wait in an offline queue")}
-
-        verb.offline == :queue and verb.external ->
-          {:halt,
-           error(module, verb, "reaches #{verb.external} and cannot wait in an offline queue")}
-
-        verb.from && not verb.collection ->
-          {:halt, error(module, verb, "names a parent with from: but is not collection: true")}
-
-        verb.collection && is_nil(verb.from) &&
-            not (is_nil(verb.when) or match?({m, f} when is_atom(m) and is_atom(f), verb.when)) ->
-          {:halt, error(module, verb, "is record-less; its when is {Module, :fun}(actor)")}
-
-        not verb.collection && match?({m, f} when is_atom(m) and is_atom(f), verb.when) ->
-          {:halt,
-           error(
-             module,
-             verb,
-             "acts on its own record; its when is an expression the server can enforce"
-           )}
-
-        true ->
-          {:cont, ok}
+    Enum.find_value(verbs, {:ok, dsl}, fn verb ->
+      case Enum.find_value(@rules, &refusal(&1, verb, declared)) do
+        nil -> nil
+        message -> error(module, verb, message)
       end
     end)
   end
 
+  defp refusal(:action, verb, %{actions: actions}) do
+    action = Mana.Verbs.action(verb)
+    if action not in actions, do: "has no action #{inspect(action)}"
+  end
+
+  defp refusal(:inverse, %{inverse: inverse}, %{names: names}) do
+    if inverse && inverse not in names,
+      do: "names an inverse #{inspect(inverse)} that is not a declared verb"
+  end
+
+  defp refusal(:retry, verb, _declared) do
+    if verb.retry > 0 and not verb.idempotent,
+      do: "retries but is not idempotent; a resend could apply it twice"
+  end
+
+  defp refusal(:queue_idempotent, verb, _declared) do
+    if verb.offline == :queue and not verb.idempotent,
+      do: "queues offline but is not idempotent; a replay could apply it twice"
+  end
+
+  defp refusal(:queue_money, verb, _declared) do
+    if verb.offline == :queue and verb.risk == :money,
+      do: "moves money and cannot wait in an offline queue"
+  end
+
+  defp refusal(:queue_external, verb, _declared) do
+    if verb.offline == :queue and verb.external,
+      do: "reaches #{verb.external} and cannot wait in an offline queue"
+  end
+
+  defp refusal(:from, verb, _declared) do
+    if verb.from && not verb.collection,
+      do: "names a parent with from: but is not collection: true"
+  end
+
+  defp refusal(:record_less_when, verb, _declared) do
+    if verb.collection && is_nil(verb.from) &&
+         not (is_nil(verb.when) or function_ref?(verb.when)),
+       do: "is record-less; its when is {Module, :fun}(actor)"
+  end
+
+  defp refusal(:own_record_when, verb, _declared) do
+    if not verb.collection && function_ref?(verb.when),
+      do: "acts on its own record; its when is an expression the server can enforce"
+  end
+
+  defp function_ref?({module, function}) when is_atom(module) and is_atom(function), do: true
+  defp function_ref?(_when), do: false
+
   defp error(module, verb, message),
     do:
       {:error,
-       Spark.Error.DslError.exception(
+       DslError.exception(
          module: module,
          path: [:verbs, verb.name],
          message: "verb #{inspect(verb.name)} #{message}"

@@ -27,6 +27,8 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     a scope with `Mana.Explore` or `Mana.Intervene` instead.
     """
 
+    alias Mana.Snapshot.Scopes
+
     @doc """
     The migrated template, built when the repo's migrations change; answers
     its database name. `migrations:` overrides the repo's migrations folder.
@@ -59,7 +61,7 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
       unless exists?(repo, source), do: raise(ArgumentError, "no snapshot #{inspect(from)}")
       id = Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
       clone(repo, source, scope_database(repo, id))
-      {:ok, _pid} = Mana.Snapshot.Scopes.start_scope(repo, id, scope_database(repo, id))
+      {:ok, _pid} = Scopes.start_scope(repo, id, scope_database(repo, id))
       id
     end
 
@@ -71,7 +73,7 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
       valid_name!(name)
       target = snapshot_database(repo, name)
 
-      Mana.Snapshot.Scopes.paused(repo, id, fn database ->
+      Scopes.paused(repo, id, fn database ->
         drop_database(repo, target)
         clone(repo, database, target)
       end)
@@ -84,7 +86,7 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
 
     @doc "Drops scope `id`: its pool and its database."
     def drop(repo, id) do
-      Mana.Snapshot.Scopes.stop_scope(repo, id)
+      Scopes.stop_scope(repo, id)
       drop_database(repo, scope_database(repo, id))
       :ok
     end
@@ -93,11 +95,11 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     def drop_snapshot(repo, name), do: drop_database(repo, snapshot_database(repo, name))
 
     @doc "The ids of the scopes open now."
-    def scopes(repo), do: Mana.Snapshot.Scopes.ids(repo)
+    def scopes(repo), do: Scopes.ids(repo)
 
     @doc "Runs `fun` with `repo` pointed at scope `id`."
     def with_scope(repo, id, fun) do
-      pid = Mana.Snapshot.Scopes.pid!(repo, id)
+      pid = Scopes.pid!(repo, id)
       previous = repo.put_dynamic_repo(pid)
 
       try do
@@ -108,7 +110,7 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     end
 
     @doc "Points `repo` at scope `id` for the rest of this process (what the plug does)."
-    def use_scope(repo, id), do: repo.put_dynamic_repo(Mana.Snapshot.Scopes.pid!(repo, id))
+    def use_scope(repo, id), do: repo.put_dynamic_repo(Scopes.pid!(repo, id))
 
     @doc """
     How scopes `a` and `b` differ: row counts per table that differ, and,
@@ -361,6 +363,8 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
       @behaviour Plug
       import Plug.Conn
 
+      alias Mana.Snapshot.Scopes
+
       @impl true
       def init(opts), do: Keyword.fetch!(opts, :repo)
 
@@ -368,7 +372,7 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
       def call(conn, repo) do
         with true <- Application.get_env(:mana_core, :data_scopes, false) == true,
              [id] <- get_req_header(conn, "x-mana-data-scope") do
-          case Mana.Snapshot.Scopes.pid(repo, id) do
+          case Scopes.pid(repo, id) do
             nil ->
               conn
               |> put_resp_content_type("application/json")

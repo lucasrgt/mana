@@ -7,66 +7,54 @@ defmodule Contracts.OpenApi do
   def normalize(items) when is_list(items), do: Enum.map(items, &normalize/1)
 
   def normalize(value) when is_map(value) do
-    value = Map.new(value, fn {k, v} -> {k, normalize(v)} end)
+    value
+    |> Map.new(fn {k, v} -> {k, normalize(v)} end)
+    |> sparse_fieldsets()
+    |> nullable()
+    |> empty_includes()
+    |> scalar_enum()
+  end
 
-    value =
-      case value do
-        %{"in" => "query", "name" => "fields", "schema" => schema} ->
-          # JSON:API sparse fieldsets are a resource-name -> comma-separated string map.
-          # Explicit map values avoid dart-dio's inline object/map alias conflict.
-          schema =
-            schema
-            |> Map.delete("properties")
-            |> Map.put("additionalProperties", %{"type" => "string"})
+  def normalize(value), do: value
 
-          Map.put(value, "schema", schema)
+  # JSON:API sparse fieldsets are a resource-name -> comma-separated string map.
+  # Explicit map values avoid dart-dio's inline object/map alias conflict.
+  defp sparse_fieldsets(%{"in" => "query", "name" => "fields", "schema" => schema} = value) do
+    schema =
+      schema
+      |> Map.delete("properties")
+      |> Map.put("additionalProperties", %{"type" => "string"})
 
-        _ ->
-          value
-      end
+    Map.put(value, "schema", schema)
+  end
 
-    value =
-      case value do
-        %{"anyOf" => [base, %{"type" => "null"}]} when is_map(base) ->
-          if Map.has_key?(base, "type") do
-            value |> Map.delete("anyOf") |> Map.merge(base) |> Map.put("nullable", true)
-          else
-            value
-          end
+  defp sparse_fieldsets(value), do: value
 
-        _ ->
-          value
-      end
+  defp nullable(%{"anyOf" => [%{"type" => _} = base, %{"type" => "null"}]} = value),
+    do: value |> Map.delete("anyOf") |> Map.merge(base) |> Map.put("nullable", true)
 
-    value =
-      case value do
-        %{"type" => "array", "items" => %{"oneOf" => []}} ->
-          # No includable relationships: preserve an empty array, not an open union.
-          value |> Map.put("items", %{"type" => "object"}) |> Map.put("maxItems", 0)
+  defp nullable(value), do: value
 
-        _ ->
-          value
-      end
+  # No includable relationships: preserve an empty array, not an open union.
+  defp empty_includes(%{"type" => "array", "items" => %{"oneOf" => []}} = value),
+    do: value |> Map.put("items", %{"type" => "object"}) |> Map.put("maxItems", 0)
 
-    case value do
-      %{"enum" => values} when is_list(values) and values != [] ->
-        cond do
-          # `{"success": true}` of actions without a return: generators turn a
-          # boolean enum into a string enum that cannot decode the JSON boolean.
-          Enum.all?(values, &is_boolean/1) ->
-            value |> Map.delete("enum") |> Map.put("type", "boolean")
+  defp empty_includes(value), do: value
 
-          !Map.has_key?(value, "type") and Enum.all?(values, &is_binary/1) ->
-            Map.put(value, "type", "string")
+  defp scalar_enum(%{"enum" => [_ | _] = values} = value) do
+    cond do
+      # `{"success": true}` of actions without a return: generators turn a
+      # boolean enum into a string enum that cannot decode the JSON boolean.
+      Enum.all?(values, &is_boolean/1) ->
+        value |> Map.delete("enum") |> Map.put("type", "boolean")
 
-          true ->
-            value
-        end
+      !Map.has_key?(value, "type") and Enum.all?(values, &is_binary/1) ->
+        Map.put(value, "type", "string")
 
-      _ ->
+      true ->
         value
     end
   end
 
-  def normalize(value), do: value
+  defp scalar_enum(value), do: value
 end

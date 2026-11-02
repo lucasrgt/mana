@@ -1,6 +1,8 @@
 defmodule Mana.Session.Identity do
   @moduledoc "Bearer verification, expiry and revocation are owned by AshAuthentication."
   import Plug.Conn
+  alias AshAuthentication.Plug.Helpers
+  alias AshAuthentication.Strategy.Password.RequireConfirmed
   def init(options), do: options
 
   def call(conn, options) do
@@ -30,21 +32,22 @@ defmodule Mana.Session.Identity do
       conn =
         %Plug.Conn{}
         |> put_req_header("authorization", "Bearer " <> token)
-        |> AshAuthentication.Plug.Helpers.retrieve_from_bearer(otp_app)
+        |> Helpers.retrieve_from_bearer(otp_app)
 
       expected = "current_" <> Atom.to_string(subject)
 
-      Enum.find_value(conn.assigns, fn
-        {key, %{__struct__: ^resource} = user} ->
-          if Atom.to_string(key) == expected and confirmed?(resource, user), do: {:ok, user}
-
-        _ ->
-          nil
-      end) || {:error, :unauthenticated}
+      Enum.find_value(conn.assigns, &current_user(&1, resource, expected)) ||
+        {:error, :unauthenticated}
     else
       _ -> {:error, :unauthenticated}
     end
   end
+
+  defp current_user({key, %{__struct__: resource} = user}, resource, expected) do
+    if Atom.to_string(key) == expected and confirmed?(resource, user), do: {:ok, user}
+  end
+
+  defp current_user(_assign, _resource, _expected), do: nil
 
   # Password sign-in checks confirmation, but an already issued Bearer token
   # takes another path. Query the database predicate, not a possibly unselected
@@ -52,8 +55,6 @@ defmodule Mana.Session.Identity do
   defp confirmed?(resource, user) do
     case AshAuthentication.Info.strategy(resource, :password) do
       {:ok, %{require_confirmed_with: field} = strategy} when not is_nil(field) ->
-        alias AshAuthentication.Strategy.Password.RequireConfirmed
-
         resource
         |> Ash.Query.filter_input(Map.take(user, Ash.Resource.Info.primary_key(resource)))
         |> RequireConfirmed.add_calculation(strategy)

@@ -25,6 +25,8 @@ defmodule Mana.Primitive do
   what the outside world or the clock would do. Each hook is a public
   function of that name on the primitive (`hooks_implemented?/1` checks it).
   """
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [AshJsonApi.Resource.Info]}
 
   @hooks [:capture, :restore, :fake, :observe]
 

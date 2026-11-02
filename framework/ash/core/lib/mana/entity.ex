@@ -30,6 +30,11 @@ defmodule Mana.Entity do
   process would: a second payment waits for the first, then finds it paid. `after` is `{amount, unit}` or
   `{Module, :function}` returning the `DateTime` for a record.
   """
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [AshJsonApi.Resource.Info, Mana.Entity.Worker, Oban]}
+
+  alias Mana.Entity.Worker
+  alias Spark.Dsl.Extension
 
   @deadline %Spark.Dsl.Entity{
     name: :deadline,
@@ -111,7 +116,7 @@ defmodule Mana.Entity do
     ]
   end
 
-  def deadlines(resource), do: Spark.Dsl.Extension.get_entities(resource, [:entity])
+  def deadlines(resource), do: Extension.get_entities(resource, [:entity])
 
   @doc "Every live resource of `otp_app`'s domains."
   def resources(otp_app) do
@@ -121,13 +126,13 @@ defmodule Mana.Entity do
         do: resource
   end
 
-  def audience(resource), do: Spark.Dsl.Extension.get_opt(resource, [:entity], :audience, [])
-  def watchers(resource), do: Spark.Dsl.Extension.get_opt(resource, [:entity], :watchers, nil)
-  def broadcaster(resource), do: Spark.Dsl.Extension.get_opt(resource, [:entity], :broadcast, nil)
-  def queue(resource), do: Spark.Dsl.Extension.get_opt(resource, [:entity], :queue, :default)
+  def audience(resource), do: Extension.get_opt(resource, [:entity], :audience, [])
+  def watchers(resource), do: Extension.get_opt(resource, [:entity], :watchers, nil)
+  def broadcaster(resource), do: Extension.get_opt(resource, [:entity], :broadcast, nil)
+  def queue(resource), do: Extension.get_opt(resource, [:entity], :queue, :default)
 
   def type(resource) do
-    Spark.Dsl.Extension.get_opt(resource, [:entity], :type, nil) ||
+    Extension.get_opt(resource, [:entity], :type, nil) ||
       (Code.ensure_loaded?(AshJsonApi.Resource.Info) &&
          AshJsonApi.Resource in Spark.extensions(resource) &&
          to_string(AshJsonApi.Resource.Info.type(resource))) ||
@@ -209,7 +214,7 @@ defmodule Mana.Entity do
   end
 
   defp insert(%{args: args, queue: queue, scheduled_at: at}),
-    do: args |> Mana.Entity.Worker.new(queue: queue, scheduled_at: at) |> Oban.insert!()
+    do: args |> Worker.new(queue: queue, scheduled_at: at) |> Oban.insert!()
 
   @doc "Runs a passed deadline when its record still satisfies it; otherwise does nothing."
   def run_deadline(resource, id, name) do
@@ -234,6 +239,7 @@ end
 defmodule Mana.Entity.Changed do
   @moduledoc false
   use Ash.Resource.Change
+  alias AshPostgres.DataLayer.Info
 
   @impl true
   def change(changeset, _opts, _context) do
@@ -266,11 +272,13 @@ defmodule Mana.Entity.Changed do
 
   defp one_at_a_time(changeset), do: changeset
 
+  # AshPostgres is the consumer's dependency, not this package's.
+  @compile {:no_warn_undefined, [AshPostgres.DataLayer.Info]}
   @postgres AshPostgres.DataLayer
 
   defp repo(resource) do
     if Ash.DataLayer.data_layer(resource) == @postgres,
-      do: apply(Module.concat(@postgres, Info), :repo, [resource, :mutate])
+      do: Info.repo(resource, :mutate)
   end
 
   @impl true
@@ -296,6 +304,7 @@ end
 defmodule Mana.Entity.Transformer do
   @moduledoc false
   use Spark.Dsl.Transformer
+  alias Ash.Resource.Builder
   alias Spark.Dsl.Transformer
 
   def after?(_), do: false
@@ -308,9 +317,7 @@ defmodule Mana.Entity.Transformer do
 
     if configured? do
       with {:ok, dsl} <-
-             Ash.Resource.Builder.add_change(dsl, Mana.Entity.Changed,
-               on: [:create, :update, :destroy]
-             ),
+             Builder.add_change(dsl, Mana.Entity.Changed, on: [:create, :update, :destroy]),
            do: {:ok, Mana.NotAtomic.mark(dsl, fn _ -> true end)}
     else
       {:ok, dsl}
@@ -335,35 +342,35 @@ if Code.ensure_loaded?(Phoenix.Channel) do
       user = socket.assigns[:user]
       resources = socket.assigns[:resources] || Mana.Entity.resources(socket.assigns[:otp_app])
 
-      case String.split(rest, ":") do
-        [type, "all"] ->
-          with resource when not is_nil(resource) <-
-                 Enum.find(resources, &(Mana.Entity.type(&1) == type)),
-               {module, function} <- Mana.Entity.watchers(resource),
-               true <- user != nil and apply(module, function, [user]) do
-            {:ok, socket}
-          else
-            _ -> {:error, %{reason: "unauthorized"}}
-          end
+      if may_join?(String.split(rest, ":"), user, resources),
+        do: {:ok, socket},
+        else: {:error, %{reason: "unauthorized"}}
+    end
 
-        [type, "for", id] ->
-          if user && to_string(user.id) == id &&
-               Enum.any?(resources, &(Mana.Entity.type(&1) == type)),
-             do: {:ok, socket},
-             else: {:error, %{reason: "unauthorized"}}
-
-        [type, id] ->
-          with resource when not is_nil(resource) <-
-                 Enum.find(resources, &(Mana.Entity.type(&1) == type)),
-               {:ok, _} <- Ash.get(resource, id, actor: user) do
-            {:ok, socket}
-          else
-            _ -> {:error, %{reason: "unauthorized"}}
-          end
-
-        _ ->
-          {:error, %{reason: "unauthorized"}}
+    defp may_join?([type, "all"], user, resources) do
+      with resource when not is_nil(resource) <- find(resources, type),
+           {module, function} <- Mana.Entity.watchers(resource) do
+        user != nil and apply(module, function, [user]) == true
+      else
+        _ -> false
       end
     end
+
+    defp may_join?([type, "for", id], user, resources),
+      do:
+        user && to_string(user.id) == id && Enum.any?(resources, &(Mana.Entity.type(&1) == type))
+
+    defp may_join?([type, id], user, resources) do
+      with resource when not is_nil(resource) <- find(resources, type),
+           {:ok, _} <- Ash.get(resource, id, actor: user) do
+        true
+      else
+        _ -> false
+      end
+    end
+
+    defp may_join?(_topic, _user, _resources), do: false
+
+    defp find(resources, type), do: Enum.find(resources, &(Mana.Entity.type(&1) == type))
   end
 end

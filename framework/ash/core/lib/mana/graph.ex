@@ -14,6 +14,8 @@ defmodule Mana.Graph do
   declarations as they are now.
   """
 
+  alias Ash.Domain.Info
+
   defstruct nodes: %{}, edges: []
 
   @doc """
@@ -35,129 +37,130 @@ defmodule Mana.Graph do
   end
 
   defp add_domain(graph, domain) do
-    Enum.reduce(Ash.Domain.Info.resources(domain), graph, &add_resource(&2, &1))
+    Enum.reduce(Info.resources(domain), graph, &add_resource(&2, &1))
   end
+
+  @sections [Mana.Verbs, Mana.Views, Mana.Flow, Mana.Reconcile, Mana.Entity]
 
   defp add_resource(graph, resource) do
     type = Mana.Entity.type(resource)
     extensions = Spark.extensions(resource)
     graph = node(graph, "resource:#{type}", :resource, %{module: inspect(resource)})
 
-    graph =
-      if Mana.Verbs in extensions do
-        Enum.reduce(Mana.Verbs.declared(resource), graph, fn verb, graph ->
-          id = "verb:#{type}.#{verb.name}"
-
-          graph
-          |> node(id, :verb, %{
-            risk: verb.risk,
-            external: verb.external,
-            collection: verb.collection,
-            describe: verb.describe
-          })
-          |> edge("resource:#{type}", :offers, id)
-          |> then(
-            &if(verb.inverse,
-              do: edge(&1, id, :inverse, "verb:#{type}.#{verb.inverse}"),
-              else: &1
-            )
-          )
-          |> then(
-            &if(verb.feature,
-              do:
-                &1
-                |> node("feature:#{verb.feature}", :feature)
-                |> edge("feature:#{verb.feature}", :owns, id),
-              else: &1
-            )
-          )
-          |> then(&if(verb.knob, do: edge(&1, "knob:#{verb.knob}", :guards, id), else: &1))
-          |> then(
-            &if(verb.from,
-              do: edge(&1, "resource:#{Mana.Entity.type(elem(verb.from, 0))}", :offers, id),
-              else: &1
-            )
-          )
-        end)
-      else
-        graph
-      end
-
-    graph =
-      if Mana.Views in extensions do
-        Enum.reduce(Mana.Views.declared(resource), graph, fn view, graph ->
-          id = "view:#{type}.#{view.name}"
-
-          graph =
-            graph
-            |> node(id, :view, %{entry: view.entry, live: view.live})
-            |> edge("resource:#{type}", :shows, id)
-
-          if view.entry,
-            do:
-              graph
-              |> node("agent:#{type}.#{view.name}", :agent_entry)
-              |> edge("agent:#{type}.#{view.name}", :opens, id),
-            else: graph
-        end)
-      else
-        graph
-      end
-
-    graph =
-      if Mana.Flow in extensions do
-        Enum.reduce(Mana.Flow.steps(resource), graph, fn step, graph ->
-          id = "step:#{type}.#{step.name}"
-
-          graph =
-            graph
-            |> node(id, :flow_step, %{action: step.action})
-            |> edge("resource:#{type}", :journey, id)
-
-          Enum.reduce(
-            verbs_for(resource, step.action),
-            graph,
-            &edge(&2, id, :done_by, "verb:#{type}.#{&1}")
-          )
-        end)
-      else
-        graph
-      end
-
-    graph =
-      if Mana.Reconcile in extensions do
-        Enum.reduce(Mana.Reconcile.declared(resource), graph, fn rule, graph ->
-          id = "rule:#{type}.#{rule.name}"
-
-          graph
-          |> node(id, :rule, %{
-            describe: rule.describe,
-            within: rule.within && Tuple.to_list(rule.within)
-          })
-          |> edge(id, :about, "resource:#{type}")
-        end)
-      else
-        graph
-      end
-
-    if Mana.Entity in extensions do
-      Enum.reduce(Mana.Entity.deadlines(resource), graph, fn deadline, graph ->
-        id = "deadline:#{type}.#{deadline.name}"
-
-        graph =
-          graph
-          |> node(id, :deadline, %{action: deadline.action})
-          |> edge("resource:#{type}", :deadline, id)
-
-        Enum.reduce(
-          verbs_for(resource, deadline.action),
-          graph,
-          &edge(&2, id, :performs, "verb:#{type}.#{&1}")
-        )
-      end)
-    else
-      graph
+    for extension <- @sections, extension in extensions, reduce: graph do
+      graph -> add_section(graph, extension, resource, type)
     end
+  end
+
+  defp add_section(graph, Mana.Verbs, resource, type),
+    do: Enum.reduce(Mana.Verbs.declared(resource), graph, &add_verb(&2, type, &1))
+
+  defp add_section(graph, Mana.Views, resource, type),
+    do: Enum.reduce(Mana.Views.declared(resource), graph, &add_view(&2, type, &1))
+
+  defp add_section(graph, Mana.Flow, resource, type),
+    do: Enum.reduce(Mana.Flow.steps(resource), graph, &add_step(&2, resource, type, &1))
+
+  defp add_section(graph, Mana.Reconcile, resource, type),
+    do: Enum.reduce(Mana.Reconcile.declared(resource), graph, &add_rule(&2, type, &1))
+
+  defp add_section(graph, Mana.Entity, resource, type),
+    do: Enum.reduce(Mana.Entity.deadlines(resource), graph, &add_deadline(&2, resource, type, &1))
+
+  defp add_verb(graph, type, verb) do
+    id = "verb:#{type}.#{verb.name}"
+
+    graph
+    |> node(id, :verb, %{
+      risk: verb.risk,
+      external: verb.external,
+      collection: verb.collection,
+      describe: verb.describe
+    })
+    |> edge("resource:#{type}", :offers, id)
+    |> inverse_edge(id, type, verb.inverse)
+    |> owning_feature(id, verb.feature)
+    |> guarding_knob(id, verb.knob)
+    |> offering_resource(id, verb.from)
+  end
+
+  defp inverse_edge(graph, _id, _type, inverse) when inverse in [nil, false], do: graph
+
+  defp inverse_edge(graph, id, type, inverse),
+    do: edge(graph, id, :inverse, "verb:#{type}.#{inverse}")
+
+  defp owning_feature(graph, _id, feature) when feature in [nil, false], do: graph
+
+  defp owning_feature(graph, id, feature) do
+    graph
+    |> node("feature:#{feature}", :feature)
+    |> edge("feature:#{feature}", :owns, id)
+  end
+
+  defp guarding_knob(graph, _id, knob) when knob in [nil, false], do: graph
+  defp guarding_knob(graph, id, knob), do: edge(graph, "knob:#{knob}", :guards, id)
+
+  defp offering_resource(graph, _id, from) when from in [nil, false], do: graph
+
+  defp offering_resource(graph, id, from),
+    do: edge(graph, "resource:#{Mana.Entity.type(elem(from, 0))}", :offers, id)
+
+  defp add_view(graph, type, view) do
+    id = "view:#{type}.#{view.name}"
+
+    graph
+    |> node(id, :view, %{entry: view.entry, live: view.live})
+    |> edge("resource:#{type}", :shows, id)
+    |> agent_entry(id, type, view)
+  end
+
+  defp agent_entry(graph, _id, _type, %{entry: entry}) when entry in [nil, false], do: graph
+
+  defp agent_entry(graph, id, type, view) do
+    graph
+    |> node("agent:#{type}.#{view.name}", :agent_entry)
+    |> edge("agent:#{type}.#{view.name}", :opens, id)
+  end
+
+  defp add_step(graph, resource, type, step) do
+    id = "step:#{type}.#{step.name}"
+
+    graph =
+      graph
+      |> node(id, :flow_step, %{action: step.action})
+      |> edge("resource:#{type}", :journey, id)
+
+    Enum.reduce(
+      verbs_for(resource, step.action),
+      graph,
+      &edge(&2, id, :done_by, "verb:#{type}.#{&1}")
+    )
+  end
+
+  defp add_rule(graph, type, rule) do
+    id = "rule:#{type}.#{rule.name}"
+
+    graph
+    |> node(id, :rule, %{
+      describe: rule.describe,
+      within: rule.within && Tuple.to_list(rule.within)
+    })
+    |> edge(id, :about, "resource:#{type}")
+  end
+
+  defp add_deadline(graph, resource, type, deadline) do
+    id = "deadline:#{type}.#{deadline.name}"
+
+    graph =
+      graph
+      |> node(id, :deadline, %{action: deadline.action})
+      |> edge("resource:#{type}", :deadline, id)
+
+    Enum.reduce(
+      verbs_for(resource, deadline.action),
+      graph,
+      &edge(&2, id, :performs, "verb:#{type}.#{&1}")
+    )
   end
 
   defp verbs_for(resource, action) do
@@ -188,33 +191,37 @@ defmodule Mana.Graph do
 
     Enum.reduce(knobs, graph, fn knob, graph ->
       id = "knob:#{knob.name}"
-      graph = node(graph, id, :knob, %{type: knob.type, describe: knob.describe})
 
-      graph =
-        if knob.feature,
-          do:
-            graph
-            |> node("feature:#{knob.feature}", :feature)
-            |> edge(id, :about, "feature:#{knob.feature}"),
-          else: graph
-
-      if knob.enables do
-        verbs =
-          for {_, :owns, verb} <- graph.edges,
-              owner <- [knob.enables],
-              feature_owns?(graph, owner, verb),
-              do: verb
-
-        graph =
-          graph
-          |> node("feature:#{knob.enables}", :feature)
-          |> edge(id, :enables, "feature:#{knob.enables}")
-
-        Enum.reduce(verbs, graph, &edge(&2, id, :guards, &1))
-      else
-        graph
-      end
+      graph
+      |> node(id, :knob, %{type: knob.type, describe: knob.describe})
+      |> knob_feature(id, knob.feature)
+      |> knob_enables(id, knob.enables)
     end)
+  end
+
+  defp knob_feature(graph, _id, feature) when feature in [nil, false], do: graph
+
+  defp knob_feature(graph, id, feature) do
+    graph
+    |> node("feature:#{feature}", :feature)
+    |> edge(id, :about, "feature:#{feature}")
+  end
+
+  defp knob_enables(graph, _id, enables) when enables in [nil, false], do: graph
+
+  defp knob_enables(graph, id, enables) do
+    verbs =
+      for {_, :owns, verb} <- graph.edges,
+          owner <- [enables],
+          feature_owns?(graph, owner, verb),
+          do: verb
+
+    graph =
+      graph
+      |> node("feature:#{enables}", :feature)
+      |> edge(id, :enables, "feature:#{enables}")
+
+    Enum.reduce(verbs, graph, &edge(&2, id, :guards, &1))
   end
 
   # `enables: "checkout"` turns on the verbs of checkout and its sub-features.

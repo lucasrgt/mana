@@ -146,16 +146,7 @@ defmodule Moments.ActionTrace do
     case {Process.get(@key), Process.get(@stack, [])} do
       {%{table: _}, [span | rest]} ->
         Process.put(@stack, rest)
-
-        if Map.has_key?(span.metadata, :resource) and Map.has_key?(span.metadata, :action) do
-          retain(
-            Map.put(
-              Map.put(span.metadata, :durationUs, elapsed(span.started)),
-              :outcome,
-              if(span.error, do: "error-reported", else: "span-finished")
-            )
-          )
-        end
+        retain_span(span)
 
       _ ->
         :ok
@@ -164,6 +155,15 @@ defmodule Moments.ActionTrace do
     :ok
   end
 
+  defp retain_span(%{metadata: %{resource: _, action: _} = metadata} = span) do
+    metadata
+    |> Map.put(:durationUs, elapsed(span.started))
+    |> Map.put(:outcome, if(span.error, do: "error-reported", else: "span-finished"))
+    |> retain()
+  end
+
+  defp retain_span(_span), do: :ok
+
   # Called by the consumer's exact Repo telemetry event, in the query caller.
   # Aggregates have constant storage and retain no query text, params or errors.
   # Context inherited by Ash tasks shares this request-owned table; unrelated
@@ -171,10 +171,8 @@ defmodule Moments.ActionTrace do
   def observe_query(measurements) do
     if context = Process.get(@key) do
       totals =
-        for key <- [:total_time, :query_time, :queue_time, :decode_time] do
-          value = Map.get(measurements, key, 0)
-          if is_integer(value) and value >= 0, do: value, else: 0
-        end
+        for key <- [:total_time, :query_time, :queue_time, :decode_time],
+            do: measured(measurements, key)
 
       [total, query, queue, decode] = totals
 
@@ -189,6 +187,11 @@ defmodule Moments.ActionTrace do
     :ok
   rescue
     ArgumentError -> :ok
+  end
+
+  defp measured(measurements, key) do
+    value = Map.get(measurements, key, 0)
+    if is_integer(value) and value >= 0, do: value, else: 0
   end
 
   defp database_profile(table) do

@@ -60,44 +60,52 @@ defmodule Mana.Agent do
   when it is available to the actor; answers what it created or returned.
   """
   def start(domains, qualified, params, actor, opts \\ []) do
-    with [type, name] <-
-           String.split(qualified, ".", parts: 2)
-           |> then(&if(length(&1) == 2, do: &1, else: [nil, nil])),
+    with [type, name] <- split_qualified(qualified),
          {:ok, resource} <- resource(domains, type),
-         %{} = verb <-
-           Enum.find(
-             Mana.Verbs.declared(resource),
-             &(&1.collection and to_string(&1.name) == name)
-           ) || {:error, %{reason: "not_offered"}},
-         true <-
-           (verb.from != nil or qualified in Mana.Verbs.available(domains, actor)) ||
-             {:error, %{reason: "not_offered"}} do
+         %{} = verb <- collection_verb(resource, name),
+         true <- startable(domains, qualified, verb, actor) do
       context = %{mana_agent: Keyword.get(opts, :agent, "agent")}
       action = Ash.Resource.Info.action(resource, Mana.Verbs.action(verb))
 
-      result =
-        case action.type do
-          :create ->
-            resource
-            |> Ash.Changeset.for_create(action.name, params, actor: actor, context: context)
-            |> Ash.create()
-
-          :action ->
-            resource
-            |> Ash.ActionInput.for_action(action.name, params, actor: actor, context: context)
-            |> Ash.run_action()
-        end
-
-      case refused(result) do
-        {:ok, %{__struct__: _} = record} -> {:ok, %{type: type, id: Map.get(record, :id)}}
-        {:ok, value} -> {:ok, %{type: type, result: Mana.History.encode(value)}}
-        error -> error
-      end
+      resource
+      |> perform(action, params, actor: actor, context: context)
+      |> refused()
+      |> started(type)
     else
       {:error, _} = error -> error
       _ -> {:error, %{reason: "not_offered"}}
     end
   end
+
+  defp split_qualified(qualified) do
+    case String.split(qualified, ".", parts: 2) do
+      [type, name] -> [type, name]
+      _ -> [nil, nil]
+    end
+  end
+
+  defp collection_verb(resource, name) do
+    Enum.find(Mana.Verbs.declared(resource), &(&1.collection and to_string(&1.name) == name)) ||
+      {:error, %{reason: "not_offered"}}
+  end
+
+  defp startable(domains, qualified, verb, actor) do
+    if verb.from != nil or qualified in Mana.Verbs.available(domains, actor),
+      do: true,
+      else: {:error, %{reason: "not_offered"}}
+  end
+
+  defp perform(resource, %{type: :create, name: name}, params, opts),
+    do: resource |> Ash.Changeset.for_create(name, params, opts) |> Ash.create()
+
+  defp perform(resource, %{type: :action, name: name}, params, opts),
+    do: resource |> Ash.ActionInput.for_action(name, params, opts) |> Ash.run_action()
+
+  defp started({:ok, %{__struct__: _} = record}, type),
+    do: {:ok, %{type: type, id: Map.get(record, :id)}}
+
+  defp started({:ok, value}, type), do: {:ok, %{type: type, result: Mana.History.encode(value)}}
+  defp started(error, _type), do: error
 
   @doc "Performs `verb` on the `type` record `id` when it offers it; answers the record after."
   def follow(domains, type, id, verb, params, actor, opts \\ [])
@@ -239,55 +247,46 @@ if Code.ensure_loaded?(Plug.Conn) do
       actor = Ash.PlugHelpers.get_actor(conn)
       {request, conn} = request(conn)
       agent = conn |> get_req_header("x-mana-agent") |> List.first() || "agent"
-
-      result =
-        case request do
-          {:ok, %{"tool" => "entries"}} ->
-            {:ok,
-             %{
-               entries:
-                 for(e <- Mana.Agent.entries(domains), do: %{name: e.name, describe: e.describe})
-             }}
-
-          {:ok, %{"tool" => "open", "entry" => entry} = call} ->
-            Mana.Agent.open(domains, entry, actor, arguments: call["arguments"] || %{})
-
-          {:ok, %{"tool" => "follow"} = c} ->
-            Mana.Agent.follow(domains, c["type"], c["id"], c["verb"], c["params"] || %{}, actor,
-              agent: agent
-            )
-
-          {:ok, %{"tool" => "available"}} ->
-            {:ok, %{available: Mana.Agent.available(domains, actor)}}
-
-          {:ok, %{"tool" => "start", "verb" => verb} = c} ->
-            Mana.Agent.start(domains, verb, c["params"] || %{}, actor, agent: agent)
-
-          _ ->
-            {:error, %{reason: "bad_request"}}
-        end
-
-      {status, payload} =
-        case result do
-          {:ok, value} ->
-            {200, value}
-
-          {:error, %{reason: "bad_request"} = e} ->
-            {400, e}
-
-          {:error, %{reason: reason} = e}
-          when reason in ["not_found", "no_such_type", "no_such_entry"] ->
-            {404, e}
-
-          {:error, e} ->
-            {422, e}
-        end
+      {status, payload} = request |> dispatch(domains, actor, agent) |> reply()
 
       conn
       |> put_resp_content_type("application/json")
       |> send_resp(status, Jason.encode!(payload))
       |> halt()
     end
+
+    defp dispatch({:ok, %{"tool" => "entries"}}, domains, _actor, _agent) do
+      {:ok,
+       %{
+         entries: for(e <- Mana.Agent.entries(domains), do: %{name: e.name, describe: e.describe})
+       }}
+    end
+
+    defp dispatch({:ok, %{"tool" => "open", "entry" => entry} = call}, domains, actor, _agent),
+      do: Mana.Agent.open(domains, entry, actor, arguments: call["arguments"] || %{})
+
+    defp dispatch({:ok, %{"tool" => "follow"} = c}, domains, actor, agent) do
+      Mana.Agent.follow(domains, c["type"], c["id"], c["verb"], c["params"] || %{}, actor,
+        agent: agent
+      )
+    end
+
+    defp dispatch({:ok, %{"tool" => "available"}}, domains, actor, _agent),
+      do: {:ok, %{available: Mana.Agent.available(domains, actor)}}
+
+    defp dispatch({:ok, %{"tool" => "start", "verb" => verb} = c}, domains, actor, agent),
+      do: Mana.Agent.start(domains, verb, c["params"] || %{}, actor, agent: agent)
+
+    defp dispatch(_request, _domains, _actor, _agent), do: {:error, %{reason: "bad_request"}}
+
+    defp reply({:ok, value}), do: {200, value}
+    defp reply({:error, %{reason: "bad_request"} = e}), do: {400, e}
+
+    defp reply({:error, %{reason: reason} = e})
+         when reason in ["not_found", "no_such_type", "no_such_entry"],
+         do: {404, e}
+
+    defp reply({:error, e}), do: {422, e}
 
     # An endpoint's Plug.Parsers may have read the body already.
     defp request(%{body_params: %{} = params} = conn) when map_size(params) > 0,

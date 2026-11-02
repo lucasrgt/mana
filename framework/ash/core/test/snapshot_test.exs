@@ -6,6 +6,9 @@ defmodule Mana.SnapshotTest do
   use ExUnit.Case, async: false
   @moduletag :postgres
 
+  alias Ash.Domain.Info
+  alias Mana.Snapshot.Plug, as: ScopePlug
+
   @repo SnapshotTest.Repo
   @migrations Path.expand("support/snapshot_migrations", __DIR__)
 
@@ -76,15 +79,15 @@ defmodule Mana.SnapshotTest do
     end
 
     Application.put_env(:mana_core, :data_scopes, false)
-    conn = Mana.Snapshot.Plug.call(request.(a), @repo)
+    conn = ScopePlug.call(request.(a), @repo)
     refute conn.halted
     assert @repo.get_dynamic_repo() == @repo
 
     Application.put_env(:mana_core, :data_scopes, true)
-    conn = Mana.Snapshot.Plug.call(request.("nope"), @repo)
+    conn = ScopePlug.call(request.("nope"), @repo)
     assert conn.status == 409
 
-    Mana.Snapshot.Plug.call(request.(a), @repo)
+    ScopePlug.call(request.(a), @repo)
     assert bodies() == ["scoped"]
   after
     @repo.put_dynamic_repo(@repo)
@@ -96,7 +99,7 @@ defmodule Mana.SnapshotTest do
     test = self()
 
     combined = fn run ->
-      for r <- Ash.Domain.Info.resources(ExploreTest.Domain), do: Mana.Explore.empty_ets(r)
+      for r <- Info.resources(ExploreTest.Domain), do: Mana.Explore.empty_ets(r)
       reset.(run)
       if run != :done, do: send(test, {:scope, @repo.get_dynamic_repo()})
       :ok

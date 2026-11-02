@@ -49,6 +49,9 @@ defmodule Mana.Explore do
   """
   require Ash.Query
 
+  alias Ash.DataLayer.Ets
+  alias Spark.Dsl.Extension
+
   @properties [
     :offer_honest,
     :refusal_enforced,
@@ -107,27 +110,35 @@ defmodule Mana.Explore do
 
     with_quiet_deadlines(fn ->
       {report, _} =
-        Enum.reduce(1..ctx.runs, {%Report{seed: ctx.seed}, MapSet.new()}, fn index,
-                                                                             {report, seen} ->
-          {state, run_report} = run_once(ctx, ctx.seed + index)
-          report = merge(report, run_report, state)
-
-          {violations, seen} =
-            for violation <- state.violations, reduce: {report.violations, seen} do
-              {acc, seen} ->
-                key = {violation.property, violation.resource, violation.verb}
-
-                if MapSet.member?(seen, key),
-                  do: {acc, seen},
-                  else: {acc ++ [%{shrink(ctx, violation) | run: index}], MapSet.put(seen, key)}
-            end
-
-          {%{report | violations: violations}, seen}
-        end)
+        Enum.reduce(
+          1..ctx.runs,
+          {%Report{seed: ctx.seed}, MapSet.new()},
+          &explore_run(ctx, &1, &2)
+        )
 
       ctx.reset.(:done)
       %{report | runs: ctx.runs, coverage: coverage(ctx, report)}
     end)
+  end
+
+  defp explore_run(ctx, index, {report, seen}) do
+    {state, run_report} = run_once(ctx, ctx.seed + index)
+    report = merge(report, run_report, state)
+
+    {violations, seen} =
+      for violation <- state.violations, reduce: {report.violations, seen} do
+        {acc, seen} -> keep_first(ctx, violation, index, acc, seen)
+      end
+
+    {%{report | violations: violations}, seen}
+  end
+
+  defp keep_first(ctx, violation, index, acc, seen) do
+    key = {violation.property, violation.resource, violation.verb}
+
+    if MapSet.member?(seen, key),
+      do: {acc, seen},
+      else: {acc ++ [%{shrink(ctx, violation) | run: index}], MapSet.put(seen, key)}
   end
 
   @doc """
@@ -180,26 +191,29 @@ defmodule Mana.Explore do
           do: resource
 
     explored = opts[:resources] || Enum.filter(all, &(Mana.Verbs in Spark.extensions(&1)))
-    properties = MapSet.new(opts[:properties] || @properties)
 
     %{
       domains: domains,
       all: all,
       resources: explored,
-      runs: opts[:runs] || 50,
-      depth: opts[:depth] || 10,
+      runs: option(opts, :runs, 50),
+      depth: option(opts, :depth, 10),
       seed: opts[:seed] || :erlang.phash2(make_ref()),
       clock: opts[:clock] || default_clock(explored),
-      properties: properties,
-      skip_rules: MapSet.new(opts[:skip_rules] || []),
-      generators: opts[:generators] || %{},
-      external: opts[:external] || :skip,
+      properties: MapSet.new(option(opts, :properties, @properties)),
+      skip_rules: MapSet.new(option(opts, :skip_rules, [])),
+      generators: option(opts, :generators, %{}),
+      external: option(opts, :external, :skip),
       reset: opts[:reset] || (&default_reset(all, &1)),
-      setup: opts[:setup] || fn -> opts[:actors] || %{anyone: nil} end,
+      setup: opts[:setup] || default_setup(opts[:actors]),
       shrink: Keyword.get(opts, :shrink, true),
       probe: Keyword.get(opts, :probe, 0.25)
     }
   end
+
+  defp option(opts, key, default), do: opts[key] || default
+
+  defp default_setup(actors), do: fn -> actors || %{anyone: nil} end
 
   defp default_clock(resources) do
     deadlines =
@@ -225,7 +239,7 @@ defmodule Mana.Explore do
 
   defp default_reset(resources, _run) do
     for resource <- resources do
-      if Ash.DataLayer.data_layer(resource) == Ash.DataLayer.Ets do
+      if Ash.DataLayer.data_layer(resource) == Ets do
         empty_ets(resource)
       else
         raise ArgumentError,
@@ -243,12 +257,10 @@ defmodule Mana.Explore do
   """
   def empty_ets(resource) do
     owner =
-      Process.whereis(
-        Module.concat(Ash.DataLayer.Ets.Info.table(resource), Ash.DataLayer.Ets.TableManager)
-      )
+      Process.whereis(Module.concat(Ets.Info.table(resource), Ets.TableManager))
 
     ref = owner && Process.monitor(owner)
-    Ash.DataLayer.Ets.stop(resource)
+    Ets.stop(resource)
 
     if ref do
       receive do
@@ -315,18 +327,7 @@ defmodule Mana.Explore do
     state = new_state(ctx, seed)
 
     state =
-      Enum.reduce_while(1..ctx.depth, state, fn _, state ->
-        state = observe_affordances(ctx, state)
-
-        case choose(ctx, state) do
-          {nil, state} ->
-            {:halt, state}
-
-          {move, state} ->
-            state = perform_and_check(ctx, state, move)
-            if state.violations == [], do: {:cont, state}, else: {:halt, state}
-        end
-      end)
+      Enum.reduce_while(1..ctx.depth, state, fn _, state -> explore_step(ctx, state) end)
 
     state = if state.violations == [], do: check_history(ctx, state), else: state
     {state, nil}
@@ -337,13 +338,24 @@ defmodule Mana.Explore do
 
     state =
       Enum.reduce_while(moves, state, fn move, state ->
-        state = perform_and_check(ctx, state, move)
-        if state.violations == [], do: {:cont, state}, else: {:halt, state}
+        ctx |> perform_and_check(state, move) |> until_violated()
       end)
 
     state = if state.violations == [], do: check_history(ctx, state), else: state
     {state, nil}
   end
+
+  defp explore_step(ctx, state) do
+    state = observe_affordances(ctx, state)
+
+    case choose(ctx, state) do
+      {nil, state} -> {:halt, state}
+      {move, state} -> ctx |> perform_and_check(state, move) |> until_violated()
+    end
+  end
+
+  defp until_violated(%{violations: []} = state), do: {:cont, state}
+  defp until_violated(state), do: {:halt, state}
 
   defp merge(report, _run_report, state) do
     %{
@@ -357,14 +369,11 @@ defmodule Mana.Explore do
     }
   end
 
-  defp merge_affordances(a, b) do
-    Map.merge(a, b, fn _, x, y ->
-      Map.merge(x, y, fn
-        :seen, m, n -> m + n
-        _actor, m, n -> Map.merge(m, n, fn _, i, j -> i + j end)
-      end)
-    end)
-  end
+  defp merge_affordances(a, b),
+    do: Map.merge(a, b, fn _, x, y -> Map.merge(x, y, &merge_counts/3) end)
+
+  defp merge_counts(:seen, m, n), do: m + n
+  defp merge_counts(_actor, m, n), do: Map.merge(m, n, fn _, i, j -> i + j end)
 
   # ---------------------------------------------------------------------------
   # Records and references
@@ -494,22 +503,7 @@ defmodule Mana.Explore do
       for resource <- ctx.resources,
           record <- records(state, resource),
           offered <- safe_offered(record, actor) do
-        case String.split(offered, ".", parts: 2) do
-          [verb] ->
-            if performable?(ctx, resource, String.to_existing_atom(verb)),
-              do: [
-                %{
-                  kind: :verb,
-                  actor: name,
-                  ref: ref_of(state, resource, record.id),
-                  verb: String.to_existing_atom(verb)
-                }
-              ],
-              else: []
-
-          [type, verb] ->
-            child_start(ctx, state, name, record, type, verb)
-        end
+        offered_moves(ctx, state, name, resource, record, offered)
       end
       |> List.flatten()
 
@@ -523,6 +517,19 @@ defmodule Mana.Explore do
           do: %{kind: :start, actor: name, resource: resource, verb: verb, parent: nil}
 
     own ++ started ++ from_parents(ctx, state, name, actor)
+  end
+
+  defp offered_moves(ctx, state, name, resource, record, offered) do
+    case String.split(offered, ".", parts: 2) do
+      [verb] -> own_move(ctx, state, name, resource, record, String.to_existing_atom(verb))
+      [type, verb] -> child_start(ctx, state, name, record, type, verb)
+    end
+  end
+
+  defp own_move(ctx, state, name, resource, record, verb) do
+    if performable?(ctx, resource, verb),
+      do: [%{kind: :verb, actor: name, ref: ref_of(state, resource, record.id), verb: verb}],
+      else: []
   end
 
   # A collection verb `from: {Parent, field}` is offered by the parent; when
@@ -786,30 +793,37 @@ defmodule Mana.Explore do
         state
 
       record ->
-        resource = record.__struct__
-        verb = find_verb(resource, move.verb)
-
-        # The offer may have changed since the probe was chosen.
-        if to_string(verb.name) in safe_offered(record, actor(state, move.actor)) do
-          bump(state, :inconclusive, :probe_now_offered)
-        else
-          case perform(record, verb, resolve(state, move.params), actor(state, move.actor)) do
-            {:ok, _} ->
-              violate(
-                state,
-                :refusal_enforced,
-                resource,
-                verb.name,
-                move.actor,
-                "not offered, yet the server performed it"
-              )
-
-            {:error, _kind, _detail} ->
-              state
-          end
-        end
+        probe_record(state, record, move)
     end
   end
+
+  defp probe_record(state, record, move) do
+    resource = record.__struct__
+    verb = find_verb(resource, move.verb)
+    actor = actor(state, move.actor)
+
+    # The offer may have changed since the probe was chosen.
+    if to_string(verb.name) in safe_offered(record, actor) do
+      bump(state, :inconclusive, :probe_now_offered)
+    else
+      record
+      |> perform(verb, resolve(state, move.params), actor)
+      |> judge_probe(state, resource, verb, move)
+    end
+  end
+
+  defp judge_probe({:ok, _}, state, resource, verb, move) do
+    violate(
+      state,
+      :refusal_enforced,
+      resource,
+      verb.name,
+      move.actor,
+      "not offered, yet the server performed it"
+    )
+  end
+
+  defp judge_probe({:error, _kind, _detail}, state, _resource, _verb, _move), do: state
 
   defp perform(%{__struct__: resource} = record, verb, params, actor) do
     action = Ash.Resource.Info.action(resource, Mana.Verbs.action(verb))
@@ -860,28 +874,24 @@ defmodule Mana.Explore do
   defp classify({:error, error}, params) do
     errors = error |> Ash.Error.to_error_class() |> Map.get(:errors, []) |> List.flatten()
     inputs = params |> Map.keys() |> MapSet.new(&to_string/1)
+    {:error, error_kind(error, errors, inputs), first_message(errors, error)}
+  end
 
+  defp error_kind(error, errors, inputs) do
     cond do
-      Enum.any?(errors, &match?(%Ash.Error.Forbidden.Policy{}, &1)) or
-          (match?(%Ash.Error.Forbidden{}, error) and
-             not Enum.any?(errors, &match?(%Mana.Error{}, &1))) ->
-        {:error, :forbidden, first_message(errors, error)}
-
-      Enum.any?(errors, &unavailable?/1) ->
-        {:error, :unavailable, first_message(errors, error)}
-
-      Enum.any?(errors, &match?(%Mana.Error{}, &1)) ->
-        {:error, :domain, first_message(errors, error)}
-
-      Enum.all?(errors, &input_error?(&1, inputs)) and errors != [] ->
-        {:error, :input, first_message(errors, error)}
-
-      match?(%Ash.Error.Invalid{}, Ash.Error.to_error_class(error)) ->
-        {:error, :invalid, first_message(errors, error)}
-
-      true ->
-        {:error, :raised, first_message(errors, error)}
+      forbidden?(error, errors) -> :forbidden
+      Enum.any?(errors, &unavailable?/1) -> :unavailable
+      Enum.any?(errors, &match?(%Mana.Error{}, &1)) -> :domain
+      Enum.all?(errors, &input_error?(&1, inputs)) and errors != [] -> :input
+      match?(%Ash.Error.Invalid{}, Ash.Error.to_error_class(error)) -> :invalid
+      true -> :raised
     end
+  end
+
+  defp forbidden?(error, errors) do
+    Enum.any?(errors, &match?(%Ash.Error.Forbidden.Policy{}, &1)) or
+      (match?(%Ash.Error.Forbidden{}, error) and
+         not Enum.any?(errors, &match?(%Mana.Error{}, &1)))
   end
 
   defp unavailable?(%Mana.Error{code: code}),
@@ -912,7 +922,7 @@ defmodule Mana.Explore do
          alive?(after_record) do
       ahead = Mana.Flow.position(before)
       now = Mana.Flow.position(after_record)
-      outside = Spark.Dsl.Extension.get_opt(resource, [:flow], :before, [])
+      outside = Extension.get_opt(resource, [:flow], :before, [])
 
       if Map.get(before, Mana.Flow.cursor(resource)) not in outside and now.index < ahead.index and
            not now.done,
@@ -934,36 +944,40 @@ defmodule Mana.Explore do
   defp check_idempotent(state, ctx, _before, after_record, verb, move) do
     if :idempotent in ctx.properties and verb.idempotent and alive?(after_record) and
          state.violations == [] do
-      case perform(after_record, verb, resolve(state, move.params), actor(state, move.actor)) do
-        {:ok, again} ->
-          case changed(after_record, again) do
-            [] ->
-              state
-
-            fields ->
-              violate(
-                state,
-                :idempotent,
-                after_record.__struct__,
-                verb.name,
-                move.actor,
-                "a second time changed #{Enum.join(fields, ", ")}"
-              )
-          end
-
-        {:error, kind, detail} ->
-          violate(
-            state,
-            :idempotent,
-            after_record.__struct__,
-            verb.name,
-            move.actor,
-            "a second time was #{kind}: #{detail}"
-          )
-      end
+      after_record
+      |> perform(verb, resolve(state, move.params), actor(state, move.actor))
+      |> judge_again(state, after_record, verb, move)
     else
       state
     end
+  end
+
+  defp judge_again({:ok, again}, state, after_record, verb, move) do
+    case changed(after_record, again) do
+      [] ->
+        state
+
+      fields ->
+        violate(
+          state,
+          :idempotent,
+          after_record.__struct__,
+          verb.name,
+          move.actor,
+          "a second time changed #{Enum.join(fields, ", ")}"
+        )
+    end
+  end
+
+  defp judge_again({:error, kind, detail}, state, after_record, verb, move) do
+    violate(
+      state,
+      :idempotent,
+      after_record.__struct__,
+      verb.name,
+      move.actor,
+      "a second time was #{kind}: #{detail}"
+    )
   end
 
   defp check_inverse(state, ctx, before, after_record, verb, move) do
@@ -978,39 +992,47 @@ defmodule Mana.Explore do
          state = %{state | rand: rand},
          true <- if(state.replaying, do: Map.get(move, :then_inverse) == true, else: coin < 0.5) do
       state = %{state | trace: List.update_at(state.trace, -1, &Map.put(&1, :then_inverse, true))}
-      touched = changed(before, after_record)
-
-      case perform(after_record, inverse, %{}, actor) do
-        {:ok, restored} ->
-          state = reached(state, before.__struct__, inverse.name)
-
-          case Enum.reject(touched, &(Map.get(restored, &1) == Map.get(before, &1))) do
-            [] ->
-              state
-
-            fields ->
-              violate(
-                state,
-                :inverse_restores,
-                before.__struct__,
-                verb.name,
-                move.actor,
-                "#{inverse.name} left #{Enum.join(fields, ", ")} changed"
-              )
-          end
-
-        {:error, kind, detail} ->
-          violate(
-            state,
-            :inverse_restores,
-            before.__struct__,
-            verb.name,
-            move.actor,
-            "#{inverse.name} was offered, then #{kind}: #{detail}"
-          )
-      end
+      invert(state, before, after_record, {verb, inverse}, actor, move)
     else
       _ -> state
+    end
+  end
+
+  defp invert(state, before, after_record, {verb, inverse}, actor, move) do
+    touched = changed(before, after_record)
+
+    case perform(after_record, inverse, %{}, actor) do
+      {:ok, restored} ->
+        state
+        |> reached(before.__struct__, inverse.name)
+        |> judge_restored(before, restored, touched, {verb, inverse}, move)
+
+      {:error, kind, detail} ->
+        violate(
+          state,
+          :inverse_restores,
+          before.__struct__,
+          verb.name,
+          move.actor,
+          "#{inverse.name} was offered, then #{kind}: #{detail}"
+        )
+    end
+  end
+
+  defp judge_restored(state, before, restored, touched, {verb, inverse}, move) do
+    case Enum.reject(touched, &(Map.get(restored, &1) == Map.get(before, &1))) do
+      [] ->
+        state
+
+      fields ->
+        violate(
+          state,
+          :inverse_restores,
+          before.__struct__,
+          verb.name,
+          move.actor,
+          "#{inverse.name} left #{Enum.join(fields, ", ")} changed"
+        )
     end
   end
 
@@ -1086,28 +1108,29 @@ defmodule Mana.Explore do
         property = if(rule.within, do: :eventually, else: :invariant),
         property in ctx.properties,
         reduce: state do
-      state ->
-        if state.violations != [] do
-          state
-        else
-          case Enum.find(observe_rule(resource, rule, now), &(&1.rule == rule.name)) do
-            %{state: :converged} ->
-              state
+      state -> check_rule(state, resource, rule, property, now)
+    end
+  end
 
-            nil ->
-              state
+  defp check_rule(%{violations: [_ | _]} = state, _resource, _rule, _property, _now), do: state
 
-            report ->
-              violate(
-                state,
-                property,
-                resource,
-                rule.name,
-                nil,
-                "#{rule.describe}: #{Enum.map_join(report.diverging, "; ", & &1.detail)}"
-              )
-          end
-        end
+  defp check_rule(state, resource, rule, property, now) do
+    case Enum.find(observe_rule(resource, rule, now), &(&1.rule == rule.name)) do
+      %{state: :converged} ->
+        state
+
+      nil ->
+        state
+
+      report ->
+        violate(
+          state,
+          property,
+          resource,
+          rule.name,
+          nil,
+          "#{rule.describe}: #{Enum.map_join(report.diverging, "; ", & &1.detail)}"
+        )
     end
   end
 
@@ -1119,36 +1142,38 @@ defmodule Mana.Explore do
 
   defp check_deadlock(state, ctx) do
     if :flow_deadlock in ctx.properties and state.violations == [] do
-      Enum.reduce_while(ctx.resources, state, fn resource, state ->
-        if Mana.Flow in Spark.extensions(resource) do
-          case Enum.find(records(state, resource), &deadlocked?(state, resource, &1)) do
-            nil ->
-              {:cont, state}
-
-            record ->
-              {:halt,
-               violate(
-                 state,
-                 :flow_deadlock,
-                 resource,
-                 nil,
-                 nil,
-                 "stuck at #{Map.get(record, Mana.Flow.cursor(resource))}: no one is offered its step's verb"
-               )}
-          end
-        else
-          {:cont, state}
-        end
-      end)
+      Enum.reduce_while(ctx.resources, state, &check_resource_deadlock/2)
     else
       state
+    end
+  end
+
+  defp check_resource_deadlock(resource, state) do
+    if Mana.Flow in Spark.extensions(resource) do
+      case Enum.find(records(state, resource), &deadlocked?(state, resource, &1)) do
+        nil ->
+          {:cont, state}
+
+        record ->
+          {:halt,
+           violate(
+             state,
+             :flow_deadlock,
+             resource,
+             nil,
+             nil,
+             "stuck at #{Map.get(record, Mana.Flow.cursor(resource))}: no one is offered its step's verb"
+           )}
+      end
+    else
+      {:cont, state}
     end
   end
 
   defp deadlocked?(state, resource, record) do
     cursor = Map.get(record, Mana.Flow.cursor(resource))
     step = Enum.find(Mana.Flow.steps(resource), &(&1.name == cursor))
-    outside = Spark.Dsl.Extension.get_opt(resource, [:flow], :before, [])
+    outside = Extension.get_opt(resource, [:flow], :before, [])
 
     step_verbs =
       if step,
@@ -1172,23 +1197,22 @@ defmodule Mana.Explore do
 
   defp check_history(ctx, state) do
     if :history_replays in ctx.properties do
-      Enum.reduce_while(ctx.resources, state, fn resource, state ->
-        log = Mana.History in Spark.extensions(resource) && Mana.History.log(resource)
-
-        if log do
-          case Enum.find_value(
-                 records(state, resource),
-                 &replay_mismatch(state, resource, log, &1)
-               ) do
-            nil -> {:cont, state}
-            detail -> {:halt, violate(state, :history_replays, resource, nil, nil, detail)}
-          end
-        else
-          {:cont, state}
-        end
-      end)
+      Enum.reduce_while(ctx.resources, state, &check_resource_history/2)
     else
       state
+    end
+  end
+
+  defp check_resource_history(resource, state) do
+    log = Mana.History in Spark.extensions(resource) && Mana.History.log(resource)
+
+    if log do
+      case Enum.find_value(records(state, resource), &replay_mismatch(state, resource, log, &1)) do
+        nil -> {:cont, state}
+        detail -> {:halt, violate(state, :history_replays, resource, nil, nil, detail)}
+      end
+    else
+      {:cont, state}
     end
   end
 
@@ -1210,30 +1234,7 @@ defmodule Mana.Explore do
         nil
 
       {:ok, rebuilt, _} ->
-        # A time an action stamps from the clock (requested_at) is not
-        # something a replay can reproduce; one that came in as input is.
-        inputs =
-          for entry <- entries,
-              key <- Map.keys(entry["params"] || %{}),
-              into: MapSet.new(),
-              do: to_string(key)
-
-        fields =
-          changed(record, rebuilt)
-          |> Enum.reject(&(&1 == :id))
-          |> Enum.reject(
-            &(clock_value?(Map.get(record, &1)) and not MapSet.member?(inputs, to_string(&1)))
-          )
-
-        try do
-          Ash.destroy!(rebuilt, authorize?: false)
-        rescue
-          _ -> :ok
-        end
-
-        if fields != [],
-          do:
-            "#{Mana.Entity.type(resource)} #{record.id}: replaying its history rebuilt #{Enum.join(fields, ", ")} differently"
+        rebuilt_mismatch(resource, record, rebuilt, entries)
 
       {:error, %{error: reason}} when reason in [:external, :redacted_input] ->
         nil
@@ -1244,6 +1245,36 @@ defmodule Mana.Explore do
   rescue
     error ->
       "#{Mana.Entity.type(resource)} #{record.id}: replay crashed: #{Exception.message(error) |> String.slice(0, 200)}"
+  end
+
+  defp rebuilt_mismatch(resource, record, rebuilt, entries) do
+    # A time an action stamps from the clock (requested_at) is not
+    # something a replay can reproduce; one that came in as input is.
+    inputs =
+      for entry <- entries,
+          key <- Map.keys(entry["params"] || %{}),
+          into: MapSet.new(),
+          do: to_string(key)
+
+    fields =
+      record
+      |> changed(rebuilt)
+      |> Enum.reject(
+        &(&1 == :id or
+            (clock_value?(Map.get(record, &1)) and not MapSet.member?(inputs, to_string(&1))))
+      )
+
+    destroy_quietly(rebuilt)
+
+    if fields != [],
+      do:
+        "#{Mana.Entity.type(resource)} #{record.id}: replaying its history rebuilt #{Enum.join(fields, ", ")} differently"
+  end
+
+  defp destroy_quietly(record) do
+    Ash.destroy!(record, authorize?: false)
+  rescue
+    _ -> :ok
   end
 
   defp clock_value?(%DateTime{}), do: true
@@ -1281,22 +1312,25 @@ defmodule Mana.Explore do
           key = {Mana.Entity.type(resource), shape(record)}
 
           entry =
-            for {name, actor} <- state.actors, reduce: Map.get(observed, key, %{seen: 0}) do
-              entry ->
-                counts = Map.get(entry, name, %{})
-
-                counts =
-                  Enum.reduce(safe_offered(record, actor), counts, fn verb, counts ->
-                    Map.update(counts, verb, 1, &(&1 + 1))
-                  end)
-
-                Map.put(entry, name, counts)
-            end
+            Enum.reduce(
+              state.actors,
+              Map.get(observed, key, %{seen: 0}),
+              &count_offers(record, &1, &2)
+            )
 
           Map.put(observed, key, Map.update!(entry, :seen, &(&1 + 1)))
       end
 
     %{state | observed: observed}
+  end
+
+  defp count_offers(record, {name, actor}, entry) do
+    counts =
+      Enum.reduce(safe_offered(record, actor), Map.get(entry, name, %{}), fn verb, counts ->
+        Map.update(counts, verb, 1, &(&1 + 1))
+      end)
+
+    Map.put(entry, name, counts)
   end
 
   defp transition(state, before, after_record, move) do
@@ -1557,20 +1591,7 @@ defmodule Mana.Explore do
     with_quiet_deadlines(fn ->
       state = %{new_state(ctx, 0) | actors: actors}
 
-      state =
-        Enum.reduce(moves, state, fn move, state ->
-          state = %{state | trace: state.trace ++ [move]}
-
-          state =
-            case move do
-              %{kind: :clock} -> advance(ctx, state, move.by)
-              %{kind: :probe} -> state
-              %{kind: :start} -> start(ctx, state, move)
-              %{kind: :verb} -> verb_move(ctx, state, move)
-            end
-
-          discover(state, ctx)
-        end)
+      state = Enum.reduce(moves, state, &rebuild_move(ctx, &1, &2))
 
       for {resource, ids} <- state.refs,
           {_id, index} <- Enum.with_index(ids),
@@ -1578,6 +1599,20 @@ defmodule Mana.Explore do
           into: %{},
           do: {{resource, index}, record}
     end)
+  end
+
+  defp rebuild_move(ctx, move, state) do
+    state = %{state | trace: state.trace ++ [move]}
+
+    state =
+      case move do
+        %{kind: :clock} -> advance(ctx, state, move.by)
+        %{kind: :probe} -> state
+        %{kind: :start} -> start(ctx, state, move)
+        %{kind: :verb} -> verb_move(ctx, state, move)
+      end
+
+    discover(state, ctx)
   end
 
   defp move_from_json(json) do

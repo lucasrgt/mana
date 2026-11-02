@@ -1,4 +1,6 @@
 defmodule Mix.Tasks.Mana.Advance do
+  # Optional dependencies, called only when the app has them.
+  @compile {:no_warn_undefined, [Mana.Intervene]}
   @shortdoc "Runs the deadlines and stuck-flow checks due within a duration"
   @moduledoc """
       mix mana.advance 3d

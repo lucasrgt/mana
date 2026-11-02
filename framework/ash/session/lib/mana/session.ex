@@ -1,6 +1,7 @@
 defmodule Mana.Session do
   @moduledoc "Opinionated JSON session transport; credentials and tokens are managed by AshAuthentication."
   import Plug.Conn
+  alias AshAuthentication.TokenResource.Actions
 
   def init(options) do
     action = Keyword.fetch!(options, :action)
@@ -72,7 +73,7 @@ defmodule Mana.Session do
     do: json(conn, 200, view(Ash.PlugHelpers.get_actor(conn), conn.assigns.access_token))
 
   def call(conn, %{action: :sign_out, token: resource}) do
-    case AshAuthentication.TokenResource.Actions.revoke(resource, conn.assigns.access_token) do
+    case Actions.revoke(resource, conn.assigns.access_token) do
       :ok -> conn |> put_resp_header("cache-control", "no-store") |> send_resp(204, "")
       {:error, _} -> json(conn, 503, %{error: "sign_out_unavailable"})
     end

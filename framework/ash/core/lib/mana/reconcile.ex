@@ -94,48 +94,57 @@ defmodule Mana.Reconcile do
 
   use Spark.Dsl.Extension, sections: [@reconcile], transformers: [Mana.Reconcile.Verify]
 
-  def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:reconcile])
+  alias Spark.Dsl.Extension
+
+  def declared(resource), do: Extension.get_entities(resource, [:reconcile])
 
   @doc "Where each rule of `resource` stands; `apply: true` lets rules with `apply` repair."
   def observe(resource, opts \\ []) do
-    for rule <- declared(resource) do
-      records = resource |> Ash.Query.do_filter(rule.scope) |> Ash.read!(authorize?: false)
-      now = opts[:now] || DateTime.utc_now()
+    for rule <- declared(resource), do: observe_rule(resource, rule, opts)
+  end
 
-      diverging =
-        for record <- records, detail = divergence(rule, record, now), do: {record, detail}
+  defp observe_rule(resource, rule, opts) do
+    records = resource |> Ash.Query.do_filter(rule.scope) |> Ash.read!(authorize?: false)
+    now = opts[:now] || DateTime.utc_now()
 
-      {repaired, blocked} =
-        if opts[:apply] && rule.apply,
-          do: Enum.split_with(diverging, fn {record, _} -> repair(rule, record) end),
-          else: {[], []}
+    diverging =
+      for record <- records, detail = divergence(rule, record, now), do: {record, detail}
 
-      remaining = if opts[:apply] && rule.apply, do: blocked, else: diverging
+    {repaired, blocked, remaining} = settle(rule, diverging, opts[:apply])
+    state = state(remaining, blocked)
+    emit_diverged(resource, rule, state, remaining)
 
-      state =
-        cond do
-          remaining == [] -> :converged
-          blocked != [] -> :blocked
-          true -> :diverging
-        end
+    %{
+      rule: rule.name,
+      describe: rule.describe,
+      state: state,
+      checked: length(records),
+      repaired: length(repaired),
+      diverging: for({record, detail} <- remaining, do: %{id: record.id, detail: detail})
+    }
+  end
 
-      if remaining != [] do
-        :telemetry.execute([:mana, :reconcile, :diverged], %{count: length(remaining)}, %{
-          resource: resource,
-          rule: rule.name,
-          state: state
-        })
-      end
-
-      %{
-        rule: rule.name,
-        describe: rule.describe,
-        state: state,
-        checked: length(records),
-        repaired: length(repaired),
-        diverging: for({record, detail} <- remaining, do: %{id: record.id, detail: detail})
-      }
+  defp settle(rule, diverging, apply?) do
+    if apply? && rule.apply do
+      {repaired, blocked} = Enum.split_with(diverging, fn {record, _} -> repair(rule, record) end)
+      {repaired, blocked, blocked}
+    else
+      {[], [], diverging}
     end
+  end
+
+  defp state([], _blocked), do: :converged
+  defp state(_remaining, []), do: :diverging
+  defp state(_remaining, _blocked), do: :blocked
+
+  defp emit_diverged(_resource, _rule, _state, []), do: :ok
+
+  defp emit_diverged(resource, rule, state, remaining) do
+    :telemetry.execute([:mana, :reconcile, :diverged], %{count: length(remaining)}, %{
+      resource: resource,
+      rule: rule.name,
+      state: state
+    })
   end
 
   defp divergence(%{within: nil} = rule, record, _now), do: holds(rule, record)
@@ -146,12 +155,17 @@ defmodule Mana.Reconcile do
         "has no #{since(rule, record)} to count #{duration(window(rule, record))} from"
 
       seconds ->
-        detail = holds(rule, record)
+        overdue(rule, record, seconds)
+    end
+  end
 
-        if seconds > window(rule, record) and detail do
-          "in scope for #{duration(seconds)}, longer than #{duration(window(rule, record))}" <>
-            if(rule.holds, do: ": #{detail}", else: "")
-        end
+  defp overdue(rule, record, seconds) do
+    detail = holds(rule, record)
+    window = window(rule, record)
+
+    if seconds > window and detail do
+      "in scope for #{duration(seconds)}, longer than #{duration(window)}" <>
+        if(rule.holds, do: ": #{detail}", else: "")
     end
   end
 
@@ -250,10 +264,13 @@ defmodule Mana.Reconcile.Verify do
   # A transformer, not a verifier, so the refusal is a compile error.
   use Spark.Dsl.Transformer
 
+  alias Spark.Dsl.Transformer
+  alias Spark.Error.DslError
+
   @impl true
   def transform(dsl) do
     case Enum.find(
-           Spark.Dsl.Transformer.get_entities(dsl, [:reconcile]),
+           Transformer.get_entities(dsl, [:reconcile]),
            &(is_nil(&1.holds) and is_nil(&1.within))
          ) do
       nil ->
@@ -261,8 +278,8 @@ defmodule Mana.Reconcile.Verify do
 
       rule ->
         {:error,
-         Spark.Error.DslError.exception(
-           module: Spark.Dsl.Transformer.get_persisted(dsl, :module),
+         DslError.exception(
+           module: Transformer.get_persisted(dsl, :module),
            path: [:reconcile, rule.name],
            message: "desired #{inspect(rule.name)} needs holds:, within:, or both"
          )}
@@ -282,12 +299,14 @@ if Code.ensure_loaded?(Oban.Worker) do
     """
     use Oban.Worker, queue: :maintenance, max_attempts: 1
 
+    alias Ash.Domain.Info
+
     @impl true
     def perform(%Oban.Job{args: %{"otp_app" => otp_app} = args}) do
       escalate = Application.get_env(:mana_core, :reconcile_escalate)
 
       for domain <- otp_app |> String.to_existing_atom() |> Application.fetch_env!(:ash_domains),
-          resource <- Ash.Domain.Info.resources(domain),
+          resource <- Info.resources(domain),
           Mana.Reconcile in Spark.extensions(resource),
           report <- Mana.Reconcile.observe(resource, apply: args["apply"] == true),
           {module, function} <- List.wrap(escalate),

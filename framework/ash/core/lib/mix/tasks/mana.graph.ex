@@ -15,6 +15,8 @@ defmodule Mix.Tasks.Mana.Graph do
   """
   use Mix.Task
 
+  alias Mana.Graph
+
   @impl true
   def run(args) do
     {opts, query} =
@@ -24,44 +26,38 @@ defmodule Mix.Tasks.Mana.Graph do
     Mix.Task.run("compile")
     app = Mix.Project.config()[:app]
 
-    manifests =
-      case Keyword.get_values(opts, :manifest) do
-        [] ->
-          Path.wildcard("../*/moments/manifest.json") ++
-            Path.wildcard("../*/*/moments/manifest.json")
-
-        paths ->
-          paths
-      end
-
-    screens = if path = opts[:screens], do: path |> File.read!() |> Jason.decode!(), else: %{}
-
     graph =
-      Mana.Graph.build(Application.fetch_env!(app, :ash_domains),
-        manifests: manifests,
-        screens: screens
+      Graph.build(Application.fetch_env!(app, :ash_domains),
+        manifests: manifests(Keyword.get_values(opts, :manifest)),
+        screens: screens(opts[:screens])
       )
 
-    answer =
-      case query do
-        [] -> Mana.Graph.to_json(graph)
-        ["verbs-without-moment"] -> Mana.Graph.query(graph, :verbs_without_moment)
-        ["dead-verbs"] -> Mana.Graph.query(graph, :dead_verbs)
-        ["proves", verb] -> Mana.Graph.query(graph, {:proves, verb})
-        ["knob", name] -> Mana.Graph.query(graph, {:knob, name})
-        ["verb", verb] -> Mana.Graph.query(graph, {:verb, verb})
-        other -> Mix.raise("unknown query #{Enum.join(other, " ")}; see mix help mana.graph")
-      end
-
-    cond do
-      opts[:json] == true or query == [] ->
-        Mix.shell().info(Jason.encode!(answer, pretty: true))
-
-      is_list(answer) ->
-        Enum.each(answer, &Mix.shell().info(if(is_binary(&1), do: &1, else: inspect(&1))))
-
-      true ->
-        Mix.shell().info(inspect(answer, pretty: true))
-    end
+    print(answer(graph, query), opts[:json] == true or query == [])
   end
+
+  defp manifests([]),
+    do:
+      Path.wildcard("../*/moments/manifest.json") ++ Path.wildcard("../*/*/moments/manifest.json")
+
+  defp manifests(paths), do: paths
+
+  defp screens(nil), do: %{}
+  defp screens(path), do: path |> File.read!() |> Jason.decode!()
+
+  defp answer(graph, []), do: Graph.to_json(graph)
+  defp answer(graph, ["verbs-without-moment"]), do: Graph.query(graph, :verbs_without_moment)
+  defp answer(graph, ["dead-verbs"]), do: Graph.query(graph, :dead_verbs)
+  defp answer(graph, ["proves", verb]), do: Graph.query(graph, {:proves, verb})
+  defp answer(graph, ["knob", name]), do: Graph.query(graph, {:knob, name})
+  defp answer(graph, ["verb", verb]), do: Graph.query(graph, {:verb, verb})
+
+  defp answer(_graph, other),
+    do: Mix.raise("unknown query #{Enum.join(other, " ")}; see mix help mana.graph")
+
+  defp print(answer, true), do: Mix.shell().info(Jason.encode!(answer, pretty: true))
+
+  defp print(answer, false) when is_list(answer),
+    do: Enum.each(answer, &Mix.shell().info(if(is_binary(&1), do: &1, else: inspect(&1))))
+
+  defp print(answer, false), do: Mix.shell().info(inspect(answer, pretty: true))
 end

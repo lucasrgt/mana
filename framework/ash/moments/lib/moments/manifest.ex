@@ -1,6 +1,11 @@
 defmodule Moments.Manifest do
   @moduledoc "Exports the compiled DSL as a portable, credential-free view contract."
+  alias Mana.Entity
+  alias Mana.Verbs
   alias Spark.Dsl.Extension, as: Dsl
+
+  # mana_core is optional: verb references check for it at runtime.
+  @compile {:no_warn_undefined, [Mana.Entity, Mana.Verbs]}
 
   def build_many(modules, opts \\ []) do
     opts = opts |> Keyword.put(:defer_lineage, true) |> Keyword.put_new(:domains, modules)
@@ -27,73 +32,23 @@ defmodule Moments.Manifest do
   end
 
   def build(module, opts \\ []) do
-    route = Dsl.get_opt(module, [:moments], :route)
-
-    unless is_binary(route) and String.starts_with?(route, "/") and
-             not String.starts_with?(route, "//"),
-           do: raise(ArgumentError, "moment route must be local to the app")
-
-    client_roots = Dsl.get_opt(module, [:moments], :client_roots, [])
-
-    unless Enum.all?(
-             client_roots,
-             &Regex.match?(~r/^lib\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.dart$/, &1)
-           ),
-           do: raise(ArgumentError, "client_roots must name Dart libraries under lib/")
-
-    entities = Dsl.get_entities(module, [:moments])
-    fields = Enum.filter(entities, &is_struct(&1, Moments.Field))
-    scenes = Enum.filter(entities, &is_struct(&1, Moments.Scene))
-    if scenes == [], do: raise(ArgumentError, "declare at least one moment")
-    if Enum.any?(fields, &(&1.name == :route)), do: raise(ArgumentError, "route is reserved")
-
-    properties =
-      Map.new(fields, fn field ->
-        rule = rule(field)
-
-        {to_string(field.name),
-         if(field.restore == false, do: Map.put(rule, "restore", false), else: rule)}
-      end)
-
+    route = route!(Dsl.get_opt(module, [:moments], :route))
+    client_roots = client_roots!(Dsl.get_opt(module, [:moments], :client_roots, []))
+    {fields, scenes} = entities!(module)
+    properties = Map.new(fields, &property/1)
     defaults = Map.new(fields, &{to_string(&1.name), &1.default})
     validate!(defaults, properties)
-    verb = &verb!(&1, Keyword.get(opts, :domains, [module]), module)
 
-    moments =
-      Map.new(scenes, fn scene ->
-        name = scene.name |> to_string() |> String.replace("_", "-")
+    context = %{
+      module: module,
+      opts: opts,
+      route: route,
+      defaults: defaults,
+      properties: properties,
+      verb: &verb!(&1, Keyword.get(opts, :domains, [module]), module)
+    }
 
-        unless Regex.match?(~r/^[a-z][a-z0-9-]*$/, name),
-          do: raise(ArgumentError, "invalid moment name")
-
-        state =
-          Map.merge(
-            defaults,
-            Map.new(scene.defaults, fn {key, value} -> {to_string(key), value} end)
-          )
-
-        validate!(state, properties)
-
-        if Enum.any?(scene.defaults, fn {key, _} ->
-             properties[to_string(key)]["restore"] == false
-           end),
-           do: raise(ArgumentError, "cannot set defaults for observation fields")
-
-        # Observations have a type but cannot be fabricated by a restore recipe.
-        state = Map.reject(state, fn {key, _} -> properties[key]["restore"] == false end)
-
-        {name,
-         %{
-           "description" => scene.description,
-           "projection" => Map.put(state, "route", route),
-           "checks" => checks(scene.checks, properties, verb),
-           "steps" => steps(scene.steps, scene.checks, verb),
-           "source" => source(scene, module, Keyword.get(opts, :source_root, File.cwd!()))
-         }
-         |> parent(scene.from)
-         |> platforms(scene.platforms)
-         |> backend(scene.backend, Dsl.get_opt(module, [:moments], :base))}
-      end)
+    moments = Map.new(scenes, &moment(&1, context))
 
     if map_size(moments) != length(scenes),
       do: raise(ArgumentError, "duplicate normalized moment name")
@@ -111,6 +66,71 @@ defmodule Moments.Manifest do
       if Keyword.get(opts, :defer_lineage, false), do: manifest, else: lineage(manifest)
     end)
   end
+
+  defp route!(route) do
+    unless is_binary(route) and String.starts_with?(route, "/") and
+             not String.starts_with?(route, "//"),
+           do: raise(ArgumentError, "moment route must be local to the app")
+
+    route
+  end
+
+  defp client_roots!(client_roots) do
+    unless Enum.all?(
+             client_roots,
+             &Regex.match?(~r/^lib\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.dart$/, &1)
+           ),
+           do: raise(ArgumentError, "client_roots must name Dart libraries under lib/")
+
+    client_roots
+  end
+
+  defp entities!(module) do
+    entities = Dsl.get_entities(module, [:moments])
+    fields = Enum.filter(entities, &is_struct(&1, Moments.Field))
+    scenes = Enum.filter(entities, &is_struct(&1, Moments.Scene))
+    if scenes == [], do: raise(ArgumentError, "declare at least one moment")
+    if Enum.any?(fields, &(&1.name == :route)), do: raise(ArgumentError, "route is reserved")
+    {fields, scenes}
+  end
+
+  defp property(field), do: {to_string(field.name), restore(rule(field), field.restore)}
+
+  defp restore(rule, false), do: Map.put(rule, "restore", false)
+  defp restore(rule, _restore), do: rule
+
+  defp moment(scene, %{module: module, opts: opts, route: route} = context) do
+    %{defaults: defaults, properties: properties, verb: verb} = context
+    name = scene.name |> to_string() |> dashed!("invalid moment name")
+
+    state =
+      Map.merge(
+        defaults,
+        Map.new(scene.defaults, fn {key, value} -> {to_string(key), value} end)
+      )
+
+    validate!(state, properties)
+
+    if Enum.any?(scene.defaults, fn {key, _} -> observation?(properties, key) end),
+      do: raise(ArgumentError, "cannot set defaults for observation fields")
+
+    # Observations have a type but cannot be fabricated by a restore recipe.
+    state = Map.reject(state, fn {key, _} -> observation?(properties, key) end)
+
+    {name,
+     %{
+       "description" => scene.description,
+       "projection" => Map.put(state, "route", route),
+       "checks" => checks(scene.checks, properties, verb),
+       "steps" => steps(scene.steps, scene.checks, verb),
+       "source" => source(scene, module, Keyword.get(opts, :source_root, File.cwd!()))
+     }
+     |> parent(scene.from)
+     |> platforms(scene.platforms)
+     |> backend(scene.backend, Dsl.get_opt(module, [:moments], :base))}
+  end
+
+  defp observation?(properties, key), do: properties[to_string(key)]["restore"] == false
 
   defp parent(scene, nil), do: scene
   defp parent(scene, from), do: Map.put(scene, "from", backend_name(from))
@@ -155,12 +175,12 @@ defmodule Moments.Manifest do
     Map.put(scene, "backend", reference)
   end
 
-  defp backend_name(recipe) do
-    name = recipe |> Atom.to_string() |> String.replace("_", "-")
+  defp backend_name(recipe),
+    do: recipe |> Atom.to_string() |> dashed!("invalid backend recipe name")
 
-    unless Regex.match?(~r/^[a-z][a-z0-9-]*$/, name),
-      do: raise(ArgumentError, "invalid backend recipe name")
-
+  defp dashed!(name, message) do
+    name = String.replace(name, "_", "-")
+    unless Regex.match?(~r/^[a-z][a-z0-9-]*$/, name), do: raise(ArgumentError, message)
     name
   end
 
@@ -197,10 +217,10 @@ defmodule Moments.Manifest do
     resource = verb_resource!(resource, domains, module)
 
     unless Mana.Verbs in Spark.extensions(resource) and
-             Enum.any?(apply(Mana.Verbs, :declared, [resource]), &(&1.name == name)),
+             Enum.any?(Verbs.declared(resource), &(&1.name == name)),
            do: raise(ArgumentError, "#{inspect(resource)} declares no verb #{inspect(name)}")
 
-    "#{apply(Mana.Entity, :type, [resource])}.#{name}"
+    "#{Entity.type(resource)}.#{name}"
   end
 
   defp verb!(_reference, _domains, _module),
@@ -219,7 +239,7 @@ defmodule Moments.Manifest do
             Code.ensure_loaded?(domain),
             Spark.Dsl.is?(domain, Ash.Domain),
             candidate <- Ash.Domain.Info.resources(domain),
-            apply(Mana.Entity, :type, [candidate]) == type,
+            Entity.type(candidate) == type,
             uniq: true,
             do: candidate
 
@@ -239,53 +259,66 @@ defmodule Moments.Manifest do
     end
   end
 
+  @check_rules [
+    backend_identity: "backend check needs field and matching UI identity",
+    known_identity: "unknown check identity",
+    known_field: "unknown UI check field",
+    ui_field: "UI check needs a field",
+    restorable_field: "observations need ui_equals, not restored",
+    scalar_equals: "check equals must be a scalar",
+    verb_only: "offered and not_offered checks take a verb, and only a verb"
+  ]
+
   defp checks(checks, properties, verb) do
     if length(checks) > 64, do: raise(ArgumentError, "at most 64 checks per moment")
     names = Enum.map(checks, & &1.name)
     if length(names) != length(Enum.uniq(names)), do: raise(ArgumentError, "duplicate check name")
-
-    Enum.map(checks, fn check ->
-      field = if check.field, do: Atom.to_string(check.field)
-      match = if check.match, do: Atom.to_string(check.match)
-
-      if check.kind == :backend_equals and (is_nil(field) or is_nil(match)),
-        do: raise(ArgumentError, "backend check needs field and matching UI identity")
-
-      if match && !Map.has_key?(properties, match),
-        do: raise(ArgumentError, "unknown check identity")
-
-      if (check.kind in [:restored, :ui_equals] and field) && !Map.has_key?(properties, field),
-        do: raise(ArgumentError, "unknown UI check field")
-
-      if check.kind == :ui_equals and is_nil(field),
-        do: raise(ArgumentError, "UI check needs a field")
-
-      if (check.kind == :restored and field) && properties[field]["restore"] == false,
-        do: raise(ArgumentError, "observations need ui_equals, not restored")
-
-      if field &&
-           !(is_boolean(check.equals) or is_number(check.equals) or is_binary(check.equals)),
-         do: raise(ArgumentError, "check equals must be a scalar")
-
-      if check.kind in [:offered, :not_offered] != not is_nil(check.verb) or
-           (check.verb && (field || match)),
-         do: raise(ArgumentError, "offered and not_offered checks take a verb, and only a verb")
-
-      %{"name" => to_string(check.name), "kind" => to_string(check.kind)}
-      |> then(fn value ->
-        if check.verb, do: Map.put(value, "verb", verb.(check.verb)), else: value
-      end)
-      |> then(fn value ->
-        if check.scope == :step, do: Map.put(value, "scope", "step"), else: value
-      end)
-      |> then(fn value ->
-        if field, do: Map.merge(value, %{"field" => field, "equals" => check.equals}), else: value
-      end)
-      |> then(fn value -> if match, do: Map.put(value, "match", match), else: value end)
-    end)
+    Enum.map(checks, &check!(&1, properties, verb))
   end
 
+  defp check!(check, properties, verb) do
+    field = if check.field, do: Atom.to_string(check.field)
+    match = if check.match, do: Atom.to_string(check.match)
+    refuse!(@check_rules, &check_refused?(&1, check, field, match, properties))
+
+    %{"name" => to_string(check.name), "kind" => to_string(check.kind)}
+    |> put_present("verb", check.verb && verb.(check.verb))
+    |> put_present("scope", check.scope == :step && "step")
+    |> Map.merge(if field, do: %{"field" => field, "equals" => check.equals}, else: %{})
+    |> put_present("match", match)
+  end
+
+  defp check_refused?(:backend_identity, check, field, match, _properties),
+    do: check.kind == :backend_equals and (is_nil(field) or is_nil(match))
+
+  defp check_refused?(:known_identity, _check, _field, match, properties),
+    do: match && !Map.has_key?(properties, match)
+
+  defp check_refused?(:known_field, check, field, _match, properties),
+    do: (check.kind in [:restored, :ui_equals] and field) && !Map.has_key?(properties, field)
+
+  defp check_refused?(:ui_field, check, field, _match, _properties),
+    do: check.kind == :ui_equals and is_nil(field)
+
+  defp check_refused?(:restorable_field, check, field, _match, properties),
+    do: (check.kind == :restored and field) && properties[field]["restore"] == false
+
+  defp check_refused?(:scalar_equals, check, field, _match, _properties),
+    do: field && !(is_boolean(check.equals) or is_number(check.equals) or is_binary(check.equals))
+
+  defp check_refused?(:verb_only, check, field, match, _properties),
+    do:
+      check.kind in [:offered, :not_offered] == is_nil(check.verb) or
+        (check.verb && (field || match))
+
   @criteria [:ui_equals, :backend_equals, :offered, :not_offered]
+
+  @step_rules [
+    record_of_verb: "on names the record of a verb step",
+    direction: "swipe requires a direction, and only swipe takes one",
+    bounded_keys: "step requires bounded widget keys and input references",
+    until: "until references must name observed UI or backend criteria"
+  ]
 
   defp steps(steps, checks, verb) do
     names = Enum.map(steps, & &1.name)
@@ -293,97 +326,89 @@ defmodule Moments.Manifest do
     if length(steps) > 32 or length(names) != length(Enum.uniq(names)),
       do: raise(ArgumentError, "journeys require at most 32 uniquely named steps")
 
-    for check <- checks, check.scope == :step do
-      unless check.kind in @criteria and
-               Enum.any?(steps, &(check.name in &1.until)),
-             do: raise(ArgumentError, "step checks must be observed by a declared step")
-    end
-
-    Enum.map(steps, fn step ->
-      gestures =
-        [
-          tap: step.tap,
-          fill: step.fill,
-          reveal: step.reveal,
-          back: step.back,
-          swipe: step.swipe,
-          long_press: step.long_press,
-          submit: step.submit,
-          verb: step.verb
-        ]
-        |> Enum.reject(fn {_, value} -> value in [nil, false] end)
-
-      {kind, target} =
-        case gestures do
-          [{:fill, key}] when is_binary(step.from) ->
-            {"fill", key}
-
-          [{:back, true}] when is_nil(step.from) ->
-            {"back", "system.back"}
-
-          [{:reveal, key}] when is_nil(step.from) ->
-            {"reveal", key}
-
-          [{kind, key}] when kind in [:tap, :swipe, :long_press, :submit] and is_binary(key) ->
-            {to_string(kind), key}
-
-          [{:verb, reference}] when is_nil(step.from) ->
-            {"tap", "verb:" <> verb.(reference)}
-
-          _ ->
-            raise(
-              ArgumentError,
-              "step requires exactly one of tap, fill/from, reveal, back, swipe, long_press, submit or verb"
-            )
-        end
-
-      if step.on && is_nil(step.verb),
-        do: raise(ArgumentError, "on names the record of a verb step")
-
-      input = step.from || step.on
-
-      unless kind == "swipe" == not is_nil(step.direction),
-        do: raise(ArgumentError, "swipe requires a direction, and only swipe takes one")
-
-      valid = fn value ->
-        is_binary(value) and Regex.match?(~r/^[a-zA-Z0-9_.:-]{1,160}$/, value)
-      end
-
-      unless valid.(target) and (is_nil(input) or valid.(input)),
-        do: raise(ArgumentError, "step requires bounded widget keys and input references")
-
-      unless length(step.until) in 0..32 and
-               Enum.all?(step.until, fn name ->
-                 Enum.any?(
-                   checks,
-                   &(&1.name == name and &1.kind in @criteria)
-                 )
-               end),
-             do:
-               raise(
-                 ArgumentError,
-                 "until references must name observed UI or backend criteria"
-               )
-
-      %{
-        "name" => to_string(step.name),
-        "kind" => kind,
-        "target" => target,
-        "until" => Enum.map(step.until, &to_string/1)
-      }
-      |> then(fn value ->
-        if input, do: Map.put(value, "inputRef", input), else: value
-      end)
-      |> then(fn value ->
-        if step.verb,
-          do: Map.put(value, "verb", String.replace_prefix(target, "verb:", "")),
-          else: value
-      end)
-      |> then(fn value ->
-        if step.direction, do: Map.put(value, "direction", to_string(step.direction)), else: value
-      end)
-    end)
+    for check <- checks, check.scope == :step, do: observed_by_step!(check, steps)
+    Enum.map(steps, &step!(&1, checks, verb))
   end
+
+  defp observed_by_step!(check, steps) do
+    unless check.kind in @criteria and Enum.any?(steps, &(check.name in &1.until)),
+      do: raise(ArgumentError, "step checks must be observed by a declared step")
+  end
+
+  defp step!(step, checks, verb) do
+    {kind, target} = step |> gestures() |> gesture!(step.from, verb)
+    input = step.from || step.on
+    refuse!(@step_rules, &step_refused?(&1, step, {kind, target, input}, checks))
+
+    %{
+      "name" => to_string(step.name),
+      "kind" => kind,
+      "target" => target,
+      "until" => Enum.map(step.until, &to_string/1)
+    }
+    |> put_present("inputRef", input)
+    |> put_present("verb", step.verb && String.replace_prefix(target, "verb:", ""))
+    |> put_present("direction", step.direction && to_string(step.direction))
+  end
+
+  defp gestures(step) do
+    [
+      tap: step.tap,
+      fill: step.fill,
+      reveal: step.reveal,
+      back: step.back,
+      swipe: step.swipe,
+      long_press: step.long_press,
+      submit: step.submit,
+      verb: step.verb
+    ]
+    |> Enum.reject(fn {_, value} -> value in [nil, false] end)
+  end
+
+  defp gesture!([{:fill, key}], from, _verb) when is_binary(from), do: {"fill", key}
+  defp gesture!([{:back, true}], nil, _verb), do: {"back", "system.back"}
+  defp gesture!([{:reveal, key}], nil, _verb), do: {"reveal", key}
+
+  defp gesture!([{kind, key}], _from, _verb)
+       when kind in [:tap, :swipe, :long_press, :submit] and is_binary(key),
+       do: {to_string(kind), key}
+
+  defp gesture!([{:verb, reference}], nil, verb), do: {"tap", "verb:" <> verb.(reference)}
+
+  defp gesture!(_gestures, _from, _verb) do
+    raise(
+      ArgumentError,
+      "step requires exactly one of tap, fill/from, reveal, back, swipe, long_press, submit or verb"
+    )
+  end
+
+  defp step_refused?(:record_of_verb, step, _gesture, _checks), do: step.on && is_nil(step.verb)
+
+  defp step_refused?(:direction, step, {kind, _target, _input}, _checks),
+    do: kind == "swipe" == is_nil(step.direction)
+
+  defp step_refused?(:bounded_keys, _step, {_kind, target, input}, _checks),
+    do: not (bounded_key?(target) and (is_nil(input) or bounded_key?(input)))
+
+  defp step_refused?(:until, step, _gesture, checks),
+    do: not (length(step.until) in 0..32 and Enum.all?(step.until, &criterion?(checks, &1)))
+
+  defp bounded_key?(value),
+    do: is_binary(value) and Regex.match?(~r/^[a-zA-Z0-9_.:-]{1,160}$/, value)
+
+  defp criterion?(checks, name),
+    do: Enum.any?(checks, &(&1.name == name and &1.kind in @criteria))
+
+  # Rules are tried in order, so a declaration gets the first refusal that applies.
+  defp refuse!(rules, refused?) do
+    case Enum.find(rules, fn {rule, _message} -> refused?.(rule) end) do
+      nil -> :ok
+      {_rule, message} -> raise ArgumentError, message
+    end
+  end
+
+  defp put_present(map, _key, value) when value in [nil, false], do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp rule(%{values: nil, min: nil, max: nil, max_entries: nil, max_length: n})
        when is_integer(n),
@@ -417,26 +442,27 @@ defmodule Moments.Manifest do
       do: raise(ArgumentError, "moment defaults contain undeclared fields")
 
     Enum.each(state, fn {key, value} ->
-      valid =
-        case properties[key] do
-          %{"enum" => values} ->
-            value in values
-
-          %{"type" => "string", "maxLength" => n} ->
-            is_binary(value) and utf16_length(value) <= n
-
-          %{"type" => "object", "maxProperties" => n, "keyMaxLength" => k, "values" => bounds} ->
-            is_map(value) and map_size(value) <= n and
-              Enum.all?(value, fn {key, rating} ->
-                is_binary(key) and utf16_length(key) <= k and is_integer(rating) and
-                  rating >= bounds["min"] and rating <= bounds["max"]
-              end)
-
-          %{"min" => min, "max" => max} ->
-            is_number(value) and value >= min and value <= max
-        end
-
-      unless valid, do: raise(ArgumentError, "#{key}: invalid moment default #{inspect(value)}")
+      unless valid_default?(properties[key], value),
+        do: raise(ArgumentError, "#{key}: invalid moment default #{inspect(value)}")
     end)
+  end
+
+  defp valid_default?(%{"enum" => values}, value), do: value in values
+
+  defp valid_default?(%{"type" => "string", "maxLength" => n}, value),
+    do: is_binary(value) and utf16_length(value) <= n
+
+  defp valid_default?(
+         %{"type" => "object", "maxProperties" => n, "keyMaxLength" => k, "values" => bounds},
+         value
+       ),
+       do: is_map(value) and map_size(value) <= n and Enum.all?(value, &rating?(&1, k, bounds))
+
+  defp valid_default?(%{"min" => min, "max" => max}, value),
+    do: is_number(value) and value >= min and value <= max
+
+  defp rating?({key, rating}, key_max_length, bounds) do
+    is_binary(key) and utf16_length(key) <= key_max_length and is_integer(rating) and
+      rating >= bounds["min"] and rating <= bounds["max"]
   end
 end

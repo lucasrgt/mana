@@ -29,21 +29,7 @@ defmodule Mix.Tasks.Mana.Replay do
     Mix.Task.run("app.start")
     app = Mix.Project.config()[:app]
 
-    actor =
-      case opts[:actor_resource] do
-        nil ->
-          fn _ -> nil end
-
-        name ->
-          resource = name |> String.split(".") |> Module.safe_concat()
-
-          fn id ->
-            case id && Ash.get(resource, id, authorize?: false) do
-              {:ok, actor} -> actor
-              _ -> nil
-            end
-          end
-      end
+    actor = actor_loader(opts[:actor_resource])
 
     report =
       opts
@@ -67,5 +53,19 @@ defmodule Mix.Tasks.Mana.Replay do
       else: Mix.shell().info(Mana.Replay.format(report))
 
     if Enum.any?(report.results, &(&1.outcome in [:diverged, :failed])), do: exit({:shutdown, 1})
+  end
+
+  defp actor_loader(nil), do: fn _ -> nil end
+
+  defp actor_loader(name) do
+    resource = name |> String.split(".") |> Module.safe_concat()
+    &load_actor(resource, &1)
+  end
+
+  defp load_actor(resource, id) do
+    case id && Ash.get(resource, id, authorize?: false) do
+      {:ok, actor} -> actor
+      _ -> nil
+    end
   end
 end
