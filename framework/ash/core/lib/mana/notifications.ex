@@ -494,16 +494,16 @@ defmodule Mana.Notifications.Send do
     if Enum.any?(
          Mana.Notifications.declared(changeset.resource),
          &(&1.action == changeset.action.name)
-       ) do
-      Ash.Changeset.after_action(changeset, fn _changeset, record ->
-        if Process.get(:mana_dry_run),
-          do: Mana.Notifications.send_all(record, changeset.action.name, context.actor)
+       ),
+       do: Ash.Changeset.after_action(changeset, &hold_dry_run(&1, &2, context.actor)),
+       else: changeset
+  end
 
-        {:ok, record}
-      end)
-    else
-      changeset
-    end
+  defp hold_dry_run(changeset, record, actor) do
+    if Process.get(:mana_dry_run),
+      do: Mana.Notifications.send_all(record, changeset.action.name, actor)
+
+    {:ok, record}
   end
 
   @impl true
