@@ -6,7 +6,7 @@ defmodule ManaLintTest do
     [%{name: "default", checks: %{extra: extra}}] = config.configs
 
     assert Enum.map(extra, &elem(&1, 0)) == ManaLint.checks()
-    assert length(ManaLint.checks()) == 15
+    assert length(ManaLint.checks()) == 19
 
     for check <- ManaLint.checks() do
       behaviours =

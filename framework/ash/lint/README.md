@@ -1,8 +1,10 @@
 # Mana Lint
 
 A Credo plugin with checks for what Ash and Mana expect and Credo does not
-know. Every check reads the AST; a project tunes it with params in
-`.credo.exs`, never with `credo:disable`.
+know, and for code that reimplements a Mana primitive. Every check reads the
+AST and recognizes a legitimate exception from the code itself (the module
+that is the notifications sender, Mana's own modules); a project tunes it
+with params in `.credo.exs`, never with `credo:disable` or a comment.
 
 ```elixir
 # mix.exs
@@ -18,7 +20,7 @@ prints why a finding is not idiomatic and what to write instead.
 
 | Check | Flags |
 |---|---|
-| `AshEffectInTransactionHook` | an effect (payment adapter, storage put/delete, mailer, HTTP client, push, PubSub/Endpoint broadcast, `Mana.Entity.announce`, `Mana.Privacy.erase`) in a function given to `before_action`/`after_action`/`around_action` or to `Ash.transact`/`Repo.transaction`, or in a `change/3` body; a broadcast or notice in `after_transaction`. Calls are followed through the project's functions. Not `before_transaction`, `Oban.insert`, notifiers |
+| `AshEffectInTransactionHook` | an effect (payment adapter, storage put/delete, mailer, HTTP client, push, PubSub/Endpoint broadcast, `Mana.Entity.announce`) in a function given to `before_action`/`after_action`/`around_action` or to `Ash.transact`/`Repo.transaction`, or in a `change/3` body; a broadcast or notice in `after_transaction`. Calls are followed through the project's functions. Not `before_transaction`, `Oban.insert`, notifiers, `Mana.Privacy.erase` (it follows the transaction) |
 | `AshSeedOutsideSeeds` | `Ash.Seed.*` outside tests, seeds, Moments recipes and support code |
 | `DirectRepoOnResource` | `Repo.*`/`Ecto.Adapters.SQL.query*` or an Ecto `from` on a table a resource declares (advisory locks and probes name none) |
 | `RawSqlInCalculation` | `Repo.*`/SQL, or an `Ash.get/read*` per record, inside a calculation |
@@ -33,6 +35,10 @@ prints why a finding is not idiomatic and what to write instead.
 | `TableScanCron` | an Oban worker that filters a timestamp against now and iterates |
 | `BroadRescue` | `rescue _ ->` / `catch _, _ ->` that neither re-raises nor reports |
 | `ExternalPostWithoutIdempotencyKey` | a POST from a configured client module without an idempotency key |
+| `RecordBroadcast` | a PubSub/Endpoint broadcast in a resource, change, notifier or manual action, or next to an Ash write: use `Mana.Entity`. Not the module that defines `broadcast/3` (the entity's broadcaster) |
+| `RecordDateJob` | a job whose `scheduled_at:`/`schedule_in:` comes from a record's date field: use a `Mana.Entity` deadline (an event for another system: `Mana.Webhook.deliver(..., at:)`). Not a fixed delay, not Mana's own workers |
+| `ImperativeNotice` | `*.Notifications.notify(!)` called by hand: declare the notice (`Mana.Notifications`). Not in the module with `@behaviour Mana.Notifications.Sender` |
+| `BrazilianIdentifier` | a function named for validating/formatting a CPF, CNPJ, CEP or plate, or a regex for their digit groups: use the `Mana.BR` types. Not in `Mana.BR` |
 
 ## Params
 

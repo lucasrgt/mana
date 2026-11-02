@@ -15,8 +15,7 @@ defmodule ManaLint.Check.AshEffectInTransactionHook do
         ":httpc.request",
         ~r/(^|\.)(PubSub|Endpoint)\.(local_)?broadcast(_from)?!?$/,
         "Mana.Entity.announce",
-        ~r/^Mana\.Notifications\.notify!?$/,
-        "Mana.Privacy.erase"
+        ~r/^Mana\.Notifications\.notify!?$/
       ],
       after_transaction_effects: [
         ~r/(^|\.)(PubSub|Endpoint)\.(local_)?broadcast(_from)?!?$/,
@@ -29,7 +28,7 @@ defmodule ManaLint.Check.AshEffectInTransactionHook do
       check: """
       Flags an external effect — a payment call, a storage write or delete, an
       email, a push, an HTTP request, a PubSub/Endpoint broadcast,
-      `Mana.Entity.announce`, `Mana.Privacy.erase` — inside a function given to
+      `Mana.Entity.announce` — inside a function given to
       `Ash.Changeset.before_action/after_action/around_action` or to a
       transaction opened by hand (`Ash.transact`, `Repo.transaction`), in a
       change's `change/3` body, and a broadcast or notice inside
@@ -57,7 +56,10 @@ defmodule ManaLint.Check.AshEffectInTransactionHook do
       - a live update is a `Mana.Entity` announcement, a notice a declared
         `Mana.Notifications` notify — both already deliver after commit.
 
-      `before_transaction`, `Oban.insert` and notifier modules are not flagged.
+      `before_transaction`, `Oban.insert` and notifier modules are not flagged,
+      nor `Mana.Privacy.erase`: its rows, history and stored objects follow the
+      transaction it runs in (objects are deleted after the commit), so calling
+      it inside the transaction that also closes the account is the atomic way.
       Calls are followed into the project's own functions, so a hook calling
       `Billing.refund/1` that calls Stripe is flagged at the hook, with the
       path in the message.

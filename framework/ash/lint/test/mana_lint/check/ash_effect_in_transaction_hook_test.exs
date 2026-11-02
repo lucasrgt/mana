@@ -154,7 +154,7 @@ defmodule ManaLint.Check.AshEffectInTransactionHookTest do
     end)
   end
 
-  test "a transaction opened by hand, and Mana.Privacy.erase as an effect" do
+  test "a transaction opened by hand; Mana.Privacy.erase in one is the atomic way, not an effect" do
     """
     defmodule App.Expire do
       def run(charge) do
@@ -167,11 +167,9 @@ defmodule ManaLint.Check.AshEffectInTransactionHookTest do
     """
     |> to_source_file()
     |> run_check(Check)
-    |> assert_issues(fn issues ->
-      assert issues |> Enum.map(& &1.trigger) |> Enum.sort() ==
-               ["App.Payments.Stripe.expire_checkout", "Mana.Privacy.erase"]
-
-      assert Enum.all?(issues, &(&1.message =~ "in its transaction"))
+    |> assert_issue(fn issue ->
+      assert issue.trigger == "App.Payments.Stripe.expire_checkout"
+      assert issue.message =~ "in its transaction"
     end)
   end
 

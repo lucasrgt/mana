@@ -28,7 +28,11 @@ defmodule ManaLint do
     ManaLint.Check.PersistentTermHotWrite,
     ManaLint.Check.TableScanCron,
     ManaLint.Check.BroadRescue,
-    ManaLint.Check.ExternalPostWithoutIdempotencyKey
+    ManaLint.Check.ExternalPostWithoutIdempotencyKey,
+    ManaLint.Check.RecordBroadcast,
+    ManaLint.Check.RecordDateJob,
+    ManaLint.Check.ImperativeNotice,
+    ManaLint.Check.BrazilianIdentifier
   ]
 
   @doc "The checks the plugin enables."
