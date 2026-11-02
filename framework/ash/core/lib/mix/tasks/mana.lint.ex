@@ -32,7 +32,8 @@ defmodule Mix.Tasks.Mana.Lint do
     %{
       what: "a Brazilian identifier (CPF, CNPJ, CEP, phone or plate)",
       use: "Mana.BR",
-      pattern: ~r/def (valid|format|mask|normalize|parse)_?\w*(cpf|cnpj|cep|plate)|\\d\{3\}\\?\.?\\d\{3\}\\?\.?\\d\{3\}|\\d\{5\}-\??\\d\{3\}/i
+      pattern:
+        ~r/def (valid|format|mask|normalize|parse)_?\w*(cpf|cnpj|cep|plate)|\\d\{3\}\\?\.?\\d\{3\}\\?\.?\\d\{3\}|\\d\{5\}-\??\\d\{3\}/i
     }
   ]
 
@@ -69,5 +70,11 @@ defmodule Mix.Tasks.Mana.Lint do
   end
 
   defp paths([]), do: Path.wildcard("lib/**/*.ex")
-  defp paths(args), do: Enum.flat_map(args, &if(File.dir?(&1), do: Path.wildcard(Path.join(&1, "**/*.ex")), else: [&1]))
+
+  defp paths(args),
+    do:
+      Enum.flat_map(
+        args,
+        &if(File.dir?(&1), do: Path.wildcard(Path.join(&1, "**/*.ex")), else: [&1])
+      )
 end

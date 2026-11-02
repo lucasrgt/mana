@@ -11,7 +11,8 @@ defmodule ManaSession.MixProject do
         {:ash_authentication, "~> 4.15.0"},
         {:ash_postgres, "~> 2.0"},
         {:plug, "~> 1.18"},
-        {:jason, "~> 1.4"}
+        {:jason, "~> 1.4"},
+        {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
       ]
     ]
   end

@@ -30,7 +30,13 @@ defmodule Mana.Explore.Lock do
   @doc "`lock` as stable, pretty JSON."
   def encode(lock), do: lock |> ordered() |> Jason.encode!(pretty: true) |> Kernel.<>("\n")
 
-  defp ordered(map) when is_map(map), do: map |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(fn {k, v} -> {k, ordered(v)} end) |> Jason.OrderedObject.new()
+  defp ordered(map) when is_map(map),
+    do:
+      map
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map(fn {k, v} -> {k, ordered(v)} end)
+      |> Jason.OrderedObject.new()
+
   defp ordered(list) when is_list(list), do: Enum.map(list, &ordered/1)
   defp ordered(value), do: value
 
@@ -43,7 +49,8 @@ defmodule Mana.Explore.Lock do
         shapes_old = Map.get(old, type, %{}),
         shapes_new = Map.get(new, type, %{}),
         shape <- Enum.sort(Enum.uniq(Map.keys(shapes_old) ++ Map.keys(shapes_new))),
-        sentence <- shape_diff(type, shape, Map.get(shapes_old, shape), Map.get(shapes_new, shape)),
+        sentence <-
+          shape_diff(type, shape, Map.get(shapes_old, shape), Map.get(shapes_new, shape)),
         do: sentence
   end
 
@@ -55,8 +62,14 @@ defmodule Mana.Explore.Lock do
         before = MapSet.new(Map.get(old, actor, [])),
         now = MapSet.new(Map.get(new, actor, [])),
         sentence <-
-          Enum.map(Enum.sort(MapSet.difference(before, now)), &"`#{&1}` is no longer offered to #{actor} on #{where(type, shape)}") ++
-            Enum.map(Enum.sort(MapSet.difference(now, before)), &"`#{&1}` is now offered to #{actor} on #{where(type, shape)}"),
+          Enum.map(
+            Enum.sort(MapSet.difference(before, now)),
+            &"`#{&1}` is no longer offered to #{actor} on #{where(type, shape)}"
+          ) ++
+            Enum.map(
+              Enum.sort(MapSet.difference(now, before)),
+              &"`#{&1}` is now offered to #{actor} on #{where(type, shape)}"
+            ),
         do: sentence
   end
 

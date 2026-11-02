@@ -33,8 +33,10 @@ defmodule Moments.ActionTrace.Telemetry do
     :ok = :telemetry.attach_many(id, Enum.uniq(events), &__MODULE__.handle_event/4, mapping)
     query_id = {id, :queries}
     :telemetry.detach(query_id)
+
     if event = Keyword.get(options, :repo_event),
       do: :ok = :telemetry.attach(query_id, event, &__MODULE__.handle_query/4, nil)
+
     {:ok, {id, query_id}}
   end
 
@@ -54,7 +56,14 @@ defmodule Moments.ActionTrace.Telemetry do
           action = metadata[:action]
 
           if is_atom(action) and !is_nil(action) and Ash.Resource.Info.action(resource, action),
-            do: Moments.ActionTrace.observe_bulk(kind, domain, resource, action, measurements[:duration])
+            do:
+              Moments.ActionTrace.observe_bulk(
+                kind,
+                domain,
+                resource,
+                action,
+                measurements[:duration]
+              )
 
         _ ->
           :ok

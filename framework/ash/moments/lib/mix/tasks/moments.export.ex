@@ -6,11 +6,20 @@ defmodule Mix.Tasks.Moments.Export do
     Mix.Task.run("compile")
     modules = Enum.map(String.split(module, ","), &Module.safe_concat(String.split(&1, ".")))
     opts = [source_root: output |> Path.expand() |> Path.dirname()]
-    manifest = case modules do
-      [single] -> Moments.Manifest.build(single, opts)
-      many -> Moments.Manifest.build_many(many, opts)
-    end
-    manifest = Map.put(manifest, "backendGraph", Moments.BackendGraph.build(modules, manifest, output, before))
+
+    manifest =
+      case modules do
+        [single] -> Moments.Manifest.build(single, opts)
+        many -> Moments.Manifest.build_many(many, opts)
+      end
+
+    manifest =
+      Map.put(
+        manifest,
+        "backendGraph",
+        Moments.BackendGraph.build(modules, manifest, output, before)
+      )
+
     contents = Jason.encode!(manifest, pretty: true) <> "\n"
     File.mkdir_p!(Path.dirname(output))
     File.write!(output <> ".tmp", contents)

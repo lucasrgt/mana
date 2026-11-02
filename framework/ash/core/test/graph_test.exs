@@ -1,6 +1,9 @@
 defmodule GraphTest.KnobValue do
   @moduledoc false
-  use Ash.Resource, domain: GraphTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Knobs.Store]
+  use Ash.Resource,
+    domain: GraphTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Knobs.Store]
 end
 
 defmodule GraphTest.Knobs do
@@ -12,11 +15,19 @@ end
 
 defmodule GraphTest.Booking do
   @moduledoc false
-  use Ash.Resource, domain: GraphTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.Views, Mana.Entity]
+  use Ash.Resource,
+    domain: GraphTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.Views, Mana.Entity]
 
   attributes do
     uuid_primary_key(:id)
-    attribute(:status, :atom, constraints: [one_of: [:open, :paid, :cancelled, :expired]], default: :open, public?: true)
+
+    attribute(:status, :atom,
+      constraints: [one_of: [:open, :paid, :cancelled, :expired]],
+      default: :open,
+      public?: true
+    )
   end
 
   actions do
@@ -54,7 +65,10 @@ end
 
 defmodule GraphTest.Note do
   @moduledoc false
-  use Ash.Resource, domain: GraphTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.Views]
+  use Ash.Resource,
+    domain: GraphTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.Views]
 
   attributes do
     uuid_primary_key(:id)
@@ -90,19 +104,46 @@ defmodule Mana.GraphTest do
   use ExUnit.Case, async: true
 
   setup_all do
-    path = Path.join(System.tmp_dir!(), "graph-manifest-#{System.unique_integer([:positive])}.json")
+    path =
+      Path.join(System.tmp_dir!(), "graph-manifest-#{System.unique_integer([:positive])}.json")
 
-    File.write!(path, Jason.encode!(%{"moments" => %{
-      "checkout-paid" => %{"steps" => [%{"kind" => "tap", "target" => "verb:booking.pay", "verb" => "booking.pay"}], "checks" => []},
-      "cancel-shows" => %{"steps" => [%{"kind" => "tap", "target" => "verb:booking.cancel:abc"}], "checks" => [%{"kind" => "offered", "verb" => "booking.reopen"}]}
-    }}))
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "moments" => %{
+          "checkout-paid" => %{
+            "steps" => [
+              %{"kind" => "tap", "target" => "verb:booking.pay", "verb" => "booking.pay"}
+            ],
+            "checks" => []
+          },
+          "cancel-shows" => %{
+            "steps" => [%{"kind" => "tap", "target" => "verb:booking.cancel:abc"}],
+            "checks" => [%{"kind" => "offered", "verb" => "booking.reopen"}]
+          }
+        }
+      })
+    )
 
-    graph = Mana.Graph.build([GraphTest.Domain], manifests: [path], knobs: GraphTest.Knobs, screens: %{"booking.apply_coupon" => ["lib/checkout/view.dart"]})
+    graph =
+      Mana.Graph.build([GraphTest.Domain],
+        manifests: [path],
+        knobs: GraphTest.Knobs,
+        screens: %{"booking.apply_coupon" => ["lib/checkout/view.dart"]}
+      )
+
     {:ok, graph: graph}
   end
 
   test "verbs no Moment names", %{graph: graph} do
-    assert Mana.Graph.query(graph, :verbs_without_moment) == ["booking.apply_coupon", "booking.archive", "booking.book", "booking.expire", "booking.tip", "note.pin"]
+    assert Mana.Graph.query(graph, :verbs_without_moment) == [
+             "booking.apply_coupon",
+             "booking.archive",
+             "booking.book",
+             "booking.expire",
+             "booking.tip",
+             "note.pin"
+           ]
   end
 
   test "which Moments prove a verb, by step, check or verb key", %{graph: graph} do
@@ -111,14 +152,24 @@ defmodule Mana.GraphTest do
     assert Mana.Graph.query(graph, {:proves, "booking.reopen"}) == ["cancel-shows"]
   end
 
-  test "what a knob guards: its own verbs and every verb of the features it enables", %{graph: graph} do
+  test "what a knob guards: its own verbs and every verb of the features it enables", %{
+    graph: graph
+  } do
     assert Mana.Graph.query(graph, {:knob, "tipping"}) == %{guards: ["booking.tip"], features: []}
-    assert Mana.Graph.query(graph, {:knob, "coupons"}) == %{guards: ["booking.apply_coupon"], features: ["checkout/coupon"]}
+
+    assert Mana.Graph.query(graph, {:knob, "coupons"}) == %{
+             guards: ["booking.apply_coupon"],
+             features: ["checkout/coupon"]
+           }
   end
 
   test "dead verbs: reached by no Moment, screen, agent entry, deadline or flow", %{graph: graph} do
     # pin is reachable by agents through the note entry; expire by its deadline
-    assert Mana.Graph.query(graph, :dead_verbs) == ["booking.archive", "booking.book", "booking.tip"]
+    assert Mana.Graph.query(graph, :dead_verbs) == [
+             "booking.archive",
+             "booking.book",
+             "booking.tip"
+           ]
   end
 
   test "everything around one verb, and stable JSON", %{graph: graph} do

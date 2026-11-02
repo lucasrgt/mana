@@ -35,12 +35,16 @@ defmodule Mana.Primitive do
     catalog = Keyword.fetch!(opts, :catalog)
     moments = Keyword.get(opts, :moments, [])
 
-    unless String.starts_with?(contract, "x-mana-"), do: raise(ArgumentError, "a primitive's contract key starts with x-mana-")
-    unless moments -- @hooks == [], do: raise(ArgumentError, "Moments hooks are #{inspect(@hooks)}")
+    unless String.starts_with?(contract, "x-mana-"),
+      do: raise(ArgumentError, "a primitive's contract key starts with x-mana-")
+
+    unless moments -- @hooks == [],
+      do: raise(ArgumentError, "Moments hooks are #{inspect(@hooks)}")
 
     quote do
       @behaviour Mana.Primitive
-      def __mana_primitive__, do: %{contract: unquote(contract), catalog: unquote(catalog), moments: unquote(moments)}
+      def __mana_primitive__,
+        do: %{contract: unquote(contract), catalog: unquote(catalog), moments: unquote(moments)}
     end
   end
 
@@ -55,7 +59,8 @@ defmodule Mana.Primitive do
   @doc "The primitives a resource uses."
   def of(resource), do: Enum.filter(Spark.extensions(resource), &primitive?/1)
 
-  def primitive?(module), do: Code.ensure_loaded?(module) and function_exported?(module, :__mana_primitive__, 0)
+  def primitive?(module),
+    do: Code.ensure_loaded?(module) and function_exported?(module, :__mana_primitive__, 0)
 
   @doc "Each resource's primitive contracts on its schema, and the primitives used under `info.x-mana-primitives`."
   def put_contracts(spec, domains) do
@@ -74,7 +79,11 @@ defmodule Mana.Primitive do
 
     spec =
       Enum.reduce(placed, spec, fn {type, primitive, value}, spec ->
-        put_in(spec, ["components", "schemas", type, primitive.__mana_primitive__().contract], value)
+        put_in(
+          spec,
+          ["components", "schemas", type, primitive.__mana_primitive__().contract],
+          value
+        )
       end)
 
     case placed |> Enum.map(&elem(&1, 1)) |> Enum.uniq() do
@@ -85,10 +94,20 @@ defmodule Mana.Primitive do
         manifest =
           for primitive <- Enum.sort_by(used, & &1.__mana_primitive__().contract) do
             meta = primitive.__mana_primitive__()
-            %{"contract" => meta.contract, "catalog" => meta.catalog, "moments" => Enum.map(meta.moments, &to_string/1)}
+
+            %{
+              "contract" => meta.contract,
+              "catalog" => meta.catalog,
+              "moments" => Enum.map(meta.moments, &to_string/1)
+            }
           end
 
-        Map.update(spec, "info", %{"x-mana-primitives" => manifest}, &Map.put(&1, "x-mana-primitives", manifest))
+        Map.update(
+          spec,
+          "info",
+          %{"x-mana-primitives" => manifest},
+          &Map.put(&1, "x-mana-primitives", manifest)
+        )
     end
   end
 end

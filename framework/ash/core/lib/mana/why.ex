@@ -16,7 +16,13 @@ defmodule Mana.Why do
     steps = if root = opts[:root], do: gesture_steps(root), else: %{}
 
     for log <- List.wrap(logs),
-        entry <- log |> Ash.Query.for_read(:read) |> Ash.Query.filter(outcome == :done) |> Ash.Query.sort(at: :desc) |> Ash.Query.limit(opts[:scan] || 2000) |> Ash.read!(authorize?: false),
+        entry <-
+          log
+          |> Ash.Query.for_read(:read)
+          |> Ash.Query.filter(outcome == :done)
+          |> Ash.Query.sort(at: :desc)
+          |> Ash.Query.limit(opts[:scan] || 2000)
+          |> Ash.read!(authorize?: false),
         {field, after_value} <- entry.after,
         matches?(after_value, text) do
       gesture = entry.trace && String.replace_prefix(entry.trace, "gesture:", "")
@@ -37,7 +43,9 @@ defmodule Mana.Why do
     |> Enum.take(opts[:limit] || 20)
   end
 
-  defp matches?(value, text) when is_binary(value), do: value == text or String.contains?(value, text)
+  defp matches?(value, text) when is_binary(value),
+    do: value == text or String.contains?(value, text)
+
   defp matches?(value, text) when is_number(value) or is_atom(value), do: to_string(value) == text
   defp matches?(_value, _text), do: false
 
@@ -78,6 +86,7 @@ defmodule Mana.Why do
   defp local(report, root) do
     if File.exists?(report) or not String.contains?(report, "/apps/"),
       do: report,
-      else: Path.join(root, "apps/" <> (report |> String.split("/apps/", parts: 2) |> List.last()))
+      else:
+        Path.join(root, "apps/" <> (report |> String.split("/apps/", parts: 2) |> List.last()))
   end
 end

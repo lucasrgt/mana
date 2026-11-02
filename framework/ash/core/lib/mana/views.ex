@@ -29,10 +29,17 @@ defmodule Mana.Views do
     identifier: :name,
     schema: [
       name: [type: :atom, required: true],
-      fields: [type: {:list, :atom}, required: true, doc: "Public attributes, calculations or aggregates the screen reads."],
+      fields: [
+        type: {:list, :atom},
+        required: true,
+        doc: "Public attributes, calculations or aggregates the screen reads."
+      ],
       live: [type: :boolean, default: false, doc: "The screen follows Mana.Entity announcements."],
       describe: [type: :string, doc: "The screen or component this view feeds."],
-      entry: [type: :atom, doc: "A read action that lists records in this view; agents `open` it (`Mana.Agent`)."]
+      entry: [
+        type: :atom,
+        doc: "A read action that lists records in this view; agents `open` it (`Mana.Agent`)."
+      ]
     ]
   }
 
@@ -51,12 +58,18 @@ defmodule Mana.Views do
   def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:views])
 
   def view!(resource, name),
-    do: Enum.find(declared(resource), &(&1.name == name)) || raise(ArgumentError, "#{inspect(resource)} has no view #{inspect(name)}")
+    do:
+      Enum.find(declared(resource), &(&1.name == name)) ||
+        raise(ArgumentError, "#{inspect(resource)} has no view #{inspect(name)}")
 
   @doc "The calculations and aggregates a read must load for `view`."
   def loads(resource, name) do
     loadable =
-      MapSet.new(Ash.Resource.Info.public_calculations(resource) ++ Ash.Resource.Info.public_aggregates(resource), & &1.name)
+      MapSet.new(
+        Ash.Resource.Info.public_calculations(resource) ++
+          Ash.Resource.Info.public_aggregates(resource),
+        & &1.name
+      )
 
     resource |> view!(name) |> Map.fetch!(:fields) |> Enum.filter(&(&1 in loadable))
   end
@@ -71,7 +84,11 @@ defmodule Mana.Views do
     for view <- declared(resource) do
       fields = Enum.uniq(view.fields ++ required)
 
-      %{"name" => to_string(view.name), "fields" => Enum.map(fields, &to_string/1), "live" => view.live}
+      %{
+        "name" => to_string(view.name),
+        "fields" => Enum.map(fields, &to_string/1),
+        "live" => view.live
+      }
       |> then(&if view.describe, do: Map.put(&1, "describe", view.describe), else: &1)
     end
   end
@@ -83,11 +100,14 @@ defmodule Mana.Views.Load do
 
   @impl true
   def init(opts) do
-    if is_atom(opts[:view]) and not is_nil(opts[:view]), do: {:ok, opts}, else: {:error, "Mana.Views.Load needs view: :name"}
+    if is_atom(opts[:view]) and not is_nil(opts[:view]),
+      do: {:ok, opts},
+      else: {:error, "Mana.Views.Load needs view: :name"}
   end
 
   @impl true
-  def prepare(query, opts, _context), do: Ash.Query.load(query, Mana.Views.loads(query.resource, opts[:view]))
+  def prepare(query, opts, _context),
+    do: Ash.Query.load(query, Mana.Views.loads(query.resource, opts[:view]))
 end
 
 defmodule Mana.Views.Validate do
@@ -118,7 +138,8 @@ defmodule Mana.Views.Validate do
             Spark.Error.DslError.exception(
               module: module,
               path: [:views, view.name],
-              message: "view #{inspect(view.name)} reads fields that are not public: #{inspect(missing)}"
+              message:
+                "view #{inspect(view.name)} reads fields that are not public: #{inspect(missing)}"
             )}}
       end
     end)

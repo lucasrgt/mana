@@ -21,7 +21,11 @@ if Code.ensure_loaded?(Oban.Job) do
 
       jobs =
         Oban.Job
-        |> Ecto.Query.where([j], j.worker in @workers and j.state in ["scheduled", "available", "retryable"] and j.scheduled_at <= ^horizon)
+        |> Ecto.Query.where(
+          [j],
+          j.worker in @workers and j.state in ["scheduled", "available", "retryable"] and
+            j.scheduled_at <= ^horizon
+        )
         |> Ecto.Query.order_by([j], asc: j.scheduled_at)
         |> repo.all()
 

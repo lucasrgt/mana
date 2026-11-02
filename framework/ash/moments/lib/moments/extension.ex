@@ -16,7 +16,17 @@ end
 
 defmodule Moments.Check do
   @moduledoc false
-  defstruct [:name, :kind, :field, :equals, :match, :scope, :verb, :__identifier__, :__spark_metadata__]
+  defstruct [
+    :name,
+    :kind,
+    :field,
+    :equals,
+    :match,
+    :scope,
+    :verb,
+    :__identifier__,
+    :__spark_metadata__
+  ]
 end
 
 defmodule Moments.Scene do
@@ -37,7 +47,23 @@ end
 
 defmodule Moments.Step do
   @moduledoc false
-  defstruct [:name, :tap, :fill, :from, :reveal, :back, :swipe, :direction, :long_press, :submit, :verb, :on, :until, :__identifier__, :__spark_metadata__]
+  defstruct [
+    :name,
+    :tap,
+    :fill,
+    :from,
+    :reveal,
+    :back,
+    :swipe,
+    :direction,
+    :long_press,
+    :submit,
+    :verb,
+    :on,
+    :until,
+    :__identifier__,
+    :__spark_metadata__
+  ]
 end
 
 defmodule Moments.Extension do
@@ -68,13 +94,17 @@ defmodule Moments.Extension do
     identifier: :name,
     schema: [
       name: [type: :atom, required: true],
-      kind: [type: {:in, [:restored, :ui_equals, :backend_equals, :offered, :not_offered]}, required: true],
+      kind: [
+        type: {:in, [:restored, :ui_equals, :backend_equals, :offered, :not_offered]},
+        required: true
+      ],
       field: [type: :atom],
       equals: [type: :any],
       match: [type: :atom],
       verb: [
         type: {:tuple, [:atom, :atom]},
-        doc: "`{Resource or :type, :verb}` for `:offered` / `:not_offered`: whether a mounted control (`VerbGate`) offers it."
+        doc:
+          "`{Resource or :type, :verb}` for `:offered` / `:not_offered`: whether a mounted control (`VerbGate`) offers it."
       ],
       scope: [type: {:in, [:step, :final]}, default: :final]
     ]
@@ -88,17 +118,39 @@ defmodule Moments.Extension do
       name: [type: :atom, required: true],
       tap: [type: :string, doc: "Taps the widget with this key."],
       fill: [type: :string, doc: "Types `from`'s value into the text field with this key."],
-      reveal: [type: :string, doc: "Scrolls the widget with this key into view, building it if a lazy list has not yet."],
-      back: [type: :boolean, doc: "Presses the platform's back: closes the dialog or sheet on top, or leaves the page."],
-      swipe: [type: :string, doc: "Drags the widget with this key towards `direction` (a page view, a carousel, a dismissible)."],
+      reveal: [
+        type: :string,
+        doc: "Scrolls the widget with this key into view, building it if a lazy list has not yet."
+      ],
+      back: [
+        type: :boolean,
+        doc: "Presses the platform's back: closes the dialog or sheet on top, or leaves the page."
+      ],
+      swipe: [
+        type: :string,
+        doc:
+          "Drags the widget with this key towards `direction` (a page view, a carousel, a dismissible)."
+      ],
       direction: [type: {:in, [:left, :right, :up, :down]}, doc: "Where `swipe` drags."],
-      long_press: [type: :string, doc: "Holds the widget with this key past the long-press timeout."],
-      submit: [type: :string, doc: "Presses the keyboard's action key (done, search, send) on the text field with this key."],
+      long_press: [
+        type: :string,
+        doc: "Holds the widget with this key past the long-press timeout."
+      ],
+      submit: [
+        type: :string,
+        doc:
+          "Presses the keyboard's action key (done, search, send) on the text field with this key."
+      ],
       verb: [
         type: {:tuple, [:atom, :atom]},
-        doc: "Taps the control that performs `{Resource or :type, :verb}` (`VerbGate`); the export refuses a verb the resource does not declare."
+        doc:
+          "Taps the control that performs `{Resource or :type, :verb}` (`VerbGate`); the export refuses a verb the resource does not declare."
       ],
-      on: [type: :string, doc: "With `verb`, the input reference whose value is the record id: taps that record's control."],
+      on: [
+        type: :string,
+        doc:
+          "With `verb`, the input reference whose value is the record id: taps that record's control."
+      ],
       from: [type: :string],
       until: [type: {:list, :atom}, default: []]
     ]
@@ -111,12 +163,16 @@ defmodule Moments.Extension do
     identifier: :name,
     schema: [
       name: [type: :atom, required: true],
-      from: [type: :atom, doc: "Parent Moment; declares ancestry, not a backend base or execution dependency."],
+      from: [
+        type: :atom,
+        doc: "Parent Moment; declares ancestry, not a backend base or execution dependency."
+      ],
       description: [type: :string, required: true],
       backend: [type: :atom],
       platforms: [
         type: {:list, {:in, [:web, :native]}},
-        doc: "Where the situation exists (e.g. `[:web]` for a web-only button); omitted means every platform."
+        doc:
+          "Where the situation exists (e.g. `[:web]` for a web-only button); omitted means every platform."
       ],
       defaults: [type: :keyword_list, default: []]
     ]

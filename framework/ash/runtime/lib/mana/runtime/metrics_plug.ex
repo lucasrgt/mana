@@ -9,9 +9,15 @@ defmodule Mana.Runtime.MetricsPlug do
     token = Application.get_env(app, :metrics_token)
 
     cond do
-      is_nil(token) -> respond(conn, 404, "")
-      conn.method != "GET" -> respond(conn, 405, "")
-      not authorized?(conn, token) -> respond(conn, 401, "")
+      is_nil(token) ->
+        respond(conn, 404, "")
+
+      conn.method != "GET" ->
+        respond(conn, 405, "")
+
+      not authorized?(conn, token) ->
+        respond(conn, 401, "")
+
       true ->
         conn
         |> put_resp_content_type("text/plain", "utf-8")
@@ -25,7 +31,9 @@ defmodule Mana.Runtime.MetricsPlug do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> supplied] when byte_size(supplied) == byte_size(token) ->
         Plug.Crypto.secure_compare(supplied, token)
-      _ -> false
+
+      _ ->
+        false
     end
   end
 

@@ -121,13 +121,48 @@ defmodule Moments.ActionTraceTest do
   end
 
   test "a request names the records it changed, by field name only, and nothing outside a request" do
-    assert Trace.annotate_change(%{resource: Some.Thing, subject: "id-1", action: :accept, outcome: "done", fields: [:status]}) == :ok
+    assert Trace.annotate_change(%{
+             resource: Some.Thing,
+             subject: "id-1",
+             action: :accept,
+             outcome: "done",
+             fields: [:status]
+           }) == :ok
+
     Trace.begin_request(id())
-    Trace.annotate_change(%{resource: Some.Thing, subject: "id-1", action: :accept, outcome: "done", fields: [:status, :accepted_at]})
-    Enum.each(1..20, fn n -> Trace.annotate_change(%{resource: Some.Thing, subject: "id-#{n}", action: :touch, outcome: "failed", fields: []}) end)
+
+    Trace.annotate_change(%{
+      resource: Some.Thing,
+      subject: "id-1",
+      action: :accept,
+      outcome: "done",
+      fields: [:status, :accepted_at]
+    })
+
+    Enum.each(1..20, fn n ->
+      Trace.annotate_change(%{
+        resource: Some.Thing,
+        subject: "id-#{n}",
+        action: :touch,
+        outcome: "failed",
+        fields: []
+      })
+    end)
+
     receipt = Trace.finish_request()
     assert receipt.version == 3
-    assert [%{resource: "Some.Thing", subject: "id-1", action: "accept", outcome: "done", fields: ["status", "accepted_at"]} | _] = receipt.changes
+
+    assert [
+             %{
+               resource: "Some.Thing",
+               subject: "id-1",
+               action: "accept",
+               outcome: "done",
+               fields: ["status", "accepted_at"]
+             }
+             | _
+           ] = receipt.changes
+
     assert length(receipt.changes) == 16
 
     Trace.begin_request(id())
@@ -202,17 +237,26 @@ defmodule Moments.ActionTraceTest do
 
   test "request profile aggregates only attributed Repo events, including native Ash task context" do
     event = [:action_trace_test, :repo, :query]
-    start_supervised!({Moments.ActionTrace.Telemetry,
-      id: make_ref(), domains: [Domain], repo_event: event})
+
+    start_supervised!(
+      {Moments.ActionTrace.Telemetry, id: make_ref(), domains: [Domain], repo_event: event}
+    )
+
     Trace.begin_request(id())
     read()
     native = System.convert_time_unit(1200, :microsecond, :native)
     measurements = %{total_time: native, query_time: native, queue_time: 0, decode_time: 0}
     :telemetry.execute([:other_repo, :query], measurements, %{})
     :telemetry.execute(event, measurements, %{query: "private-sql", params: ["private-params"]})
-    task = Ash.ProcessHelpers.async(fn ->
-      :telemetry.execute(event, measurements, %{result: {:error, "private-error"}})
-    end, tracer: [Trace])
+
+    task =
+      Ash.ProcessHelpers.async(
+        fn ->
+          :telemetry.execute(event, measurements, %{result: {:error, "private-error"}})
+        end,
+        tracer: [Trace]
+      )
+
     Task.await(task)
     receipt = Trace.finish_request()
     assert receipt.version == 2

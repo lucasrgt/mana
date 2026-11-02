@@ -27,19 +27,28 @@ defmodule Mana.History do
     name: :history,
     schema: [
       log: [type: :atom, required: true, doc: "The resource using `Mana.History.Log`."],
-      redact: [type: {:list, :atom}, default: [], doc: "Inputs and attributes kept only as `[redacted]`."],
+      redact: [
+        type: {:list, :atom},
+        default: [],
+        doc: "Inputs and attributes kept only as `[redacted]`."
+      ],
       ignore: [type: {:list, :atom}, default: [], doc: "Actions not recorded."]
     ]
   }
 
   use Spark.Dsl.Extension, sections: [@history], transformers: [Mana.History.Transformer]
-  use Mana.Primitive, contract: "x-mana-history", catalog: "history", moments: [:observe, :capture, :restore]
+
+  use Mana.Primitive,
+    contract: "x-mana-history",
+    catalog: "history",
+    moments: [:observe, :capture, :restore]
 
   @doc "Moments `observe`: the record's entries, oldest first (`export/3`)."
   def observe(log, subject_type, subject_id), do: export(log, subject_type, subject_id)
 
   @doc "Moments `capture`: the record's history as a portable fixture (`fixture/4`)."
-  def capture(log, subject_type, subject_id, roles), do: fixture(log, subject_type, subject_id, roles)
+  def capture(log, subject_type, subject_id, roles),
+    do: fixture(log, subject_type, subject_id, roles)
 
   @doc "Moments `restore`: a captured history replayed into a new record (`replay/3`)."
   def restore(resource, entries, opts \\ []), do: replay(resource, entries, opts)
@@ -56,16 +65,25 @@ defmodule Mana.History do
     log = log(resource)
 
     type =
-      if Code.ensure_loaded?(AshJsonApi.Resource.Info) and AshJsonApi.Resource in Spark.extensions(log),
-        do: to_string(AshJsonApi.Resource.Info.type(log))
+      if Code.ensure_loaded?(AshJsonApi.Resource.Info) and
+           AshJsonApi.Resource in Spark.extensions(log),
+         do: to_string(AshJsonApi.Resource.Info.type(log))
 
-    [%{"log" => type, "subject" => Mana.Entity.type(resource), "redacted" => Enum.map(redact(resource), &to_string/1)}]
+    [
+      %{
+        "log" => type,
+        "subject" => Mana.Entity.type(resource),
+        "redacted" => Enum.map(redact(resource), &to_string/1)
+      }
+    ]
   end
 
   @doc "The entries of `subject_type`/`subject_id` that `actor` may read, newest first."
   def of(log, subject_type, subject_id, actor) do
     log
-    |> Ash.Query.for_read(:of, %{subject_type: subject_type, subject_id: to_string(subject_id)}, actor: actor)
+    |> Ash.Query.for_read(:of, %{subject_type: subject_type, subject_id: to_string(subject_id)},
+      actor: actor
+    )
     |> Ash.read!()
   end
 
@@ -102,11 +120,15 @@ defmodule Mana.History do
     with subject when not is_nil(subject) <- Mana.History.Log.subject(log, subject_type),
          {:ok, record} <- Ash.get(subject, subject_id, actor: actor) do
       now =
-        for attribute <- Ash.Resource.Info.public_attributes(subject), into: %{},
+        for attribute <- Ash.Resource.Info.public_attributes(subject),
+            into: %{},
             do: {to_string(attribute.name), plain(Map.get(record, attribute.name))}
 
       log
-      |> Ash.Query.filter(subject_type == ^subject_type and subject_id == ^to_string(subject_id) and outcome == :done and at > ^at)
+      |> Ash.Query.filter(
+        subject_type == ^subject_type and subject_id == ^to_string(subject_id) and
+          outcome == :done and at > ^at
+      )
       |> Ash.Query.sort(at: :desc)
       |> Ash.read!(authorize?: false)
       |> Enum.reduce(now, fn entry, state -> Map.merge(state, entry.before) end)
@@ -123,9 +145,14 @@ defmodule Mana.History do
   Only the subject's own actions are kept; notes replay nothing.
   """
   def fixture(log, subject_type, subject_id, roles) do
-    actions = for action <- Ash.Resource.Info.actions(Mana.History.Log.subject(log, subject_type)), into: MapSet.new(), do: to_string(action.name)
+    actions =
+      for action <- Ash.Resource.Info.actions(Mana.History.Log.subject(log, subject_type)),
+          into: MapSet.new(),
+          do: to_string(action.name)
 
-    for entry <- export(log, subject_type, subject_id), entry["outcome"] == "done", MapSet.member?(actions, entry["action"]) do
+    for entry <- export(log, subject_type, subject_id),
+        entry["outcome"] == "done",
+        MapSet.member?(actions, entry["action"]) do
       entry
       |> Map.put("actor_id", Map.get(roles, entry["actor_id"], "system"))
       |> Map.drop(["trace"])
@@ -157,10 +184,19 @@ defmodule Mana.History do
 
     params = Keyword.get(opts, :params, fn _action, params -> params end)
     offset = offset(entries, Keyword.get(opts, :times, :shift))
-    external = for verb <- Mana.Verbs.declared(resource), verb.external, into: MapSet.new(), do: to_string(verb.name)
+
+    external =
+      for verb <- Mana.Verbs.declared(resource),
+          verb.external,
+          into: MapSet.new(),
+          do: to_string(verb.name)
+
     skip_external? = Keyword.get(opts, :external) == :skip
 
-    actions = for action <- Ash.Resource.Info.actions(resource), into: MapSet.new(), do: to_string(action.name)
+    actions =
+      for action <- Ash.Resource.Info.actions(resource),
+          into: MapSet.new(),
+          do: to_string(action.name)
 
     entries
     |> Enum.filter(&(&1["outcome"] == "done" and MapSet.member?(actions, &1["action"])))
@@ -174,10 +210,17 @@ defmodule Mana.History do
 
       result =
         cond do
-          MapSet.member?(external, entry["verb"]) -> {:error, :external}
-          Enum.any?(Map.values(input), &(&1 == @redacted)) -> {:error, :redacted_input}
-          is_nil(record) -> resource |> Ash.Changeset.for_create(action, input, opts) |> Ash.create()
-          true -> record |> Ash.Changeset.for_update(action, input, opts) |> Ash.update()
+          MapSet.member?(external, entry["verb"]) ->
+            {:error, :external}
+
+          Enum.any?(Map.values(input), &(&1 == @redacted)) ->
+            {:error, :redacted_input}
+
+          is_nil(record) ->
+            resource |> Ash.Changeset.for_create(action, input, opts) |> Ash.create()
+
+          true ->
+            record |> Ash.Changeset.for_update(action, input, opts) |> Ash.update()
         end
 
       case result do
@@ -203,7 +246,10 @@ defmodule Mana.History do
 
   @doc false
   def shift(value, 0), do: value
-  def shift(map, offset) when is_map(map), do: Map.new(map, fn {key, value} -> {key, shift(value, offset)} end)
+
+  def shift(map, offset) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, shift(value, offset)} end)
+
   def shift(list, offset) when is_list(list), do: Enum.map(list, &shift(&1, offset))
 
   def shift(text, offset) when is_binary(text) do
@@ -224,7 +270,9 @@ defmodule Mana.History do
     actor = context[:private][:actor]
     {kind, via} = author(actor, context)
     data = original(changeset)
-    changed = if outcome == :done and record, do: changed(resource, data, record, action.type), else: []
+
+    changed =
+      if outcome == :done and record, do: changed(resource, data, record, action.type), else: []
 
     %{
       subject_type: Mana.Entity.type(resource),
@@ -235,8 +283,13 @@ defmodule Mana.History do
       actor_kind: kind,
       via: via,
       params: changeset |> inputs() |> redacted(hidden),
-      before: if(action.type == :create, do: %{}, else: data |> Map.take(changed) |> redacted(hidden)),
-      after: if(action.type == :destroy or is_nil(record), do: %{}, else: record |> Map.take(changed) |> redacted(hidden)),
+      before:
+        if(action.type == :create, do: %{}, else: data |> Map.take(changed) |> redacted(hidden)),
+      after:
+        if(action.type == :destroy or is_nil(record),
+          do: %{},
+          else: record |> Map.take(changed) |> redacted(hidden)
+        ),
       outcome: outcome,
       error: error,
       summary: summary(resource, action.name),
@@ -295,7 +348,10 @@ defmodule Mana.History do
         _ -> :id
       end
 
-    value = (record && Map.get(record, key)) || Map.get(original(changeset), key) || Map.get(changeset.attributes, key) || filtered(changeset, key)
+    value =
+      (record && Map.get(record, key)) || Map.get(original(changeset), key) ||
+        Map.get(changeset.attributes, key) || filtered(changeset, key)
+
     if is_nil(value), do: "unsaved", else: to_string(value)
   end
 
@@ -333,6 +389,7 @@ defmodule Mana.History do
           name = accepted[to_string(key)],
           into: %{},
           do: {name, value}
+
     raw = Map.new(changeset.params || %{}, fn {key, value} -> {to_string(key), value} end)
 
     arguments =
@@ -340,7 +397,9 @@ defmodule Mana.History do
           argument.public?,
           Map.has_key?(changeset.arguments, argument.name),
           into: %{},
-          do: {argument.name, Map.get(raw, to_string(argument.name), changeset.arguments[argument.name])}
+          do:
+            {argument.name,
+             Map.get(raw, to_string(argument.name), changeset.arguments[argument.name])}
 
     Map.merge(attributes, arguments)
   end
@@ -360,7 +419,11 @@ defmodule Mana.History do
   end
 
   defp sensitive(resource, action) do
-    attributes = for attribute <- Ash.Resource.Info.attributes(resource), attribute.sensitive?, do: attribute.name
+    attributes =
+      for attribute <- Ash.Resource.Info.attributes(resource),
+          attribute.sensitive?,
+          do: attribute.name
+
     arguments = for argument <- action.arguments, argument.sensitive?, do: argument.name
     attributes ++ arguments
   end
@@ -377,10 +440,18 @@ defmodule Mana.History do
   defp plain(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp plain(%Date{} = value), do: Date.to_iso8601(value)
   defp plain(%Decimal{} = value), do: Decimal.to_string(value)
-  defp plain(%_{} = value), do: value |> Map.from_struct() |> Map.drop([:__meta__, :__metadata__]) |> plain()
-  defp plain(value) when is_map(value), do: Map.new(value, fn {k, v} -> {to_string(k), plain(v)} end)
+
+  defp plain(%_{} = value),
+    do: value |> Map.from_struct() |> Map.drop([:__meta__, :__metadata__]) |> plain()
+
+  defp plain(value) when is_map(value),
+    do: Map.new(value, fn {k, v} -> {to_string(k), plain(v)} end)
+
   defp plain(value) when is_list(value), do: Enum.map(value, &plain/1)
-  defp plain(value) when is_atom(value) and not is_boolean(value) and not is_nil(value), do: to_string(value)
+
+  defp plain(value) when is_atom(value) and not is_boolean(value) and not is_nil(value),
+    do: to_string(value)
+
   defp plain(value), do: value
 
   defp verb(resource, action) do
@@ -395,7 +466,11 @@ defmodule Mana.History do
   defp summary(resource, action) do
     narrated =
       if Mana.Verbs in Spark.extensions(resource),
-        do: Enum.find_value(Mana.Verbs.declared(resource), &(Mana.Verbs.action(&1) == action && &1.narrate))
+        do:
+          Enum.find_value(
+            Mana.Verbs.declared(resource),
+            &(Mana.Verbs.action(&1) == action && &1.narrate)
+          )
 
     narrated || action |> to_string() |> String.replace("_", " ")
   end
@@ -435,7 +510,12 @@ defmodule Mana.History.Record do
         |> Ash.Changeset.after_transaction(fn
           changeset, {:error, error} ->
             entry = Mana.History.entry(changeset, nil, :failed, Mana.History.error_code(error))
-            write(changeset.resource, Map.put(entry, :report, report(changeset.resource, entry, error)))
+
+            write(
+              changeset.resource,
+              Map.put(entry, :report, report(changeset.resource, entry, error))
+            )
+
             {:error, error}
 
           _changeset, result ->
@@ -456,7 +536,16 @@ defmodule Mana.History.Record do
   defp report(resource, entry, error) do
     with {module, function} <- Application.get_env(:mana_core, :error_reporter),
          %Ash.Error.Unknown{} = unknown <- Ash.Error.to_error_class(error) do
-      apply(module, function, [%{resource: resource, subject_type: entry.subject_type, subject_id: entry.subject_id, action: entry.action, actor_kind: entry.actor_kind}, unknown])
+      apply(module, function, [
+        %{
+          resource: resource,
+          subject_type: entry.subject_type,
+          subject_id: entry.subject_id,
+          action: entry.action,
+          actor_kind: entry.actor_kind
+        },
+        unknown
+      ])
     else
       _ -> nil
     end
@@ -467,7 +556,11 @@ defmodule Mana.History.Record do
   defp announce(resource, entry) do
     feature =
       if Mana.Verbs in Spark.extensions(resource),
-        do: Enum.find_value(Mana.Verbs.declared(resource), &(to_string(&1.name) == entry[:verb] && &1.feature))
+        do:
+          Enum.find_value(
+            Mana.Verbs.declared(resource),
+            &(to_string(&1.name) == entry[:verb] && &1.feature)
+          )
 
     :telemetry.execute([:mana, :history, :entry], %{count: 1}, %{
       resource: resource,
@@ -482,7 +575,8 @@ defmodule Mana.History.Record do
 
   # A Moments journey links each gesture's request to the records it changed.
   defp trace(resource, entry) do
-    if Code.ensure_loaded?(Moments.ActionTrace) and function_exported?(Moments.ActionTrace, :annotate_change, 1) do
+    if Code.ensure_loaded?(Moments.ActionTrace) and
+         function_exported?(Moments.ActionTrace, :annotate_change, 1) do
       apply(Moments.ActionTrace, :annotate_change, [
         %{
           resource: resource,
@@ -502,9 +596,17 @@ defmodule Mana.History.Record do
     trace(resource, entry)
     announce(resource, entry)
 
-    case resource |> Mana.History.log() |> Ash.Changeset.for_create(:record, entry) |> Ash.create(authorize?: false) do
-      {:ok, _} -> :ok
-      {:error, error} -> Logger.error("Mana.History could not record #{inspect(resource)}.#{entry.action}: #{Exception.message(error)}")
+    case resource
+         |> Mana.History.log()
+         |> Ash.Changeset.for_create(:record, entry)
+         |> Ash.create(authorize?: false) do
+      {:ok, _} ->
+        :ok
+
+      {:error, error} ->
+        Logger.error(
+          "Mana.History could not record #{inspect(resource)}.#{entry.action}: #{Exception.message(error)}"
+        )
     end
   end
 end
@@ -519,7 +621,10 @@ defmodule Mana.History.Transformer do
 
   def transform(dsl) do
     if Transformer.get_option(dsl, [:history], :log),
-      do: Ash.Resource.Builder.add_change(dsl, Mana.History.Record, on: [:create, :update, :destroy]),
+      do:
+        Ash.Resource.Builder.add_change(dsl, Mana.History.Record,
+          on: [:create, :update, :destroy]
+        ),
       else: {:ok, dsl}
   end
 end
@@ -546,7 +651,13 @@ defmodule Mana.History.Log do
 
   @log %Spark.Dsl.Section{
     name: :history_log,
-    schema: [subjects: [type: {:list, :atom}, required: true, doc: "The resources whose history this log keeps."]]
+    schema: [
+      subjects: [
+        type: {:list, :atom},
+        required: true,
+        doc: "The resources whose history this log keeps."
+      ]
+    ]
   }
 
   use Spark.Dsl.Extension, sections: [@log], transformers: [Mana.History.Log.Transformer]
@@ -565,34 +676,102 @@ defmodule Mana.History.Log.Transformer do
   def before?(_), do: true
 
   def transform(dsl) do
-    fields = [:subject_type, :subject_id, :action, :verb, :actor_id, :actor_kind, :via, :params, :before, :after, :outcome, :error, :summary, :trace, :report]
+    fields = [
+      :subject_type,
+      :subject_id,
+      :action,
+      :verb,
+      :actor_id,
+      :actor_kind,
+      :via,
+      :params,
+      :before,
+      :after,
+      :outcome,
+      :error,
+      :summary,
+      :trace,
+      :report
+    ]
 
-    with {:ok, dsl} <- Builder.add_new_attribute(dsl, :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false, default: &Ash.UUID.generate/0, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :subject_type, :string, allow_nil?: false, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :subject_id, :string, allow_nil?: false, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :action, :string, allow_nil?: false, public?: true),
+    with {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :id, :uuid,
+             primary_key?: true,
+             allow_nil?: false,
+             writable?: false,
+             default: &Ash.UUID.generate/0,
+             public?: true
+           ),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :subject_type, :string,
+             allow_nil?: false,
+             public?: true
+           ),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :subject_id, :string, allow_nil?: false, public?: true),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :action, :string, allow_nil?: false, public?: true),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :verb, :string, public?: true),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :actor_id, :uuid, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :actor_kind, :atom, allow_nil?: false, public?: true, constraints: [one_of: [:user, :system, :agent]]),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :actor_kind, :atom,
+             allow_nil?: false,
+             public?: true,
+             constraints: [one_of: [:user, :system, :agent]]
+           ),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :via, :string, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :params, :map, allow_nil?: false, default: %{}, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :before, :map, allow_nil?: false, default: %{}, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :after, :map, allow_nil?: false, default: %{}, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :outcome, :atom, allow_nil?: false, public?: true, constraints: [one_of: [:done, :failed]]),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :params, :map,
+             allow_nil?: false,
+             default: %{},
+             public?: true
+           ),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :before, :map,
+             allow_nil?: false,
+             default: %{},
+             public?: true
+           ),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :after, :map,
+             allow_nil?: false,
+             default: %{},
+             public?: true
+           ),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :outcome, :atom,
+             allow_nil?: false,
+             public?: true,
+             constraints: [one_of: [:done, :failed]]
+           ),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :error, :string, public?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :summary, :string, allow_nil?: false, public?: true),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :summary, :string, allow_nil?: false, public?: true),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :trace, :string, public?: true),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :report, :string, public?: true),
-         {:ok, dsl} <- Builder.add_new_create_timestamp(dsl, :at, type: :utc_datetime_usec, public?: true),
+         {:ok, dsl} <-
+           Builder.add_new_create_timestamp(dsl, :at, type: :utc_datetime_usec, public?: true),
          {:ok, dsl} <- Builder.add_new_action(dsl, :create, :record, accept: fields),
          {:ok, dsl} <- Builder.add_new_action(dsl, :destroy, :destroy, primary?: true),
-         {:ok, dsl} <- Builder.add_new_action(dsl, :update, :forget, accept: [:actor_id, :via], require_atomic?: false),
+         {:ok, dsl} <-
+           Builder.add_new_action(dsl, :update, :forget,
+             accept: [:actor_id, :via],
+             require_atomic?: false
+           ),
          {:ok, dsl} <- Builder.add_new_action(dsl, :read, :read, primary?: true),
          {:ok, type} <- Builder.build_action_argument(:subject_type, :string, allow_nil?: false),
          {:ok, id} <- Builder.build_action_argument(:subject_id, :string, allow_nil?: false),
          {:ok, readable} <- Builder.build_preparation(Mana.History.Readable),
-         {:ok, dsl} <- Builder.add_new_action(dsl, :read, :of, arguments: [type, id], preparations: [readable]),
-         {:ok, at} <- Builder.build_action_argument(:at, :string, allow_nil?: false, description: "An ISO 8601 moment, e.g. 2026-10-08T12:00:00Z.") do
+         {:ok, dsl} <-
+           Builder.add_new_action(dsl, :read, :of,
+             arguments: [type, id],
+             preparations: [readable]
+           ),
+         {:ok, at} <-
+           Builder.build_action_argument(:at, :string,
+             allow_nil?: false,
+             description: "An ISO 8601 moment, e.g. 2026-10-08T12:00:00Z."
+           ) do
       Builder.add_new_action(dsl, :action, :as_of,
         returns: :map,
         arguments: [type, id, at],
@@ -609,11 +788,25 @@ defmodule Mana.History.AsOf do
   @impl true
   def run(input, _opts, context) do
     with {:ok, at, _} <- DateTime.from_iso8601(input.arguments.at),
-         state when state != nil <- Mana.History.as_of(input.resource, input.arguments.subject_type, input.arguments.subject_id, at, context.actor) do
+         state when state != nil <-
+           Mana.History.as_of(
+             input.resource,
+             input.arguments.subject_type,
+             input.arguments.subject_id,
+             at,
+             context.actor
+           ) do
       {:ok, state}
     else
-      {:error, _} -> {:error, Ash.Error.Changes.InvalidArgument.exception(field: :at, message: "is not an ISO 8601 moment")}
-      nil -> {:error, Ash.Error.Query.NotFound.exception(resource: input.resource)}
+      {:error, _} ->
+        {:error,
+         Ash.Error.Changes.InvalidArgument.exception(
+           field: :at,
+           message: "is not an ISO 8601 moment"
+         )}
+
+      nil ->
+        {:error, Ash.Error.Query.NotFound.exception(resource: input.resource)}
     end
   end
 end
@@ -631,10 +824,20 @@ defmodule Mana.History.Readable do
 
     readable? =
       subject != nil and
-        match?({:ok, _}, Ash.get(subject, id, actor: context.actor, tenant: context.tenant, authorize?: context.authorize? != false))
+        match?(
+          {:ok, _},
+          Ash.get(subject, id,
+            actor: context.actor,
+            tenant: context.tenant,
+            authorize?: context.authorize? != false
+          )
+        )
 
     if readable?,
-      do: query |> Ash.Query.filter(subject_type == ^type and subject_id == ^id) |> Ash.Query.sort(at: :desc),
+      do:
+        query
+        |> Ash.Query.filter(subject_type == ^type and subject_id == ^id)
+        |> Ash.Query.sort(at: :desc),
       else: Ash.Query.filter(query, false)
   end
 end

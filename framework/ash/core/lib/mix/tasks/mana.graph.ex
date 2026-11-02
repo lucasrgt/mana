@@ -17,19 +17,30 @@ defmodule Mix.Tasks.Mana.Graph do
 
   @impl true
   def run(args) do
-    {opts, query} = OptionParser.parse!(args, strict: [manifest: :keep, screens: :string, json: :boolean])
+    {opts, query} =
+      OptionParser.parse!(args, strict: [manifest: :keep, screens: :string, json: :boolean])
+
     Mix.Task.run("app.config")
     Mix.Task.run("compile")
     app = Mix.Project.config()[:app]
 
     manifests =
       case Keyword.get_values(opts, :manifest) do
-        [] -> Path.wildcard("../*/moments/manifest.json") ++ Path.wildcard("../*/*/moments/manifest.json")
-        paths -> paths
+        [] ->
+          Path.wildcard("../*/moments/manifest.json") ++
+            Path.wildcard("../*/*/moments/manifest.json")
+
+        paths ->
+          paths
       end
 
     screens = if path = opts[:screens], do: path |> File.read!() |> Jason.decode!(), else: %{}
-    graph = Mana.Graph.build(Application.fetch_env!(app, :ash_domains), manifests: manifests, screens: screens)
+
+    graph =
+      Mana.Graph.build(Application.fetch_env!(app, :ash_domains),
+        manifests: manifests,
+        screens: screens
+      )
 
     answer =
       case query do
@@ -43,9 +54,14 @@ defmodule Mix.Tasks.Mana.Graph do
       end
 
     cond do
-      opts[:json] == true or query == [] -> Mix.shell().info(Jason.encode!(answer, pretty: true))
-      is_list(answer) -> Enum.each(answer, &Mix.shell().info(if(is_binary(&1), do: &1, else: inspect(&1))))
-      true -> Mix.shell().info(inspect(answer, pretty: true))
+      opts[:json] == true or query == [] ->
+        Mix.shell().info(Jason.encode!(answer, pretty: true))
+
+      is_list(answer) ->
+        Enum.each(answer, &Mix.shell().info(if(is_binary(&1), do: &1, else: inspect(&1))))
+
+      true ->
+        Mix.shell().info(inspect(answer, pretty: true))
     end
   end
 end

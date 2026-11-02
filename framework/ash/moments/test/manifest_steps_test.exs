@@ -144,14 +144,26 @@ defmodule Moments.ManifestStepsTest do
     scene = Moments.Manifest.build(Bookings)["moments"]["pay-booking"]
 
     assert [
-             %{"kind" => "tap", "target" => "verb:booking.pay", "verb" => "booking.pay", "inputRef" => "booking.id", "until" => ["paid"]},
-             %{"kind" => "tap", "target" => "verb:booking.cancel", "verb" => "booking.cancel"} = cancel
+             %{
+               "kind" => "tap",
+               "target" => "verb:booking.pay",
+               "verb" => "booking.pay",
+               "inputRef" => "booking.id",
+               "until" => ["paid"]
+             },
+             %{"kind" => "tap", "target" => "verb:booking.cancel", "verb" => "booking.cancel"} =
+               cancel
            ] = scene["steps"]
 
     refute Map.has_key?(cancel, "inputRef")
 
     assert [
-             %{"name" => "paid", "kind" => "not_offered", "verb" => "booking.pay", "scope" => "step"},
+             %{
+               "name" => "paid",
+               "kind" => "not_offered",
+               "verb" => "booking.pay",
+               "scope" => "step"
+             },
              %{"name" => "cancellable", "kind" => "offered", "verb" => "booking.cancel"}
            ] = scene["checks"]
   end
@@ -160,13 +172,23 @@ defmodule Moments.ManifestStepsTest do
     manifest = Moments.Manifest.build_many([Bookings, Elsewhere])
     assert [%{"target" => "verb:booking.pay"}] = manifest["moments"]["pay-elsewhere"]["steps"]
 
-    assert_raise ArgumentError, ~r/no resource of type :booking/, fn -> Moments.Manifest.build(Elsewhere) end
+    assert_raise ArgumentError, ~r/no resource of type :booking/, fn ->
+      Moments.Manifest.build(Elsewhere)
+    end
   end
 
   test "the export refuses a verb the resource does not declare" do
-    assert_raise ArgumentError, ~r/declares no verb :refund/, fn -> Moments.Manifest.build(UndeclaredStep) end
-    assert_raise ArgumentError, ~r/declares no verb :refund/, fn -> Moments.Manifest.build(UndeclaredCheck) end
-    assert_raise ArgumentError, ~r/on names the record of a verb step/, fn -> Moments.Manifest.build(MisplacedRecord) end
+    assert_raise ArgumentError, ~r/declares no verb :refund/, fn ->
+      Moments.Manifest.build(UndeclaredStep)
+    end
+
+    assert_raise ArgumentError, ~r/declares no verb :refund/, fn ->
+      Moments.Manifest.build(UndeclaredCheck)
+    end
+
+    assert_raise ArgumentError, ~r/on names the record of a verb step/, fn ->
+      Moments.Manifest.build(MisplacedRecord)
+    end
   end
 
   test "each step exports its kind, target and, for a swipe, its direction" do

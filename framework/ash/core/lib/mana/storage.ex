@@ -14,11 +14,23 @@ defmodule Mana.Storage do
   """
   use Mana.Integration, otp_app: :mana_core
 
-  @type upload :: %{url: String.t(), method: String.t(), content_type: String.t(), expires_at: DateTime.t()}
+  @type upload :: %{
+          url: String.t(),
+          method: String.t(),
+          content_type: String.t(),
+          expires_at: DateTime.t()
+        }
 
-  @callback upload_url(key :: String.t(), content_type :: String.t(), signed_at :: DateTime.t(), ttl :: pos_integer) :: upload
-  @callback read_url(key :: String.t(), signed_at :: DateTime.t(), ttl :: pos_integer) :: String.t()
-  @callback put(key :: String.t(), body :: iodata, content_type :: String.t()) :: :ok | {:error, term}
+  @callback upload_url(
+              key :: String.t(),
+              content_type :: String.t(),
+              signed_at :: DateTime.t(),
+              ttl :: pos_integer
+            ) :: upload
+  @callback read_url(key :: String.t(), signed_at :: DateTime.t(), ttl :: pos_integer) ::
+              String.t()
+  @callback put(key :: String.t(), body :: iodata, content_type :: String.t()) ::
+              :ok | {:error, term}
   @callback delete(key :: String.t()) :: :ok | {:error, term}
   @callback exists?(key :: String.t()) :: boolean
   @callback get(key :: String.t()) :: {:ok, binary} | {:error, term}
@@ -63,7 +75,12 @@ defmodule Mana.Storage.S3 do
   def read_url(key, signed_at, ttl), do: presign(key, :get, signed_at, ttl)
 
   def put(key, body, content_type) do
-    case Req.put(url(key), body: body, headers: [{"content-type", content_type}], aws_sigv4: sigv4(), retry: :transient) do
+    case Req.put(url(key),
+           body: body,
+           headers: [{"content-type", content_type}],
+           aws_sigv4: sigv4(),
+           retry: :transient
+         ) do
       {:ok, %{status: status}} when status in 200..299 -> :ok
       other -> {:error, other}
     end
@@ -76,7 +93,8 @@ defmodule Mana.Storage.S3 do
     end
   end
 
-  def exists?(key), do: match?({:ok, %{status: 200}}, Req.head(url(key), aws_sigv4: sigv4(), retry: false))
+  def exists?(key),
+    do: match?({:ok, %{status: 200}}, Req.head(url(key), aws_sigv4: sigv4(), retry: false))
 
   def get(key) do
     case Req.get(url(key), aws_sigv4: sigv4(), retry: :transient, decode_body: false) do
@@ -99,10 +117,16 @@ defmodule Mana.Storage.S3 do
     )
   end
 
-  defp url(key), do: "#{String.trim_trailing(env!("S3_ENDPOINT"), "/")}/#{env!("S3_BUCKET_DEFAULT")}/#{key}"
+  defp url(key),
+    do: "#{String.trim_trailing(env!("S3_ENDPOINT"), "/")}/#{env!("S3_BUCKET_DEFAULT")}/#{key}"
 
   defp sigv4,
-    do: [service: "s3", region: region(), access_key_id: env!("S3_ACCESS_KEY_ID"), secret_access_key: env!("S3_SECRET_ACCESS_KEY")]
+    do: [
+      service: "s3",
+      region: region(),
+      access_key_id: env!("S3_ACCESS_KEY_ID"),
+      secret_access_key: env!("S3_SECRET_ACCESS_KEY")
+    ]
 
   defp region, do: System.get_env("S3_REGION") |> then(&if(&1 in [nil, ""], do: "auto", else: &1))
 end
@@ -116,7 +140,13 @@ defmodule Mana.Storage.Local do
 
   def upload_url(key, content_type, signed_at, ttl) do
     expires = DateTime.add(signed_at, ttl)
-    %{url: signed("PUT", key, expires), method: "PUT", content_type: content_type, expires_at: expires}
+
+    %{
+      url: signed("PUT", key, expires),
+      method: "PUT",
+      content_type: content_type,
+      expires_at: expires
+    }
   end
 
   def read_url(key, signed_at, ttl), do: signed("GET", key, DateTime.add(signed_at, ttl))
@@ -142,11 +172,15 @@ defmodule Mana.Storage.Local do
 
   @doc false
   def signature(method, key, expires_unix),
-    do: :crypto.mac(:hmac, :sha256, config()[:secret], "#{method}\n#{key}\n#{expires_unix}") |> Base.url_encode64(padding: false)
+    do:
+      :crypto.mac(:hmac, :sha256, config()[:secret], "#{method}\n#{key}\n#{expires_unix}")
+      |> Base.url_encode64(padding: false)
 
   defp signed(method, key, expires) do
     unix = DateTime.to_unix(expires)
-    "#{config()[:base_url]}/#{key}?" <> URI.encode_query(expires: unix, signature: signature(method, key, unix))
+
+    "#{config()[:base_url]}/#{key}?" <>
+      URI.encode_query(expires: unix, signature: signature(method, key, unix))
   end
 
   defp config, do: Application.fetch_env!(:mana_core, Mana.Storage)
@@ -158,14 +192,19 @@ if Code.ensure_loaded?(Plug.Conn) do
     import Plug.Conn
     def init(options), do: options
 
-    def call(%{method: method, path_info: parts} = conn, _) when method in ["GET", "PUT"] and parts != [] do
+    def call(%{method: method, path_info: parts} = conn, _)
+        when method in ["GET", "PUT"] and parts != [] do
       key = Enum.join(parts, "/")
       conn = fetch_query_params(conn)
 
       with %{"expires" => expires, "signature" => signature} <- conn.query_params,
            {unix, ""} <- Integer.parse(expires),
            true <- unix > System.os_time(:second),
-           true <- Plug.Crypto.secure_compare(signature, Mana.Storage.Local.signature(method, key, unix)) do
+           true <-
+             Plug.Crypto.secure_compare(
+               signature,
+               Mana.Storage.Local.signature(method, key, unix)
+             ) do
         serve(conn, method, key)
       else
         _ -> conn |> send_resp(403, "") |> halt()
@@ -192,7 +231,11 @@ if Code.ensure_loaded?(Plug.Conn) do
 
     defp serve(conn, "GET", key) do
       if Mana.Storage.Local.exists?(key),
-        do: conn |> put_resp_header("access-control-allow-origin", "*") |> send_file(200, Mana.Storage.Local.path(key)) |> halt(),
+        do:
+          conn
+          |> put_resp_header("access-control-allow-origin", "*")
+          |> send_file(200, Mana.Storage.Local.path(key))
+          |> halt(),
         else: conn |> send_resp(404, "") |> halt()
     end
   end

@@ -8,12 +8,21 @@ end
 
 defmodule ExploreTest.Card do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs]
 
   attributes do
     uuid_primary_key(:id)
     attribute(:title, :string, public?: true)
-    attribute(:status, :atom, constraints: [one_of: [:draft, :open, :closed]], default: :draft, public?: true)
+
+    attribute(:status, :atom,
+      constraints: [one_of: [:draft, :open, :closed]],
+      default: :draft,
+      public?: true
+    )
+
     attribute(:archived, :boolean, default: false, public?: true)
   end
 
@@ -37,11 +46,19 @@ end
 
 defmodule ExploreTest.Crashy do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs]
 
   attributes do
     uuid_primary_key(:id)
-    attribute(:status, :atom, constraints: [one_of: [:open, :done]], default: :open, public?: true)
+
+    attribute(:status, :atom,
+      constraints: [one_of: [:open, :done]],
+      default: :open,
+      public?: true
+    )
   end
 
   actions do
@@ -50,7 +67,10 @@ defmodule ExploreTest.Crashy do
 
     update :boom do
       require_atomic?(false)
-      change(fn changeset, _context -> Ash.Changeset.after_action(changeset, fn _, _ -> raise "boom" end) end)
+
+      change(fn changeset, _context ->
+        Ash.Changeset.after_action(changeset, fn _, _ -> raise "boom" end)
+      end)
     end
   end
 
@@ -63,11 +83,19 @@ end
 # Two verbs share one action; the server checks the first one's `when` only.
 defmodule ExploreTest.Shared do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs]
 
   attributes do
     uuid_primary_key(:id)
-    attribute(:status, :atom, constraints: [one_of: [:draft, :live, :archived]], default: :draft, public?: true)
+
+    attribute(:status, :atom,
+      constraints: [one_of: [:draft, :live, :archived]],
+      default: :draft,
+      public?: true
+    )
   end
 
   actions do
@@ -87,7 +115,10 @@ end
 
 defmodule ExploreTest.Counter do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs]
 
   attributes do
     uuid_primary_key(:id)
@@ -100,7 +131,10 @@ defmodule ExploreTest.Counter do
 
     update :bump do
       require_atomic?(false)
-      change(fn changeset, _ -> Ash.Changeset.force_change_attribute(changeset, :count, changeset.data.count + 1) end)
+
+      change(fn changeset, _ ->
+        Ash.Changeset.force_change_attribute(changeset, :count, changeset.data.count + 1)
+      end)
     end
   end
 
@@ -112,17 +146,26 @@ end
 
 defmodule ExploreTest.Lamp do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs]
 
   attributes do
     uuid_primary_key(:id)
     attribute(:visible, :boolean, default: true, public?: true)
-    attribute(:color, :atom, constraints: [one_of: [:white, :red]], default: :white, public?: true)
+
+    attribute(:color, :atom,
+      constraints: [one_of: [:white, :red]],
+      default: :white,
+      public?: true
+    )
   end
 
   actions do
     defaults([:read])
     create(:start)
+
     update :hide do
       change(set_attribute(:visible, false))
       change(set_attribute(:color, :red))
@@ -140,11 +183,20 @@ end
 
 defmodule ExploreTest.Ticket do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.Reconcile]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.Reconcile]
 
   attributes do
     uuid_primary_key(:id)
-    attribute(:status, :atom, constraints: [one_of: [:open, :closed]], default: :open, public?: true)
+
+    attribute(:status, :atom,
+      constraints: [one_of: [:open, :closed]],
+      default: :open,
+      public?: true
+    )
+
     attribute(:reason, :string, public?: true)
   end
 
@@ -160,17 +212,29 @@ defmodule ExploreTest.Ticket do
   end
 
   reconcile do
-    desired(:closed_has_reason, "every closed ticket says why", scope: expr(status == :closed), holds: {ExploreTest.Rules, :has_reason?})
+    desired(:closed_has_reason, "every closed ticket says why",
+      scope: expr(status == :closed),
+      holds: {ExploreTest.Rules, :has_reason?}
+    )
   end
 end
 
 defmodule ExploreTest.Hold do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.Reconcile, Mana.Entity]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.Reconcile, Mana.Entity]
 
   attributes do
     uuid_primary_key(:id)
-    attribute(:status, :atom, constraints: [one_of: [:pending, :paid, :expired]], default: :pending, public?: true)
+
+    attribute(:status, :atom,
+      constraints: [one_of: [:pending, :paid, :expired]],
+      default: :pending,
+      public?: true
+    )
+
     attribute(:expires, :boolean, default: true, public?: true)
     timestamps()
   end
@@ -188,22 +252,39 @@ defmodule ExploreTest.Hold do
   end
 
   reconcile do
-    desired(:pending_resolves, "a pending hold is paid or expires within 15 minutes", scope: expr(status == :pending), within: {15, :minute})
+    desired(:pending_resolves, "a pending hold is paid or expires within 15 minutes",
+      scope: expr(status == :pending),
+      within: {15, :minute}
+    )
   end
 
   entity do
     broadcast(ExploreTest.Broadcast)
-    deadline(:lapse, action: :expire, when: expr(status == :pending and expires == true), after: {15, :minute})
+
+    deadline(:lapse,
+      action: :expire,
+      when: expr(status == :pending and expires == true),
+      after: {15, :minute}
+    )
   end
 end
 
 defmodule ExploreTest.Onboarding do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.Flow]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.Flow]
 
   attributes do
     uuid_primary_key(:id)
-    attribute(:stage, :atom, constraints: [one_of: [:terms, :details, :done]], default: :terms, public?: true)
+
+    attribute(:stage, :atom,
+      constraints: [one_of: [:terms, :details, :done]],
+      default: :terms,
+      public?: true
+    )
+
     attribute(:ready, :boolean, default: false, public?: true)
   end
 
@@ -237,11 +318,19 @@ end
 
 defmodule ExploreTest.Rewind do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.Flow]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.Flow]
 
   attributes do
     uuid_primary_key(:id)
-    attribute(:stage, :atom, constraints: [one_of: [:terms, :details, :done]], default: :terms, public?: true)
+
+    attribute(:stage, :atom,
+      constraints: [one_of: [:terms, :details, :done]],
+      default: :terms,
+      public?: true
+    )
   end
 
   actions do
@@ -276,7 +365,10 @@ end
 
 defmodule ExploreTest.Entry do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.History.Log]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.History.Log]
 
   history_log do
     subjects([ExploreTest.Memo, ExploreTest.Serial, ExploreTest.Stamped])
@@ -285,7 +377,10 @@ end
 
 defmodule ExploreTest.Memo do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.History]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.History]
 
   history do
     log(ExploreTest.Entry)
@@ -311,7 +406,10 @@ end
 
 defmodule ExploreTest.Serial do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.History]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.History]
 
   history do
     log(ExploreTest.Entry)
@@ -326,7 +424,13 @@ defmodule ExploreTest.Serial do
     defaults([:read, :destroy])
 
     create :issue do
-      change(fn changeset, _ -> Ash.Changeset.force_change_attribute(changeset, :number, System.unique_integer([:positive])) end)
+      change(fn changeset, _ ->
+        Ash.Changeset.force_change_attribute(
+          changeset,
+          :number,
+          System.unique_integer([:positive])
+        )
+      end)
     end
   end
 
@@ -337,7 +441,10 @@ end
 
 defmodule ExploreTest.Shelf do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs]
 
   attributes do
     uuid_primary_key(:id)
@@ -354,7 +461,10 @@ end
 
 defmodule ExploreTest.Book do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs]
 
   attributes do
     uuid_primary_key(:id)
@@ -373,14 +483,22 @@ defmodule ExploreTest.Book do
   end
 
   verbs do
-    verb(:shelve, collection: true, from: {ExploreTest.Shelf, :shelf_id}, when: expr(open == true))
+    verb(:shelve,
+      collection: true,
+      from: {ExploreTest.Shelf, :shelf_id},
+      when: expr(open == true)
+    )
+
     verb(:lend, when: expr(lent == false))
   end
 end
 
 defmodule ExploreTest.Stamped do
   @moduledoc false
-  use Ash.Resource, domain: ExploreTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.History]
+  use Ash.Resource,
+    domain: ExploreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.History]
 
   history do
     log(ExploreTest.Entry)
@@ -397,7 +515,10 @@ defmodule ExploreTest.Stamped do
 
     update :close do
       require_atomic?(false)
-      change(fn changeset, _ -> Ash.Changeset.force_change_attribute(changeset, :closed_at, DateTime.utc_now()) end)
+
+      change(fn changeset, _ ->
+        Ash.Changeset.force_change_attribute(changeset, :closed_at, DateTime.utc_now())
+      end)
     end
   end
 
@@ -434,9 +555,17 @@ defmodule Mana.ExploreTest do
   use ExUnit.Case, async: false
 
   @domains [ExploreTest.Domain]
-  @actors %{ana: %{id: "0d4c7a52-5d2f-4a8e-9f61-3b2a1c0e9a01"}, bia: %{id: "6f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"}}
+  @actors %{
+    ana: %{id: "0d4c7a52-5d2f-4a8e-9f61-3b2a1c0e9a01"},
+    bia: %{id: "6f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"}
+  }
 
-  defp explore(resource, opts \\ []), do: Mana.Explore.run(@domains, [resources: [resource], actors: @actors, runs: 30, depth: 8, seed: 7] ++ opts)
+  defp explore(resource, opts \\ []),
+    do:
+      Mana.Explore.run(
+        @domains,
+        [resources: [resource], actors: @actors, runs: 30, depth: 8, seed: 7] ++ opts
+      )
 
   defp properties(report), do: Enum.map(report.violations, & &1.property)
 
@@ -455,7 +584,15 @@ defmodule Mana.ExploreTest do
       @actors
     end
 
-    report = Mana.Explore.run(@domains, resources: [ExploreTest.Book], setup: setup, runs: 10, depth: 4, seed: 3)
+    report =
+      Mana.Explore.run(@domains,
+        resources: [ExploreTest.Book],
+        setup: setup,
+        runs: 10,
+        depth: 4,
+        seed: 3
+      )
+
     assert report.violations == [], Mana.Explore.format(report)
     assert report.coverage[ExploreTest.Book].reached == [:lend, :shelve]
   end
@@ -466,12 +603,20 @@ defmodule Mana.ExploreTest do
 
     assert open.seen > 0
     assert Map.keys(open.ana) == ["close"]
-    assert Enum.any?(report.transitions, &(&1.from == "archived=false,status=draft" and &1.verb == "publish" and &1.to == "archived=false,status=open"))
+
+    assert Enum.any?(
+             report.transitions,
+             &(&1.from == "archived=false,status=draft" and &1.verb == "publish" and
+                 &1.to == "archived=false,status=open")
+           )
   end
 
   test "an offered verb that crashes breaks offer_honest" do
     report = explore(ExploreTest.Crashy)
-    assert [%{property: :offer_honest, verb: :boom, detail: detail} = violation] = report.violations
+
+    assert [%{property: :offer_honest, verb: :boom, detail: detail} = violation] =
+             report.violations
+
     assert detail =~ "crashed"
     assert Enum.map(violation.trace, & &1.kind) == [:start, :verb]
   end
@@ -485,14 +630,21 @@ defmodule Mana.ExploreTest do
 
   test "an idempotent verb that changes the record again breaks idempotent" do
     report = explore(ExploreTest.Counter)
-    assert [%{property: :idempotent, verb: :bump, detail: "a second time changed count"}] = report.violations
+
+    assert [%{property: :idempotent, verb: :bump, detail: "a second time changed count"}] =
+             report.violations
   end
 
   test "an inverse that leaves a field changed breaks inverse_restores, shrunk to the moves that matter" do
     report = explore(ExploreTest.Lamp, runs: 40)
-    assert [%{property: :inverse_restores, verb: :hide, detail: detail, trace: trace}] = report.violations
+
+    assert [%{property: :inverse_restores, verb: :hide, detail: detail, trace: trace}] =
+             report.violations
+
     assert detail =~ "color"
-    assert [%{kind: :start}, %{kind: :verb, verb: :hide, then_inverse: true}] = Enum.map(trace, &Map.take(&1, [:kind, :verb, :then_inverse]))
+
+    assert [%{kind: :start}, %{kind: :verb, verb: :hide, then_inverse: true}] =
+             Enum.map(trace, &Map.take(&1, [:kind, :verb, :then_inverse]))
   end
 
   test "a reconcile rule broken in a reachable state is an invariant violation" do
@@ -509,7 +661,13 @@ defmodule Mana.ExploreTest do
   end
 
   test "a deadline that honours the rule keeps it converged; external verbs are never performed" do
-    report = explore(ExploreTest.Hold, runs: 30, depth: 6, generators: %{{ExploreTest.Hold, :place} => %{expires: true}})
+    report =
+      explore(ExploreTest.Hold,
+        runs: 30,
+        depth: 6,
+        generators: %{{ExploreTest.Hold, :place} => %{expires: true}}
+      )
+
     assert report.violations == [], Mana.Explore.format(report)
     assert report.coverage[ExploreTest.Hold].skipped == [:pay]
   end
@@ -530,7 +688,9 @@ defmodule Mana.ExploreTest do
     # a time the action stamps from the clock is not a divergence
     assert explore(ExploreTest.Stamped).violations == []
 
-    assert [%{property: :history_replays, detail: detail}] = explore(ExploreTest.Serial).violations
+    assert [%{property: :history_replays, detail: detail}] =
+             explore(ExploreTest.Serial).violations
+
     assert detail =~ "number"
   end
 
@@ -548,11 +708,18 @@ defmodule Mana.ExploreTest do
 
     assert %{"property" => "invariant", "moves" => [_ | _]} = Jason.decode!(File.read!(path))
 
-    for resource <- Ash.Domain.Info.resources(ExploreTest.Domain), do: Mana.Explore.empty_ets(resource)
+    for resource <- Ash.Domain.Info.resources(ExploreTest.Domain),
+        do: Mana.Explore.empty_ets(resource)
+
     records = Mana.Explore.replay_file(path, @domains, @actors)
     assert Enum.any?(Map.values(records), &match?(%ExploreTest.Ticket{status: :closed}, &1))
 
-    assert %{property: :invariant} = Mana.Explore.replay(@domains, violation.trace, resources: [ExploreTest.Ticket], actors: @actors, seed: 7)
+    assert %{property: :invariant} =
+             Mana.Explore.replay(@domains, violation.trace,
+               resources: [ExploreTest.Ticket],
+               actors: @actors,
+               seed: 7
+             )
   end
 
   test "format reads as a person would" do
@@ -568,12 +735,23 @@ defmodule Mana.ExploreTest do
 
       assert Mana.Explore.Lock.encode(lock) == Mana.Explore.Lock.encode(again)
       assert lock["resources"]["card"]["archived=false,status=open"]["ana"] == ["close"]
-      assert Mana.Explore.Lock.diff(lock, lock |> Mana.Explore.Lock.encode() |> Jason.decode!()) == []
+
+      assert Mana.Explore.Lock.diff(lock, lock |> Mana.Explore.Lock.encode() |> Jason.decode!()) ==
+               []
     end
 
     test "a changed offer reads as a sentence" do
-      old = %{"resources" => %{"booking" => %{"status=paid" => %{"host" => ["cancel", "refund"]}, "status=gone" => %{}}}}
-      new = %{"resources" => %{"booking" => %{"status=paid" => %{"host" => ["refund", "rate"]}, "status=new" => %{}}}}
+      old = %{
+        "resources" => %{
+          "booking" => %{"status=paid" => %{"host" => ["cancel", "refund"]}, "status=gone" => %{}}
+        }
+      }
+
+      new = %{
+        "resources" => %{
+          "booking" => %{"status=paid" => %{"host" => ["refund", "rate"]}, "status=new" => %{}}
+        }
+      }
 
       assert Mana.Explore.Lock.diff(old, new) == [
                "booking when status=gone is no longer reached",

@@ -8,7 +8,9 @@ defmodule Mana.NotAtomic do
   alias Spark.Dsl.Transformer
 
   def mark(dsl, which) do
-    if Transformer.get_persisted(dsl, :data_layer) == AshPostgres.DataLayer, do: mark!(dsl, which), else: dsl
+    if Transformer.get_persisted(dsl, :data_layer) == AshPostgres.DataLayer,
+      do: mark!(dsl, which),
+      else: dsl
   end
 
   defp mark!(dsl, which) do
@@ -16,7 +18,12 @@ defmodule Mana.NotAtomic do
     |> Transformer.get_entities([:actions])
     |> Enum.filter(&(&1.type in [:update, :destroy] and which.(&1)))
     |> Enum.reduce(dsl, fn action, dsl ->
-      Transformer.replace_entity(dsl, [:actions], %{action | require_atomic?: false}, &(&1.name == action.name and &1.type == action.type))
+      Transformer.replace_entity(
+        dsl,
+        [:actions],
+        %{action | require_atomic?: false},
+        &(&1.name == action.name and &1.type == action.type)
+      )
     end)
   end
 end

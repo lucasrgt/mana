@@ -23,9 +23,29 @@ defmodule Mix.Tasks.Mana.History.Export do
       for domain <- Application.fetch_env!(app, :ash_domains),
           log <- Ash.Domain.Info.resources(domain),
           Mana.History.Log in Spark.extensions(log),
-          entry <- log |> Ash.Query.filter(at >= ^since) |> Ash.Query.sort(at: :asc) |> Ash.read!(authorize?: false) do
+          entry <-
+            log
+            |> Ash.Query.filter(at >= ^since)
+            |> Ash.Query.sort(at: :asc)
+            |> Ash.read!(authorize?: false) do
         entry
-        |> Map.take([:id, :subject_type, :subject_id, :action, :verb, :actor_id, :actor_kind, :via, :params, :before, :after, :outcome, :error, :summary, :at])
+        |> Map.take([
+          :id,
+          :subject_type,
+          :subject_id,
+          :action,
+          :verb,
+          :actor_id,
+          :actor_kind,
+          :via,
+          :params,
+          :before,
+          :after,
+          :outcome,
+          :error,
+          :summary,
+          :at
+        ])
         |> Jason.encode!()
       end
 

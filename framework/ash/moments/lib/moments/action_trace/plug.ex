@@ -22,8 +22,14 @@ defmodule Moments.ActionTrace.Plug do
           Moments.ActionTrace.begin_request(id)
 
           register_before_send(conn, fn conn ->
-            encoded = Moments.ActionTrace.finish_request() |> Jason.encode!() |> Base.url_encode64(padding: false)
-            if byte_size(encoded) <= 7000, do: put_resp_header(conn, "x-mana-actions", encoded), else: conn
+            encoded =
+              Moments.ActionTrace.finish_request()
+              |> Jason.encode!()
+              |> Base.url_encode64(padding: false)
+
+            if byte_size(encoded) <= 7000,
+              do: put_resp_header(conn, "x-mana-actions", encoded),
+              else: conn
           end)
         else
           conn

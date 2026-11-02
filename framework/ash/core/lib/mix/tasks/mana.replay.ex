@@ -15,7 +15,17 @@ defmodule Mix.Tasks.Mana.Replay do
 
   @impl true
   def run(args) do
-    {opts, _} = OptionParser.parse!(args, strict: [log: :string, actor_resource: :string, skip_external: :boolean, limit: :integer, json: :boolean])
+    {opts, _} =
+      OptionParser.parse!(args,
+        strict: [
+          log: :string,
+          actor_resource: :string,
+          skip_external: :boolean,
+          limit: :integer,
+          json: :boolean
+        ]
+      )
+
     Mix.Task.run("app.start")
     app = Mix.Project.config()[:app]
 
@@ -47,7 +57,13 @@ defmodule Mix.Tasks.Mana.Replay do
       )
 
     if opts[:json],
-      do: Mix.shell().info(Jason.encode!(%{subjects: report.subjects, by_feature: report.by_feature, results: report.results}, pretty: true)),
+      do:
+        Mix.shell().info(
+          Jason.encode!(
+            %{subjects: report.subjects, by_feature: report.by_feature, results: report.results},
+            pretty: true
+          )
+        ),
       else: Mix.shell().info(Mana.Replay.format(report))
 
     if Enum.any?(report.results, &(&1.outcome in [:diverged, :failed])), do: exit({:shutdown, 1})

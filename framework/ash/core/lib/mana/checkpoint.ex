@@ -52,11 +52,20 @@ defmodule Mana.Checkpoint do
 
   defp load(plan, actor) do
     Enum.reduce_while(plan, {:ok, []}, fn step, {:ok, steps} ->
-      resource = step["resource"] |> String.trim_leading("Elixir.") |> String.split(".") |> Module.safe_concat()
+      resource =
+        step["resource"]
+        |> String.trim_leading("Elixir.")
+        |> String.split(".")
+        |> Module.safe_concat()
 
       case Ash.get(resource, step["id"], actor: actor) do
-        {:ok, record} -> {:cont, {:ok, steps ++ [{record, String.to_existing_atom(step["verb"]), step["params"] || %{}}]}}
-        {:error, error} -> {:halt, {:error, %{step: step, error: error}}}
+        {:ok, record} ->
+          {:cont,
+           {:ok,
+            steps ++ [{record, String.to_existing_atom(step["verb"]), step["params"] || %{}}]}}
+
+        {:error, error} ->
+          {:halt, {:error, %{step: step, error: error}}}
       end
     end)
   end
@@ -81,14 +90,25 @@ defmodule Mana.Checkpoint do
         resource = record.__struct__,
         Mana.History in Spark.extensions(resource),
         uniq: true do
-      {Mana.Entity.type(resource), record.id, Mana.History.export(Mana.History.log(resource), Mana.Entity.type(resource), record.id)}
+      {Mana.Entity.type(resource), record.id,
+       Mana.History.export(Mana.History.log(resource), Mana.Entity.type(resource), record.id)}
     end
     |> Enum.uniq_by(fn {type, id, _} -> {type, id} end)
     |> Enum.map(fn {type, id, entries} -> %{subject: "#{type}:#{id}", entries: entries} end)
   end
 
-  defp summary({:ok, records}), do: %{status: :done, records: Enum.map(records, &%{resource: inspect(&1.__struct__), id: &1.id})}
+  defp summary({:ok, records}),
+    do: %{
+      status: :done,
+      records: Enum.map(records, &%{resource: inspect(&1.__struct__), id: &1.id})
+    }
 
   defp summary({:error, %{failed: index, error: error} = failure}),
-    do: %{status: :failed, step: index, error: Mana.History.error_code(error), compensated: length(failure.compensated), uncompensated: length(failure.uncompensated)}
+    do: %{
+      status: :failed,
+      step: index,
+      error: Mana.History.error_code(error),
+      compensated: length(failure.compensated),
+      uncompensated: length(failure.uncompensated)
+    }
 end

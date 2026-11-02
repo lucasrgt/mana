@@ -56,8 +56,16 @@ defmodule Mana.Resource do
     target: Mana.Resource.Retention,
     args: [:field],
     schema: [
-      field: [type: :atom, required: true, doc: "A datetime attribute; rows past it by `days` are deleted."],
-      days: [type: :non_neg_integer, required: true, doc: "`0` deletes once the moment itself has passed."],
+      field: [
+        type: :atom,
+        required: true,
+        doc: "A datetime attribute; rows past it by `days` are deleted."
+      ],
+      days: [
+        type: :non_neg_integer,
+        required: true,
+        doc: "`0` deletes once the moment itself has passed."
+      ],
       action: [type: :atom, default: :destroy]
     ]
   }
@@ -96,7 +104,9 @@ defmodule Mana.Resource do
 
   # Checks run in a transformer, not a verifier: Spark reports verifier failures as
   # warnings, and these must fail compilation.
-  use Spark.Dsl.Extension, sections: [@access, @retention, @privacy], transformers: [Mana.Resource.Transformer]
+  use Spark.Dsl.Extension,
+    sections: [@access, @retention, @privacy],
+    transformers: [Mana.Resource.Transformer]
 
   @doc "Parses `\"N per second|minute|hour|day per ip|actor\"`."
   def parse_limit(spec) when is_binary(spec) do
@@ -147,11 +157,20 @@ defmodule Mana.Resource.Transformer do
 
     problems =
       Enum.map(entries, &problem(&1, actions)) ++
-        Enum.map(retention, &retention_problem(&1, actions, attributes)) ++ [privacy_problem(dsl, attributes)]
+        Enum.map(retention, &retention_problem(&1, actions, attributes)) ++
+        [privacy_problem(dsl, attributes)]
 
     case Enum.find(problems, & &1) do
-      nil -> {:ok, add_rate_limit(dsl, Enum.any?(entries, &is_binary(&1.rate_limit)))}
-      message -> {:error, Spark.Error.DslError.exception(module: Transformer.get_persisted(dsl, :module), path: [:access], message: message)}
+      nil ->
+        {:ok, add_rate_limit(dsl, Enum.any?(entries, &is_binary(&1.rate_limit)))}
+
+      message ->
+        {:error,
+         Spark.Error.DslError.exception(
+           module: Transformer.get_persisted(dsl, :module),
+           path: [:access],
+           message: message
+         )}
     end
   end
 
@@ -175,7 +194,12 @@ defmodule Mana.Resource.Transformer do
     attribute = Enum.find(attributes, &(&1.name == rule.field))
 
     cond do
-      is_nil(attribute) or base_type(attribute.type) not in [Ash.Type.UtcDatetimeUsec, Ash.Type.UtcDatetime, Ash.Type.DateTime] ->
+      is_nil(attribute) or
+          base_type(attribute.type) not in [
+            Ash.Type.UtcDatetimeUsec,
+            Ash.Type.UtcDatetime,
+            Ash.Type.DateTime
+          ] ->
         "retention field `#{rule.field}` must be a datetime attribute"
 
       rule.action not in actions ->
@@ -187,24 +211,52 @@ defmodule Mana.Resource.Transformer do
   end
 
   defp base_type(type) do
-    if Ash.Type.NewType.new_type?(type), do: base_type(Ash.Type.NewType.subtype_of(type)), else: Ash.Type.get_type(type)
+    if Ash.Type.NewType.new_type?(type),
+      do: base_type(Ash.Type.NewType.subtype_of(type)),
+      else: Ash.Type.get_type(type)
   end
 
   defp privacy_problem(dsl, attributes) do
     option = &Transformer.get_option(dsl, [:privacy], &1)
-    fields = MapSet.new(attributes, & &1.name) |> MapSet.union(MapSet.new(Transformer.get_entities(dsl, [:calculations]), & &1.name))
-    destroy? = dsl |> Transformer.get_entities([:actions]) |> Enum.any?(&(&1.type == :destroy and &1.primary?))
-    detach? = dsl |> Transformer.get_entities([:actions]) |> Enum.any?(&(&1.type == :update and &1.name == :detach))
+
+    fields =
+      MapSet.new(attributes, & &1.name)
+      |> MapSet.union(MapSet.new(Transformer.get_entities(dsl, [:calculations]), & &1.name))
+
+    destroy? =
+      dsl
+      |> Transformer.get_entities([:actions])
+      |> Enum.any?(&(&1.type == :destroy and &1.primary?))
+
+    detach? =
+      dsl
+      |> Transformer.get_entities([:actions])
+      |> Enum.any?(&(&1.type == :update and &1.name == :detach))
 
     cond do
-      is_nil(option.(:subject)) and is_nil(option.(:erase)) -> nil
-      option.(:subject) not in MapSet.new(attributes, & &1.name) -> "privacy subject `#{option.(:subject)}` must be an attribute"
-      is_nil(option.(:erase)) -> "privacy must declare `erase :delete`, `erase :keep` or `erase :detach`"
-      (missing = Enum.reject(option.(:export) || [], &(&1 in fields))) != [] -> "privacy export names unknown fields #{inspect(missing)}"
-      option.(:erase) in [:keep, :detach] and blank?(option.(:reason)) -> "privacy `erase #{inspect(option.(:erase))}` needs the lawful `reason` to retain"
-      option.(:erase) == :detach and not detach? -> "privacy `erase :detach` needs an update action `detach` that cuts the row from the person"
-      option.(:erase) == :delete and not destroy? -> "privacy `erase :delete` needs a primary destroy action"
-      true -> nil
+      is_nil(option.(:subject)) and is_nil(option.(:erase)) ->
+        nil
+
+      option.(:subject) not in MapSet.new(attributes, & &1.name) ->
+        "privacy subject `#{option.(:subject)}` must be an attribute"
+
+      is_nil(option.(:erase)) ->
+        "privacy must declare `erase :delete`, `erase :keep` or `erase :detach`"
+
+      (missing = Enum.reject(option.(:export) || [], &(&1 in fields))) != [] ->
+        "privacy export names unknown fields #{inspect(missing)}"
+
+      option.(:erase) in [:keep, :detach] and blank?(option.(:reason)) ->
+        "privacy `erase #{inspect(option.(:erase))}` needs the lawful `reason` to retain"
+
+      option.(:erase) == :detach and not detach? ->
+        "privacy `erase :detach` needs an update action `detach` that cuts the row from the person"
+
+      option.(:erase) == :delete and not destroy? ->
+        "privacy `erase :delete` needs a primary destroy action"
+
+      true ->
+        nil
     end
   end
 

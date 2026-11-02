@@ -6,7 +6,12 @@ defmodule Contracts.MixProject do
       app: :contracts,
       version: "0.1.0",
       elixir: "~> 1.18",
-      deps: [{:ash, "~> 3.34 and >= 3.34.3"}, {:ash_json_api, "~> 1.0"}, {:open_api_spex, "~> 3.16"}]
+      deps: [
+        {:ash, "~> 3.34 and >= 3.34.3"},
+        {:ash_json_api, "~> 1.0"},
+        {:open_api_spex, "~> 3.16"},
+        {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      ]
     ]
   end
 

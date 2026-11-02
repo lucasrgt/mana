@@ -52,7 +52,12 @@ defmodule Mana.Knobs do
   @types [:boolean, :integer, :string, :float]
 
   defmacro knob(name, type, opts \\ []) do
-    unless type in @types, do: raise(ArgumentError, "knob #{inspect(name)} has type #{inspect(type)}; use one of #{inspect(@types)}")
+    unless type in @types,
+      do:
+        raise(
+          ArgumentError,
+          "knob #{inspect(name)} has type #{inspect(type)}; use one of #{inspect(@types)}"
+        )
 
     quote do
       @mana_knobs %{name: unquote(name), type: unquote(type), opts: unquote(opts)}
@@ -79,8 +84,16 @@ defmodule Mana.Knobs do
   @doc "The declared knobs with their current value."
   def declared(module) do
     for knob <- module.__knobs__() do
-      %{name: knob.name, type: knob.type, feature: knob.opts[:feature], enables: knob.opts[:enables], describe: knob.opts[:describe], min: knob.opts[:min], max: knob.opts[:max],
-        value: get(module, knob.name)}
+      %{
+        name: knob.name,
+        type: knob.type,
+        feature: knob.opts[:feature],
+        enables: knob.opts[:enables],
+        describe: knob.opts[:describe],
+        min: knob.opts[:min],
+        max: knob.opts[:max],
+        value: get(module, knob.name)
+      }
     end
   end
 
@@ -88,14 +101,20 @@ defmodule Mana.Knobs do
   def feature_on?(module, feature, actor \\ nil) do
     Enum.all?(module.__knobs__(), fn knob ->
       case knob.opts[:enables] do
-        nil -> true
-        enabled -> (feature != enabled and not String.starts_with?(feature, enabled <> "/")) or enabled?(module, knob.name, actor)
+        nil ->
+          true
+
+        enabled ->
+          (feature != enabled and not String.starts_with?(feature, enabled <> "/")) or
+            enabled?(module, knob.name, actor)
       end
     end)
   end
 
   defp knob!(module, name),
-    do: Enum.find(module.__knobs__(), &(&1.name == name)) || raise(ArgumentError, "#{inspect(module)} declares no knob #{inspect(name)}")
+    do:
+      Enum.find(module.__knobs__(), &(&1.name == name)) ||
+        raise(ArgumentError, "#{inspect(module)} declares no knob #{inspect(name)}")
 
   @scope_key :mana_knob_scope
 
@@ -117,7 +136,9 @@ defmodule Mana.Knobs do
 
   @doc "Opens a scope holding `values` and answers its id."
   def scoped(module, values) do
-    unless scopes?(), do: raise(ArgumentError, "knob scopes are off; set config :mana_core, knob_scopes: true")
+    unless scopes?(),
+      do: raise(ArgumentError, "knob scopes are off; set config :mana_core, knob_scopes: true")
+
     scope = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
     previous = Process.get(@scope_key)
     Process.put(@scope_key, scope)
@@ -188,7 +209,8 @@ defmodule Mana.Knobs do
 
     get(module, name) == true or
       (id != nil and id in (rollout["actors"] || [])) or
-      (id != nil and is_integer(rollout["percent"]) and :erlang.phash2({name, id}, 100) < rollout["percent"])
+      (id != nil and is_integer(rollout["percent"]) and
+         :erlang.phash2({name, id}, 100) < rollout["percent"])
   end
 
   @doc "Stores `value` (or `%{\"value\" => v, \"actors\" => [...], \"percent\" => n}`) as changed by `by`."
@@ -200,7 +222,11 @@ defmodule Mana.Knobs do
          :ok <- within(knob.opts, value["value"]) do
       result =
         module.__knob_store__()
-        |> Ash.Changeset.for_create(:set, %{name: row_name(name, scope()), value: value, changed_by_id: by && Map.get(by, :id)}, actor: by)
+        |> Ash.Changeset.for_create(
+          :set,
+          %{name: row_name(name, scope()), value: value, changed_by_id: by && Map.get(by, :id)},
+          actor: by
+        )
         |> Ash.create(authorize?: false)
 
       :persistent_term.erase({__MODULE__, module, name})
@@ -212,7 +238,11 @@ defmodule Mana.Knobs do
   def unset(module, name) do
     knob!(module, name)
 
-    with {:ok, row} when not is_nil(row) <- Ash.get(module.__knob_store__(), row_name(name, scope()), authorize?: false, error?: false),
+    with {:ok, row} when not is_nil(row) <-
+           Ash.get(module.__knob_store__(), row_name(name, scope()),
+             authorize?: false,
+             error?: false
+           ),
          do: Ash.destroy!(row, authorize?: false)
 
     :persistent_term.erase({__MODULE__, module, name})
@@ -264,14 +294,30 @@ defmodule Mana.Knobs.Store.Transformer do
   def before?(_), do: true
 
   def transform(dsl) do
-    with {:ok, dsl} <- Builder.add_new_attribute(dsl, :name, :string, primary_key?: true, allow_nil?: false, public?: true, writable?: true),
-         {:ok, dsl} <- Builder.add_new_attribute(dsl, :value, :map, allow_nil?: false, public?: true),
+    with {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :name, :string,
+             primary_key?: true,
+             allow_nil?: false,
+             public?: true,
+             writable?: true
+           ),
+         {:ok, dsl} <-
+           Builder.add_new_attribute(dsl, :value, :map, allow_nil?: false, public?: true),
          {:ok, dsl} <- Builder.add_new_attribute(dsl, :changed_by_id, :uuid, public?: true),
-         {:ok, dsl} <- Builder.add_new_create_timestamp(dsl, :inserted_at, type: :utc_datetime_usec),
-         {:ok, dsl} <- Builder.add_new_update_timestamp(dsl, :updated_at, type: :utc_datetime_usec, public?: true),
+         {:ok, dsl} <-
+           Builder.add_new_create_timestamp(dsl, :inserted_at, type: :utc_datetime_usec),
+         {:ok, dsl} <-
+           Builder.add_new_update_timestamp(dsl, :updated_at,
+             type: :utc_datetime_usec,
+             public?: true
+           ),
          {:ok, dsl} <- Builder.add_new_action(dsl, :read, :read, primary?: true),
          {:ok, dsl} <- Builder.add_new_action(dsl, :destroy, :destroy, primary?: true) do
-      Builder.add_new_action(dsl, :create, :set, accept: [:name, :value, :changed_by_id], upsert?: true, upsert_fields: [:value, :changed_by_id, :updated_at])
+      Builder.add_new_action(dsl, :create, :set,
+        accept: [:name, :value, :changed_by_id],
+        upsert?: true,
+        upsert_fields: [:value, :changed_by_id, :updated_at]
+      )
     end
   end
 end

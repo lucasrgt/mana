@@ -42,7 +42,11 @@ defmodule Mana.Replay do
   (`{repo, scope_id}` of a `Mana.Snapshot`), `limit`.
   """
   def run(entries, opts \\ []) do
-    resources = for domain <- List.wrap(opts[:domains]), resource <- Ash.Domain.Info.resources(domain), into: %{}, do: {Mana.Entity.type(resource), resource}
+    resources =
+      for domain <- List.wrap(opts[:domains]),
+          resource <- Ash.Domain.Info.resources(domain),
+          into: %{},
+          do: {Mana.Entity.type(resource), resource}
 
     subjects =
       entries
@@ -50,7 +54,11 @@ defmodule Mana.Replay do
       |> Enum.sort_by(fn {key, _} -> key end)
       |> then(&if(opts[:limit], do: Enum.take(&1, opts[:limit]), else: &1))
 
-    results = in_scope(opts[:scope], fn -> for {{type, id}, list} <- subjects, do: replay_subject(type, id, sort(list), resources, opts) end)
+    results =
+      in_scope(opts[:scope], fn ->
+        for {{type, id}, list} <- subjects,
+            do: replay_subject(type, id, sort(list), resources, opts)
+      end)
 
     %{
       subjects: length(results),
@@ -86,7 +94,9 @@ defmodule Mana.Replay do
 
   defp isolated(resource, fun) do
     if Ash.DataLayer.data_layer_can?(resource, :transact) do
-      case Ash.DataLayer.transaction([resource], fn -> Ash.DataLayer.rollback([resource], fun.()) end) do
+      case Ash.DataLayer.transaction([resource], fn ->
+             Ash.DataLayer.rollback([resource], fun.())
+           end) do
         {:error, result} when is_map(result) -> result
         other -> %{outcome: :failed, detail: "transaction: #{inspect(other)}"}
       end
@@ -120,7 +130,10 @@ defmodule Mana.Replay do
               do: %{field: field, recorded: value, replayed: now}
 
         cleanup(record)
-        if fields == [], do: %{outcome: :same, applied: length(applied)}, else: %{outcome: :diverged, fields: fields, applied: length(applied)}
+
+        if fields == [],
+          do: %{outcome: :same, applied: length(applied)},
+          else: %{outcome: :diverged, fields: fields, applied: length(applied)}
 
       {:error, %{error: reason}} when reason in [:external, :redacted_input] ->
         %{outcome: :refused, detail: to_string(reason)}
@@ -160,26 +173,42 @@ defmodule Mana.Replay do
     verbs = MapSet.new(entries, & &1["verb"])
 
     if Mana.Verbs in Spark.extensions(resource) do
-      resource |> Mana.Verbs.declared() |> Enum.find_value(&(to_string(&1.name) in verbs && &1.feature))
+      resource
+      |> Mana.Verbs.declared()
+      |> Enum.find_value(&(to_string(&1.name) in verbs && &1.feature))
     end
   end
 
-  defp error_text(%{__exception__: true} = error), do: Exception.message(error) |> String.slice(0, 200)
+  defp error_text(%{__exception__: true} = error),
+    do: Exception.message(error) |> String.slice(0, 200)
+
   defp error_text(error), do: inspect(error) |> String.slice(0, 200)
 
   @doc "A person's reading of `report`."
   def format(report) do
     features =
       for {feature, counts} <- Enum.sort(report.by_feature) do
-        parts = for outcome <- [:same, :diverged, :refused, :failed], n = Map.get(counts, outcome), do: "#{n} #{outcome}"
+        parts =
+          for outcome <- [:same, :diverged, :refused, :failed],
+              n = Map.get(counts, outcome),
+              do: "#{n} #{outcome}"
+
         "#{feature}: #{Enum.sum(Map.values(counts))} subjects, #{Enum.join(parts, ", ")}"
       end
 
     details =
       for result <- report.results, result.outcome in [:diverged, :failed] do
         case result do
-          %{outcome: :diverged, fields: fields} -> "✗ #{result.subject}: " <> Enum.map_join(fields, "; ", &"#{&1.field} #{inspect(&1.recorded)} → #{inspect(&1.replayed)}")
-          %{detail: detail} -> "✗ #{result.subject}: #{detail}"
+          %{outcome: :diverged, fields: fields} ->
+            "✗ #{result.subject}: " <>
+              Enum.map_join(
+                fields,
+                "; ",
+                &"#{&1.field} #{inspect(&1.recorded)} → #{inspect(&1.replayed)}"
+              )
+
+          %{detail: detail} ->
+            "✗ #{result.subject}: #{detail}"
         end
       end
 

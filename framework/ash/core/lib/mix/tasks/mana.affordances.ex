@@ -13,11 +13,17 @@ defmodule Mix.Tasks.Mana.Affordances do
 
   @impl true
   def run(args) do
-    {cli, _} = OptionParser.parse!(args, strict: [out: :string, check: :boolean, runs: :integer, depth: :integer])
+    {cli, _} =
+      OptionParser.parse!(args,
+        strict: [out: :string, check: :boolean, runs: :integer, depth: :integer]
+      )
+
     Mix.Task.run("app.start")
     path = cli[:out] || "affordances.json"
     {domains, opts} = Mix.Tasks.Mana.Explore.options(Keyword.take(cli, [:runs, :depth]))
-    lock = domains |> Mana.Explore.run(Keyword.put(opts, :shrink, false)) |> Mana.Explore.Lock.build()
+
+    lock =
+      domains |> Mana.Explore.run(Keyword.put(opts, :shrink, false)) |> Mana.Explore.Lock.build()
 
     if cli[:check] do
       committed = if File.exists?(path), do: path |> File.read!() |> Jason.decode!(), else: %{}
@@ -27,7 +33,11 @@ defmodule Mix.Tasks.Mana.Affordances do
           Mix.shell().info("#{path} is current")
 
         changes ->
-          Mix.shell().info("#{path} is stale; run mix mana.affordances:\n" <> Enum.map_join(changes, "\n", &"  #{&1}"))
+          Mix.shell().info(
+            "#{path} is stale; run mix mana.affordances:\n" <>
+              Enum.map_join(changes, "\n", &"  #{&1}")
+          )
+
           exit({:shutdown, 1})
       end
     else

@@ -43,13 +43,22 @@ defmodule Mana.Examples do
             :none -> (fn unquote_splicing(args) -> unquote(body) end).(unquote_splicing(vars))
           end
 
-        Mana.Examples.record(__MODULE__, unquote(name), unquote(arity), [unquote_splicing(vars)], result)
+        Mana.Examples.record(
+          __MODULE__,
+          unquote(name),
+          unquote(arity),
+          [unquote_splicing(vars)],
+          result
+        )
+
         result
       end
     end
   end
 
-  defp binding_of({name, _, context}, _index) when is_atom(name) and is_atom(context), do: Macro.var(name, context)
+  defp binding_of({name, _, context}, _index) when is_atom(name) and is_atom(context),
+    do: Macro.var(name, context)
+
   defp binding_of(_pattern, index), do: Macro.var(:"example_arg_#{index}", __MODULE__)
 
   @keep 500
@@ -70,7 +79,11 @@ defmodule Mana.Examples do
           "result" => describe(result)
         })
 
-      lines = if File.exists?(file), do: file |> File.read!() |> String.split("\n", trim: true), else: []
+      lines =
+        if File.exists?(file),
+          do: file |> File.read!() |> String.split("\n", trim: true),
+          else: []
+
       File.write!(file, Enum.join(Enum.take(lines ++ [line], -@keep), "\n") <> "\n")
     end
 
@@ -80,12 +93,35 @@ defmodule Mana.Examples do
   end
 
   @doc "A value as an example shows it: structs by name and the fields that hold something, shortened."
-  def describe(value), do: value |> compact() |> inspect(limit: 12, printable_limit: 160, pretty: false) |> String.slice(0, 400)
+  def describe(value),
+    do:
+      value
+      |> compact()
+      |> inspect(limit: 12, printable_limit: 160, pretty: false)
+      |> String.slice(0, 400)
 
   # A struct reads as its name and the fields that hold something.
-  defp compact(%module{} = struct) when module not in [DateTime, Date, NaiveDateTime, Time, Decimal] do
-    fields = struct |> Map.from_struct() |> Map.drop([:__meta__, :__metadata__, :__lateral_join_source__, :__order__, :aggregates, :calculations])
-    {module |> Module.split() |> List.last(), for({k, v} <- fields, not is_nil(v) and not match?(%Ash.NotLoaded{}, v), into: %{}, do: {k, compact(v)})}
+  defp compact(%module{} = struct)
+       when module not in [DateTime, Date, NaiveDateTime, Time, Decimal] do
+    fields =
+      struct
+      |> Map.from_struct()
+      |> Map.drop([
+        :__meta__,
+        :__metadata__,
+        :__lateral_join_source__,
+        :__order__,
+        :aggregates,
+        :calculations
+      ])
+
+    {module |> Module.split() |> List.last(),
+     for(
+       {k, v} <- fields,
+       not is_nil(v) and not match?(%Ash.NotLoaded{}, v),
+       into: %{},
+       do: {k, compact(v)}
+     )}
   end
 
   defp compact(list) when is_list(list), do: Enum.map(list, &compact/1)

@@ -117,7 +117,9 @@ defmodule Moments.Manifest do
 
   defp platforms(scene, nil), do: scene
   defp platforms(_scene, []), do: raise(ArgumentError, "platforms cannot be empty")
-  defp platforms(scene, list), do: Map.put(scene, "platforms", list |> Enum.uniq() |> Enum.map(&to_string/1))
+
+  defp platforms(scene, list),
+    do: Map.put(scene, "platforms", list |> Enum.uniq() |> Enum.map(&to_string/1))
 
   defp lineage(manifest) do
     moments = manifest["moments"]
@@ -126,13 +128,18 @@ defmodule Moments.Manifest do
     if Enum.any?(moments, fn {_name, scene} -> Map.has_key?(scene, "from") end) do
       manifest
       |> Map.put("version", 3)
-      |> Map.put("protocol", %{"name" => "moments", "version" => "0.1", "profile" => "mana-ash-flutter"})
+      |> Map.put("protocol", %{
+        "name" => "moments",
+        "version" => "0.1",
+        "profile" => "mana-ash-flutter"
+      })
     else
       manifest
     end
   end
 
   defp ancestors!(nil, _moments, _seen), do: :ok
+
   defp ancestors!(name, moments, seen) do
     unless Map.has_key?(moments, name), do: raise(ArgumentError, "Unknown Moment parent: #{name}")
     if MapSet.member?(seen, name), do: raise(ArgumentError, "Moment parent cycle: #{name}")
@@ -217,9 +224,17 @@ defmodule Moments.Manifest do
             do: candidate
 
       case matches do
-        [found] -> found
-        [] -> raise(ArgumentError, "no resource of type #{inspect(resource)} in #{inspect(domains)}")
-        _ -> raise(ArgumentError, "several resources have type #{inspect(resource)}; name the module")
+        [found] ->
+          found
+
+        [] ->
+          raise(ArgumentError, "no resource of type #{inspect(resource)} in #{inspect(domains)}")
+
+        _ ->
+          raise(
+            ArgumentError,
+            "several resources have type #{inspect(resource)}; name the module"
+          )
       end
     end
   end
@@ -252,12 +267,14 @@ defmodule Moments.Manifest do
            !(is_boolean(check.equals) or is_number(check.equals) or is_binary(check.equals)),
          do: raise(ArgumentError, "check equals must be a scalar")
 
-      if (check.kind in [:offered, :not_offered]) != not is_nil(check.verb) or
+      if check.kind in [:offered, :not_offered] != not is_nil(check.verb) or
            (check.verb && (field || match)),
          do: raise(ArgumentError, "offered and not_offered checks take a verb, and only a verb")
 
       %{"name" => to_string(check.name), "kind" => to_string(check.kind)}
-      |> then(fn value -> if check.verb, do: Map.put(value, "verb", verb.(check.verb)), else: value end)
+      |> then(fn value ->
+        if check.verb, do: Map.put(value, "verb", verb.(check.verb)), else: value
+      end)
       |> then(fn value ->
         if check.scope == :step, do: Map.put(value, "scope", "step"), else: value
       end)
@@ -284,23 +301,48 @@ defmodule Moments.Manifest do
 
     Enum.map(steps, fn step ->
       gestures =
-        [tap: step.tap, fill: step.fill, reveal: step.reveal, back: step.back, swipe: step.swipe, long_press: step.long_press, submit: step.submit, verb: step.verb]
+        [
+          tap: step.tap,
+          fill: step.fill,
+          reveal: step.reveal,
+          back: step.back,
+          swipe: step.swipe,
+          long_press: step.long_press,
+          submit: step.submit,
+          verb: step.verb
+        ]
         |> Enum.reject(fn {_, value} -> value in [nil, false] end)
 
       {kind, target} =
         case gestures do
-          [{:fill, key}] when is_binary(step.from) -> {"fill", key}
-          [{:back, true}] when is_nil(step.from) -> {"back", "system.back"}
-          [{:reveal, key}] when is_nil(step.from) -> {"reveal", key}
-          [{kind, key}] when kind in [:tap, :swipe, :long_press, :submit] and is_binary(key) -> {to_string(kind), key}
-          [{:verb, reference}] when is_nil(step.from) -> {"tap", "verb:" <> verb.(reference)}
-          _ -> raise(ArgumentError, "step requires exactly one of tap, fill/from, reveal, back, swipe, long_press, submit or verb")
+          [{:fill, key}] when is_binary(step.from) ->
+            {"fill", key}
+
+          [{:back, true}] when is_nil(step.from) ->
+            {"back", "system.back"}
+
+          [{:reveal, key}] when is_nil(step.from) ->
+            {"reveal", key}
+
+          [{kind, key}] when kind in [:tap, :swipe, :long_press, :submit] and is_binary(key) ->
+            {to_string(kind), key}
+
+          [{:verb, reference}] when is_nil(step.from) ->
+            {"tap", "verb:" <> verb.(reference)}
+
+          _ ->
+            raise(
+              ArgumentError,
+              "step requires exactly one of tap, fill/from, reveal, back, swipe, long_press, submit or verb"
+            )
         end
 
-      if step.on && is_nil(step.verb), do: raise(ArgumentError, "on names the record of a verb step")
+      if step.on && is_nil(step.verb),
+        do: raise(ArgumentError, "on names the record of a verb step")
+
       input = step.from || step.on
 
-      unless (kind == "swipe") == not is_nil(step.direction),
+      unless kind == "swipe" == not is_nil(step.direction),
         do: raise(ArgumentError, "swipe requires a direction, and only swipe takes one")
 
       valid = fn value ->
@@ -333,7 +375,9 @@ defmodule Moments.Manifest do
         if input, do: Map.put(value, "inputRef", input), else: value
       end)
       |> then(fn value ->
-        if step.verb, do: Map.put(value, "verb", String.replace_prefix(target, "verb:", "")), else: value
+        if step.verb,
+          do: Map.put(value, "verb", String.replace_prefix(target, "verb:", "")),
+          else: value
       end)
       |> then(fn value ->
         if step.direction, do: Map.put(value, "direction", to_string(step.direction)), else: value

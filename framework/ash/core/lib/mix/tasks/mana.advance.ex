@@ -11,7 +11,9 @@ defmodule Mix.Tasks.Mana.Advance do
 
   @impl true
   def run([duration | _]) do
-    if Mix.env() == :prod, do: Mix.raise("mana.advance changes data as if time passed; not in production")
+    if Mix.env() == :prod,
+      do: Mix.raise("mana.advance changes data as if time passed; not in production")
+
     Mix.Task.run("app.start")
     [repo | _] = Application.fetch_env!(Mix.Project.config()[:app], :ecto_repos)
 

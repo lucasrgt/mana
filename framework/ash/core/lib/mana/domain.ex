@@ -53,21 +53,34 @@ defmodule Mana.Domain.DefineErrors do
     errors = Transformer.get_entities(dsl, [:errors])
 
     cond do
-      bad = Enum.find(errors, &(not Regex.match?(~r/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/, &1.code))) ->
+      bad =
+          Enum.find(
+            errors,
+            &(not Regex.match?(~r/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/, &1.code))
+          ) ->
         error(dsl, "error code #{inspect(bad.code)} must look like `area.reason`")
 
       dup = duplicate(errors) ->
         error(dsl, "error code #{inspect(dup)} is declared twice")
 
       true ->
-        {:ok, Transformer.eval(dsl, [], quote do
-           def error(name, opts \\ []) do
-             case Enum.find(Mana.Domain.Info.errors(__MODULE__), &(&1.name == name)) do
-               nil -> raise ArgumentError, "#{inspect(__MODULE__)} declares no error #{inspect(name)}"
-               e -> Mana.Error.new(e.code, e.message, Keyword.merge([status: e.status], opts))
+        {:ok,
+         Transformer.eval(
+           dsl,
+           [],
+           quote do
+             def error(name, opts \\ []) do
+               case Enum.find(Mana.Domain.Info.errors(__MODULE__), &(&1.name == name)) do
+                 nil ->
+                   raise ArgumentError,
+                         "#{inspect(__MODULE__)} declares no error #{inspect(name)}"
+
+                 e ->
+                   Mana.Error.new(e.code, e.message, Keyword.merge([status: e.status], opts))
+               end
              end
            end
-         end)}
+         )}
     end
   end
 
@@ -106,7 +119,9 @@ defmodule Mana.Domain.OpenApi do
 
   @doc "Alternatives that ended up identical (a read and an input of the same shape) become one."
   def collapse_alternatives(%{"anyOf" => options} = map) do
-    case options |> Enum.map(&collapse_alternatives/1) |> Enum.uniq_by(&(&1 |> Jason.encode!() |> Jason.decode!())) do
+    case options
+         |> Enum.map(&collapse_alternatives/1)
+         |> Enum.uniq_by(&(&1 |> Jason.encode!() |> Jason.decode!())) do
       [only] -> map |> Map.delete("anyOf") |> Map.merge(only)
       many -> collapse_children(%{map | "anyOf" => many})
     end
@@ -116,10 +131,18 @@ defmodule Mana.Domain.OpenApi do
   def collapse_alternatives(list) when is_list(list), do: Enum.map(list, &collapse_alternatives/1)
   def collapse_alternatives(value), do: value
 
-  defp collapse_children(map), do: Map.new(map, fn {k, v} -> {k, if(k == "anyOf", do: v, else: collapse_alternatives(v))} end)
+  defp collapse_children(map),
+    do:
+      Map.new(map, fn {k, v} -> {k, if(k == "anyOf", do: v, else: collapse_alternatives(v))} end)
 
   def put_error_codes(spec, domains) do
-    codes = domains |> Mana.Domain.Info.codes() |> Enum.concat(Mana.Error.platform_codes()) |> Enum.uniq() |> Enum.sort()
+    codes =
+      domains
+      |> Mana.Domain.Info.codes()
+      |> Enum.concat(Mana.Error.platform_codes())
+      |> Enum.uniq()
+      |> Enum.sort()
+
     put_in(spec, ["components", "schemas", "ErrorCode"], %{"type" => "string", "enum" => codes})
   end
 
@@ -159,8 +182,14 @@ defmodule Mana.Domain.OpenApi do
           shape = guaranteed(shape, inline(spec, type, attribute))
 
           spec
-          |> update_in(["components", "schemas"], &(&1 |> Map.delete(create) |> Map.delete(update) |> Map.put(name, shape)))
-          |> retarget(%{"#/components/schemas/#{create}" => name, "#/components/schemas/#{update}" => name})
+          |> update_in(
+            ["components", "schemas"],
+            &(&1 |> Map.delete(create) |> Map.delete(update) |> Map.put(name, shape))
+          )
+          |> retarget(%{
+            "#/components/schemas/#{create}" => name,
+            "#/components/schemas/#{update}" => name
+          })
           |> read_shape(type, attribute, name)
       end
     end)
@@ -174,7 +203,11 @@ defmodule Mana.Domain.OpenApi do
   def put_inline_shapes(spec, domains, shapes \\ nil) do
     by_fields =
       (shapes || app_shapes(domains))
-      |> Enum.group_by(&(&1 |> Ash.Resource.Info.public_attributes() |> MapSet.new(fn a -> to_string(a.name) end)))
+      |> Enum.group_by(
+        &(&1
+          |> Ash.Resource.Info.public_attributes()
+          |> MapSet.new(fn a -> to_string(a.name) end))
+      )
       |> Enum.flat_map(fn
         {fields, [shape]} -> [{fields, shape.__mana_shape__()}]
         _ -> []
@@ -187,12 +220,16 @@ defmodule Mana.Domain.OpenApi do
     {schemas, found} =
       Enum.reduce(components["schemas"], {%{}, found}, fn {name, schema}, {acc, found} ->
         {schema, found} =
-          if Map.values(by_fields) |> Enum.member?(name), do: hoist_children(schema, by_fields, found), else: hoist_shapes(schema, by_fields, found)
+          if Map.values(by_fields) |> Enum.member?(name),
+            do: hoist_children(schema, by_fields, found),
+            else: hoist_shapes(schema, by_fields, found)
 
         {Map.put(acc, name, schema), found}
       end)
 
-    schemas = Enum.reduce(found, schemas, fn {name, schema}, acc -> Map.put_new(acc, name, schema) end)
+    schemas =
+      Enum.reduce(found, schemas, fn {name, schema}, acc -> Map.put_new(acc, name, schema) end)
+
     Map.put(rest, "components", Map.put(components, "schemas", schemas))
   end
 
@@ -204,18 +241,32 @@ defmodule Mana.Domain.OpenApi do
     |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :__mana_shape__, 0)))
   end
 
-  defp hoist_shapes(%{"type" => "object", "properties" => %{} = properties} = map, by_fields, found) when map_size(properties) > 0 do
+  defp hoist_shapes(
+         %{"type" => "object", "properties" => %{} = properties} = map,
+         by_fields,
+         found
+       )
+       when map_size(properties) > 0 do
     {map, found} = hoist_children(map, by_fields, found)
 
     case by_fields[MapSet.new(Map.keys(properties))] do
-      nil -> {map, found}
-      name -> {%{"$ref" => "#/components/schemas/#{name}"}, Map.put_new(found, name, Map.delete(map, "nullable"))}
+      nil ->
+        {map, found}
+
+      name ->
+        {%{"$ref" => "#/components/schemas/#{name}"},
+         Map.put_new(found, name, Map.delete(map, "nullable"))}
     end
   end
 
   defp hoist_shapes(%{"$ref" => _} = ref, _, found), do: {ref, found}
-  defp hoist_shapes(map, by_fields, found) when is_map(map), do: hoist_children(map, by_fields, found)
-  defp hoist_shapes(list, by_fields, found) when is_list(list), do: Enum.map_reduce(list, found, &hoist_shapes(&1, by_fields, &2))
+
+  defp hoist_shapes(map, by_fields, found) when is_map(map),
+    do: hoist_children(map, by_fields, found)
+
+  defp hoist_shapes(list, by_fields, found) when is_list(list),
+    do: Enum.map_reduce(list, found, &hoist_shapes(&1, by_fields, &2))
+
   defp hoist_shapes(value, _, found), do: {value, found}
 
   defp hoist_children(map, by_fields, found) do
@@ -250,7 +301,15 @@ defmodule Mana.Domain.OpenApi do
 
   # A shape no action writes is still described by the read schema.
   defp inline(spec, type, attribute) do
-    case get_in(spec, ["components", "schemas", type, "properties", "attributes", "properties", attribute]) do
+    case get_in(spec, [
+           "components",
+           "schemas",
+           type,
+           "properties",
+           "attributes",
+           "properties",
+           attribute
+         ]) do
       %{"type" => "array", "items" => %{"type" => "object"} = items} -> items
       %{"type" => "object"} = object -> object
       _ -> nil
@@ -258,13 +317,18 @@ defmodule Mana.Domain.OpenApi do
   end
 
   defp shape_of({:array, type}), do: shape_of(type)
-  defp shape_of(type) when is_atom(type), do: if(function_exported?(type, :__mana_shape__, 0), do: type.__mana_shape__())
+
+  defp shape_of(type) when is_atom(type),
+    do: if(function_exported?(type, :__mana_shape__, 0), do: type.__mana_shape__())
+
   defp shape_of(_), do: nil
 
   defp retarget(%{"$ref" => ref} = map, targets) when is_map_key(targets, ref),
     do: %{map | "$ref" => "#/components/schemas/#{targets[ref]}"}
 
-  defp retarget(map, targets) when is_map(map), do: Map.new(map, fn {k, v} -> {k, retarget(v, targets)} end)
+  defp retarget(map, targets) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {k, retarget(v, targets)} end)
+
   defp retarget(list, targets) when is_list(list), do: Enum.map(list, &retarget(&1, targets))
   defp retarget(value, _), do: value
 

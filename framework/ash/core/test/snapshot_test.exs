@@ -21,7 +21,10 @@ defmodule Mana.SnapshotTest do
     on_exit(fn -> for id <- Mana.Snapshot.scopes(@repo), do: Mana.Snapshot.drop(@repo, id) end)
   end
 
-  defp insert(body), do: @repo.query!("INSERT INTO notes (id, body) VALUES ($1, $2)", [Ecto.UUID.bingenerate(), body])
+  defp insert(body),
+    do:
+      @repo.query!("INSERT INTO notes (id, body) VALUES ($1, $2)", [Ecto.UUID.bingenerate(), body])
+
   defp bodies, do: @repo.query!("SELECT body FROM notes ORDER BY body").rows |> List.flatten()
   defp open(from \\ :base), do: Mana.Snapshot.open(@repo, from, migrations: @migrations)
 
@@ -58,13 +61,19 @@ defmodule Mana.SnapshotTest do
 
   test "an unknown snapshot or a bad name is refused" do
     assert_raise ArgumentError, ~r/no snapshot/, fn -> open("missing") end
-    assert_raise ArgumentError, ~r/lowercase/, fn -> Mana.Snapshot.capture(@repo, "x", "Bad Name") end
+
+    assert_raise ArgumentError, ~r/lowercase/, fn ->
+      Mana.Snapshot.capture(@repo, "x", "Bad Name")
+    end
   end
 
   test "the plug routes a request to its scope only when scopes are on" do
     a = open()
     Mana.Snapshot.with_scope(@repo, a, fn -> insert("scoped") end)
-    request = fn header -> Plug.Test.conn(:get, "/") |> Plug.Conn.put_req_header("x-mana-data-scope", header) end
+
+    request = fn header ->
+      Plug.Test.conn(:get, "/") |> Plug.Conn.put_req_header("x-mana-data-scope", header)
+    end
 
     Application.put_env(:mana_core, :data_scopes, false)
     conn = Mana.Snapshot.Plug.call(request.(a), @repo)
@@ -93,7 +102,15 @@ defmodule Mana.SnapshotTest do
       :ok
     end
 
-    Mana.Explore.run([ExploreTest.Domain], resources: [ExploreTest.Card], actors: %{ana: nil}, runs: 3, depth: 2, seed: 1, reset: combined, shrink: false)
+    Mana.Explore.run([ExploreTest.Domain],
+      resources: [ExploreTest.Card],
+      actors: %{ana: nil},
+      runs: 3,
+      depth: 2,
+      seed: 1,
+      reset: combined,
+      shrink: false
+    )
 
     scopes = for _ <- 1..3, do: assert_received({:scope, pid}) && pid
     assert Enum.uniq(scopes) |> length() == 3

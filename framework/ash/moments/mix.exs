@@ -14,6 +14,7 @@ defmodule Moments.MixProject do
       {:plug, "~> 1.16"},
       {:mana_core, path: "../core", only: :test},
       {:ecto_sql, "~> 3.12", only: :test},
-      {:postgrex, "~> 0.20", only: :test}
+      {:postgrex, "~> 0.20", only: :test},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
 end

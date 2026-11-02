@@ -14,7 +14,9 @@ defmodule Mana.ReconcileWithinTest do
 
     assert %{state: :converged} = report(DateTime.add(hold.updated_at, 14 * 60, :second))
 
-    assert %{state: :diverging, diverging: [%{id: id, detail: detail}]} = report(DateTime.add(hold.updated_at, 16 * 60, :second))
+    assert %{state: :diverging, diverging: [%{id: id, detail: detail}]} =
+             report(DateTime.add(hold.updated_at, 16 * 60, :second))
+
     assert id == hold.id
     assert detail =~ "longer than 15m"
   end
@@ -29,7 +31,12 @@ defmodule Mana.ReconcileWithinTest do
   test "a clock per record measures each from its own now" do
     old = Ash.create!(ExploreTest.Hold, %{expires: false}, action: :place)
     young = Ash.create!(ExploreTest.Hold, %{expires: false}, action: :place)
-    now = fn record -> if record.id == old.id, do: DateTime.add(old.updated_at, 20 * 60, :second), else: young.updated_at end
+
+    now = fn record ->
+      if record.id == old.id,
+        do: DateTime.add(old.updated_at, 20 * 60, :second),
+        else: young.updated_at
+    end
 
     assert %{diverging: [%{id: id}]} = report(now)
     assert id == old.id
@@ -48,7 +55,11 @@ defmodule Mana.ReconcileWithinTest do
   test "a rule needs holds, within, or both" do
     assert_raise Spark.Error.DslError, ~r/needs holds:, within:, or both/, fn ->
       defmodule Pointless do
-        use Ash.Resource, domain: nil, validate_domain_inclusion?: false, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Reconcile]
+        use Ash.Resource,
+          domain: nil,
+          validate_domain_inclusion?: false,
+          data_layer: Ash.DataLayer.Ets,
+          extensions: [Mana.Reconcile]
 
         attributes do
           uuid_primary_key(:id)

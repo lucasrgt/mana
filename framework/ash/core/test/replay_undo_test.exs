@@ -1,6 +1,9 @@
 defmodule ReplayTest.Entry do
   @moduledoc false
-  use Ash.Resource, domain: ReplayTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.History.Log]
+  use Ash.Resource,
+    domain: ReplayTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.History.Log]
 
   history_log do
     subjects([ReplayTest.Wallet])
@@ -9,7 +12,10 @@ end
 
 defmodule ReplayTest.Wallet do
   @moduledoc false
-  use Ash.Resource, domain: ReplayTest.Domain, data_layer: Ash.DataLayer.Ets, extensions: [Mana.Verbs, Mana.History]
+  use Ash.Resource,
+    domain: ReplayTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs, Mana.History]
 
   history do
     log(ReplayTest.Entry)
@@ -31,7 +37,12 @@ defmodule ReplayTest.Wallet do
 
       change(fn changeset, _ ->
         bonus = Application.get_env(:mana_core, :replay_test_bonus, 0)
-        Ash.Changeset.force_change_attribute(changeset, :balance, changeset.data.balance + Ash.Changeset.get_argument(changeset, :amount) + bonus)
+
+        Ash.Changeset.force_change_attribute(
+          changeset,
+          :balance,
+          changeset.data.balance + Ash.Changeset.get_argument(changeset, :amount) + bonus
+        )
       end)
     end
 
@@ -71,7 +82,25 @@ defmodule Mana.ReplayUndoTest do
   defp exported do
     ReplayTest.Entry
     |> Ash.read!(authorize?: false)
-    |> Enum.map(fn e -> e |> Map.take([:id, :subject_type, :subject_id, :action, :verb, :actor_id, :actor_kind, :params, :before, :after, :outcome, :at]) |> Jason.encode!() |> Jason.decode!() end)
+    |> Enum.map(fn e ->
+      e
+      |> Map.take([
+        :id,
+        :subject_type,
+        :subject_id,
+        :action,
+        :verb,
+        :actor_id,
+        :actor_kind,
+        :params,
+        :before,
+        :after,
+        :outcome,
+        :at
+      ])
+      |> Jason.encode!()
+      |> Jason.decode!()
+    end)
   end
 
   defp wallet_with(amounts) do
@@ -102,7 +131,9 @@ defmodule Mana.ReplayUndoTest do
       Application.put_env(:mana_core, :replay_test_bonus, 1)
       report = Mana.Replay.run(entries, domains: [ReplayTest.Domain])
 
-      assert [%{subject: subject, fields: [%{field: "balance", recorded: 10, replayed: 11}]}] = Enum.filter(report.results, &(&1.outcome == :diverged))
+      assert [%{subject: subject, fields: [%{field: "balance", recorded: 10, replayed: 11}]}] =
+               Enum.filter(report.results, &(&1.outcome == :diverged))
+
       assert subject == "wallet:#{deposited.id}"
       assert Mana.Replay.format(report) =~ "balance 10 → 11"
     end
@@ -120,7 +151,9 @@ defmodule Mana.ReplayUndoTest do
       wallet = Ash.create!(ReplayTest.Wallet, %{}, action: :open, actor: @me)
       frozen = Ash.update!(wallet, %{}, action: :freeze, actor: @me)
 
-      assert %{verb: %{name: :freeze}, inverse: %{name: :thaw}, entry: entry} = Mana.Undo.last(frozen, @me)
+      assert %{verb: %{name: :freeze}, inverse: %{name: :thaw}, entry: entry} =
+               Mana.Undo.last(frozen, @me)
+
       assert {:ok, %{frozen: false} = thawed} = Mana.Undo.undo(frozen, @me)
 
       [newest | _] = ReplayTest.Entry |> Ash.Query.sort(at: :desc) |> Ash.read!(authorize?: false)
@@ -147,7 +180,28 @@ defmodule Mana.ReplayUndoTest do
 
       [entry | _] = ReplayTest.Entry |> Ash.Query.sort(at: :desc) |> Ash.read!(authorize?: false)
       Mana.Explore.empty_ets(ReplayTest.Entry)
-      Ash.Seed.seed!(ReplayTest.Entry, entry |> Map.from_struct() |> Map.take([:id, :subject_type, :subject_id, :action, :verb, :actor_id, :actor_kind, :params, :before, :after, :outcome, :summary]) |> Map.put(:at, DateTime.add(DateTime.utc_now(), -3600, :second)))
+
+      Ash.Seed.seed!(
+        ReplayTest.Entry,
+        entry
+        |> Map.from_struct()
+        |> Map.take([
+          :id,
+          :subject_type,
+          :subject_id,
+          :action,
+          :verb,
+          :actor_id,
+          :actor_kind,
+          :params,
+          :before,
+          :after,
+          :outcome,
+          :summary
+        ])
+        |> Map.put(:at, DateTime.add(DateTime.utc_now(), -3600, :second))
+      )
+
       assert Mana.Undo.last(frozen, @me, within: {1, :minute}) == nil
     end
   end

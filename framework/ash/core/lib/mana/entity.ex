@@ -38,9 +38,21 @@ defmodule Mana.Entity do
     identifier: :name,
     schema: [
       name: [type: :atom, required: true],
-      action: [type: :atom, required: true, doc: "The update action performed when the deadline passes."],
-      when: [type: :any, required: true, doc: "The state the deadline watches; it fires only while this holds."],
-      after: [type: :any, required: true, doc: "`{amount, unit}` from the change, or `{Module, :function}` → DateTime."]
+      action: [
+        type: :atom,
+        required: true,
+        doc: "The update action performed when the deadline passes."
+      ],
+      when: [
+        type: :any,
+        required: true,
+        doc: "The state the deadline watches; it fires only while this holds."
+      ],
+      after: [
+        type: :any,
+        required: true,
+        doc: "`{amount, unit}` from the change, or `{Module, :function}` → DateTime."
+      ]
     ]
   }
 
@@ -49,12 +61,20 @@ defmodule Mana.Entity do
     imports: [Ash.Expr],
     entities: [@deadline],
     schema: [
-      type: [type: :string, doc: "The topic name; the JSON:API type or the module's last segment by default."],
+      type: [
+        type: :string,
+        doc: "The topic name; the JSON:API type or the module's last segment by default."
+      ],
       broadcast: [type: :atom, doc: "A module with `broadcast/3` (a Phoenix endpoint)."],
-      audience: [type: {:list, :atom}, default: [], doc: "User-id fields whose user follows every change."],
+      audience: [
+        type: {:list, :atom},
+        default: [],
+        doc: "User-id fields whose user follows every change."
+      ],
       watchers: [
         type: {:tuple, [:atom, :atom]},
-        doc: "`{Module, :fun}`(user) → true for who may follow every record of the type on `entity:<type>:all` (an operator's queue)."
+        doc:
+          "`{Module, :fun}`(user) → true for who may follow every record of the type on `entity:<type>:all` (an operator's queue)."
       ],
       queue: [type: :atom, default: :default, doc: "The Oban queue deadlines run on."]
     ]
@@ -67,7 +87,12 @@ defmodule Mana.Entity do
   def observe(record) do
     %{
       "topics" => topics(record),
-      "deadlines" => for(deadline <- deadlines(record.__struct__), holds?(deadline.when, record), do: to_string(deadline.name))
+      "deadlines" =>
+        for(
+          deadline <- deadlines(record.__struct__),
+          holds?(deadline.when, record),
+          do: to_string(deadline.name)
+        )
     }
   end
 
@@ -77,7 +102,11 @@ defmodule Mana.Entity do
   @impl Mana.Primitive
   def contract(resource) do
     [
-      %{"topic" => type(resource), "audience" => Enum.map(audience(resource), &to_string/1), "deadlines" => Enum.map(deadlines(resource), &to_string(&1.name))}
+      %{
+        "topic" => type(resource),
+        "audience" => Enum.map(audience(resource), &to_string/1),
+        "deadlines" => Enum.map(deadlines(resource), &to_string(&1.name))
+      }
       |> then(&if watchers(resource), do: Map.put(&1, "watchable", true), else: &1)
     ]
   end
@@ -91,6 +120,7 @@ defmodule Mana.Entity do
         __MODULE__ in Spark.extensions(resource),
         do: resource
   end
+
   def audience(resource), do: Spark.Dsl.Extension.get_opt(resource, [:entity], :audience, [])
   def watchers(resource), do: Spark.Dsl.Extension.get_opt(resource, [:entity], :watchers, nil)
   def broadcaster(resource), do: Spark.Dsl.Extension.get_opt(resource, [:entity], :broadcast, nil)
@@ -98,7 +128,8 @@ defmodule Mana.Entity do
 
   def type(resource) do
     Spark.Dsl.Extension.get_opt(resource, [:entity], :type, nil) ||
-      (Code.ensure_loaded?(AshJsonApi.Resource.Info) && AshJsonApi.Resource in Spark.extensions(resource) &&
+      (Code.ensure_loaded?(AshJsonApi.Resource.Info) &&
+         AshJsonApi.Resource in Spark.extensions(resource) &&
          to_string(AshJsonApi.Resource.Info.type(resource))) ||
       resource |> Module.split() |> List.last() |> Macro.underscore()
   end
@@ -108,14 +139,26 @@ defmodule Mana.Entity do
     resource = record.__struct__
     type = type(resource)
 
-    ["entity:#{type}:#{record.id}" | for(field <- audience(resource), user = Map.get(record, field), do: "entity:#{type}:for:#{user}")] ++
+    [
+      "entity:#{type}:#{record.id}"
+      | for(
+          field <- audience(resource),
+          user = Map.get(record, field),
+          do: "entity:#{type}:for:#{user}"
+        )
+    ] ++
       if(watchers(resource), do: ["entity:#{type}:all"], else: [])
   end
 
   @doc false
   def announce(record) do
     if broadcaster = broadcaster(record.__struct__) do
-      for topic <- topics(record), do: broadcaster.broadcast(topic, "changed", %{"id" => record.id, "type" => type(record.__struct__)})
+      for topic <- topics(record),
+          do:
+            broadcaster.broadcast(topic, "changed", %{
+              "id" => record.id,
+              "type" => type(record.__struct__)
+            })
     end
 
     :ok
@@ -125,11 +168,14 @@ defmodule Mana.Entity do
   def holds?(expression, record) do
     resource = record.__struct__
 
-    if Ash.DataLayer.data_layer_can?(resource, :filter) and Ash.Resource.Info.primary_key(resource) != [] do
+    if Ash.DataLayer.data_layer_can?(resource, :filter) and
+         Ash.Resource.Info.primary_key(resource) != [] do
       # Asked of the stored row, so the expression may reach relationships
       # (`exists(charges, ...)`) that the record in hand has not loaded.
       resource
-      |> Ash.Query.do_filter(Map.to_list(Map.take(record, Ash.Resource.Info.primary_key(resource))))
+      |> Ash.Query.do_filter(
+        Map.to_list(Map.take(record, Ash.Resource.Info.primary_key(resource)))
+      )
       |> Ash.Query.do_filter(expression)
       |> Ash.exists?(authorize?: false)
     else
@@ -138,7 +184,9 @@ defmodule Mana.Entity do
   end
 
   @doc false
-  def due_at(%{after: {amount, unit}}, _record) when is_integer(amount), do: DateTime.add(DateTime.utc_now(), amount, unit)
+  def due_at(%{after: {amount, unit}}, _record) when is_integer(amount),
+    do: DateTime.add(DateTime.utc_now(), amount, unit)
+
   def due_at(%{after: {module, function}}, record), do: apply(module, function, [record])
 
   @doc false
@@ -147,7 +195,13 @@ defmodule Mana.Entity do
 
     for deadline <- deadlines(resource), holds?(deadline.when, record) do
       inserter = Application.get_env(:mana_core, :deadline_inserter, &insert/1)
-      args = %{"resource" => inspect(resource), "id" => record.id, "deadline" => to_string(deadline.name)}
+
+      args = %{
+        "resource" => inspect(resource),
+        "id" => record.id,
+        "deadline" => to_string(deadline.name)
+      }
+
       inserter.(%{args: args, queue: queue(resource), scheduled_at: due_at(deadline, record)})
     end
 
@@ -164,7 +218,12 @@ defmodule Mana.Entity do
     with %{} <- deadline,
          {:ok, record} <- Ash.get(resource, id, authorize?: false),
          true <- holds?(deadline.when, record) do
-      Ash.update!(record, %{}, action: deadline.action, authorize?: false, context: %{mana_deadline: deadline.name})
+      Ash.update!(record, %{},
+        action: deadline.action,
+        authorize?: false,
+        context: %{mana_deadline: deadline.name}
+      )
+
       :ok
     else
       _ -> :ok
@@ -225,7 +284,11 @@ if Code.ensure_loaded?(Oban.Worker) do
 
     @impl true
     def perform(%Oban.Job{args: %{"resource" => resource, "id" => id, "deadline" => name}}) do
-      resource |> String.trim_leading("Elixir.") |> String.split(".") |> Module.safe_concat() |> Mana.Entity.run_deadline(id, name)
+      resource
+      |> String.trim_leading("Elixir.")
+      |> String.split(".")
+      |> Module.safe_concat()
+      |> Mana.Entity.run_deadline(id, name)
     end
   end
 end
@@ -240,10 +303,14 @@ defmodule Mana.Entity.Transformer do
 
   def transform(dsl) do
     configured? =
-      Transformer.get_option(dsl, [:entity], :broadcast) != nil or Transformer.get_entities(dsl, [:entity]) != []
+      Transformer.get_option(dsl, [:entity], :broadcast) != nil or
+        Transformer.get_entities(dsl, [:entity]) != []
 
     if configured? do
-      with {:ok, dsl} <- Ash.Resource.Builder.add_change(dsl, Mana.Entity.Changed, on: [:create, :update, :destroy]),
+      with {:ok, dsl} <-
+             Ash.Resource.Builder.add_change(dsl, Mana.Entity.Changed,
+               on: [:create, :update, :destroy]
+             ),
            do: {:ok, Mana.NotAtomic.mark(dsl, fn _ -> true end)}
     else
       {:ok, dsl}
@@ -270,7 +337,8 @@ if Code.ensure_loaded?(Phoenix.Channel) do
 
       case String.split(rest, ":") do
         [type, "all"] ->
-          with resource when not is_nil(resource) <- Enum.find(resources, &(Mana.Entity.type(&1) == type)),
+          with resource when not is_nil(resource) <-
+                 Enum.find(resources, &(Mana.Entity.type(&1) == type)),
                {module, function} <- Mana.Entity.watchers(resource),
                true <- user != nil and apply(module, function, [user]) do
             {:ok, socket}
@@ -279,12 +347,14 @@ if Code.ensure_loaded?(Phoenix.Channel) do
           end
 
         [type, "for", id] ->
-          if user && to_string(user.id) == id && Enum.any?(resources, &(Mana.Entity.type(&1) == type)),
-            do: {:ok, socket},
-            else: {:error, %{reason: "unauthorized"}}
+          if user && to_string(user.id) == id &&
+               Enum.any?(resources, &(Mana.Entity.type(&1) == type)),
+             do: {:ok, socket},
+             else: {:error, %{reason: "unauthorized"}}
 
         [type, id] ->
-          with resource when not is_nil(resource) <- Enum.find(resources, &(Mana.Entity.type(&1) == type)),
+          with resource when not is_nil(resource) <-
+                 Enum.find(resources, &(Mana.Entity.type(&1) == type)),
                {:ok, _} <- Ash.get(resource, id, actor: user) do
             {:ok, socket}
           else

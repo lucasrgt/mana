@@ -42,11 +42,16 @@ defmodule Moments.ActionTrace do
           coverage: "not-established"
         }
 
-        result = if changes == [], do: result, else: Map.put(result, :changes, changes |> Enum.sort() |> Enum.map(&elem(&1, 1)))
-        result = Map.put(result, :profile, %{
-          requestDurationUs: elapsed(context.started),
-          database: database_profile(context.table)
-        })
+        result =
+          if changes == [],
+            do: result,
+            else: Map.put(result, :changes, changes |> Enum.sort() |> Enum.map(&elem(&1, 1)))
+
+        result =
+          Map.put(result, :profile, %{
+            requestDurationUs: elapsed(context.started),
+            database: database_profile(context.table)
+          })
 
         discard()
         result
@@ -75,7 +80,8 @@ defmodule Moments.ActionTrace do
   @impl true
   def start_span(type, _name) do
     Process.put(@stack, [
-      %{metadata: %{kind: to_string(type)}, error: false, started: System.monotonic_time()} | Process.get(@stack, [])
+      %{metadata: %{kind: to_string(type)}, error: false, started: System.monotonic_time()}
+      | Process.get(@stack, [])
     ])
 
     :ok
@@ -125,8 +131,12 @@ defmodule Moments.ActionTrace do
         _ -> false
       end
 
-    fields = if is_integer(duration) and duration >= 0,
-      do: Map.put(fields, :durationUs, System.convert_time_unit(duration, :native, :microsecond)), else: fields
+    fields =
+      if is_integer(duration) and duration >= 0,
+        do:
+          Map.put(fields, :durationUs, System.convert_time_unit(duration, :native, :microsecond)),
+        else: fields
+
     if !already_traced, do: retain(Map.put(fields, :outcome, "span-finished"))
     :ok
   end
@@ -160,15 +170,22 @@ defmodule Moments.ActionTrace do
   # processes and work after the HTTP receipt closes are not attributed.
   def observe_query(measurements) do
     if context = Process.get(@key) do
-      totals = for key <- [:total_time, :query_time, :queue_time, :decode_time] do
-        value = Map.get(measurements, key, 0)
-        if is_integer(value) and value >= 0, do: value, else: 0
-      end
+      totals =
+        for key <- [:total_time, :query_time, :queue_time, :decode_time] do
+          value = Map.get(measurements, key, 0)
+          if is_integer(value) and value >= 0, do: value, else: 0
+        end
+
       [total, query, queue, decode] = totals
-      :ets.update_counter(context.table, :database,
+
+      :ets.update_counter(
+        context.table,
+        :database,
         [{2, 1}, {3, total}, {4, query}, {5, queue}, {6, decode}],
-        {:database, 0, 0, 0, 0, 0})
+        {:database, 0, 0, 0, 0, 0}
+      )
     end
+
     :ok
   rescue
     ArgumentError -> :ok
@@ -177,12 +194,17 @@ defmodule Moments.ActionTrace do
   defp database_profile(table) do
     case :ets.lookup(table, :database) do
       [{:database, count, total, query, queue, decode}] ->
-        %{status: "observed", queries: count,
+        %{
+          status: "observed",
+          queries: count,
           totalUs: System.convert_time_unit(total, :native, :microsecond),
           queryUs: System.convert_time_unit(query, :native, :microsecond),
           queueUs: System.convert_time_unit(queue, :native, :microsecond),
-          decodeUs: System.convert_time_unit(decode, :native, :microsecond)}
-      [] -> %{status: "not-observed"}
+          decodeUs: System.convert_time_unit(decode, :native, :microsecond)
+        }
+
+      [] ->
+        %{status: "not-observed"}
     end
   end
 
@@ -192,7 +214,13 @@ defmodule Moments.ActionTrace do
   (`done` or `failed`) and the changed `fields` — names only, never values.
   At most #{@limit} per request; nothing outside a request.
   """
-  def annotate_change(%{resource: resource, subject: subject, action: action, outcome: outcome, fields: fields})
+  def annotate_change(%{
+        resource: resource,
+        subject: subject,
+        action: action,
+        outcome: outcome,
+        fields: fields
+      })
       when is_binary(subject) and outcome in ["done", "failed"] and is_list(fields) do
     if context = Process.get(@key) do
       id = :ets.update_counter(context.table, :changes, {2, 1}, {:changes, 0})
@@ -215,7 +243,8 @@ defmodule Moments.ActionTrace do
     ArgumentError -> :ok
   end
 
-  defp elapsed(started), do: System.convert_time_unit(System.monotonic_time() - started, :native, :microsecond)
+  defp elapsed(started),
+    do: System.convert_time_unit(System.monotonic_time() - started, :native, :microsecond)
 
   defp retain(event) do
     if context = Process.get(@key) do

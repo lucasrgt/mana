@@ -38,12 +38,23 @@ defmodule Mana.Webhook do
         status =
           try do
             case handler.(body, conn) do
-              result when result in [:ok, :ignored] -> 200
-              {:error, reason} -> tap(503, fn _ -> Logger.warning("webhook #{conn.request_path} will be retried: #{inspect(reason)}") end)
+              result when result in [:ok, :ignored] ->
+                200
+
+              {:error, reason} ->
+                tap(503, fn _ ->
+                  Logger.warning(
+                    "webhook #{conn.request_path} will be retried: #{inspect(reason)}"
+                  )
+                end)
             end
           rescue
             error ->
-              Logger.error("webhook #{conn.request_path} failed: " <> Exception.format(:error, error, __STACKTRACE__))
+              Logger.error(
+                "webhook #{conn.request_path} failed: " <>
+                  Exception.format(:error, error, __STACKTRACE__)
+              )
+
               503
           end
 
@@ -58,7 +69,8 @@ defmodule Mana.Webhook do
   end
 
   @doc "Constant-time comparison of a hex HMAC-SHA256 of `payload` against `signature`, case-insensitive."
-  def hmac_sha256_valid?(secret, payload, signature) when is_binary(secret) and secret != "" and is_binary(signature) do
+  def hmac_sha256_valid?(secret, payload, signature)
+      when is_binary(secret) and secret != "" and is_binary(signature) do
     expected = :crypto.mac(:hmac, :sha256, secret, payload) |> Base.encode16(case: :lower)
     Plug.Crypto.secure_compare(expected, String.downcase(signature))
   end

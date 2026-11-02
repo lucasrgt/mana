@@ -17,11 +17,13 @@ defmodule Mana.Undo do
   def last(record, actor, opts \\ []) do
     resource = record.__struct__
 
-    with true <- Mana.History in Spark.extensions(resource) and Mana.Verbs in Spark.extensions(resource),
+    with true <-
+           Mana.History in Spark.extensions(resource) and Mana.Verbs in Spark.extensions(resource),
          log when not is_nil(log) <- Mana.History.log(resource),
          %{} = entry <- newest(log, resource, record.id),
          true <- mine?(entry, actor) and not undo?(entry) and recent?(entry, opts[:within]),
-         %{inverse: inverse_name} = verb when not is_nil(inverse_name) <- verb(resource, entry.verb),
+         %{inverse: inverse_name} = verb when not is_nil(inverse_name) <-
+           verb(resource, entry.verb),
          true <- to_string(inverse_name) in Mana.Verbs.offered(record, actor) do
       %{entry: entry, verb: verb, inverse: verb(resource, to_string(inverse_name))}
     else
@@ -37,25 +39,41 @@ defmodule Mana.Undo do
 
       %{entry: entry, inverse: inverse} ->
         record
-        |> Ash.Changeset.for_update(Mana.Verbs.action(inverse), %{}, actor: actor, context: %{mana_undo_of: entry.id})
+        |> Ash.Changeset.for_update(Mana.Verbs.action(inverse), %{},
+          actor: actor,
+          context: %{mana_undo_of: entry.id}
+        )
         |> Ash.update()
     end
   end
 
   defp newest(log, resource, id) do
     log
-    |> Ash.Query.filter(subject_type == ^Mana.Entity.type(resource) and subject_id == ^to_string(id) and outcome == :done)
+    |> Ash.Query.filter(
+      subject_type == ^Mana.Entity.type(resource) and subject_id == ^to_string(id) and
+        outcome == :done
+    )
     |> Ash.Query.sort(at: :desc)
     |> Ash.Query.limit(1)
     |> Ash.read_one!(authorize?: false)
   end
 
-  defp mine?(entry, actor), do: actor != nil and entry.actor_kind == :user and to_string(entry.actor_id) == to_string(Map.get(actor, :id))
+  defp mine?(entry, actor),
+    do:
+      actor != nil and entry.actor_kind == :user and
+        to_string(entry.actor_id) == to_string(Map.get(actor, :id))
+
   defp undo?(entry), do: is_binary(entry.via) and String.starts_with?(entry.via, "undo:")
 
   defp recent?(_entry, nil), do: true
-  defp recent?(entry, window), do: DateTime.diff(DateTime.utc_now(), entry.at, :second) <= Mana.Reconcile.within_seconds(window)
+
+  defp recent?(entry, window),
+    do:
+      DateTime.diff(DateTime.utc_now(), entry.at, :second) <=
+        Mana.Reconcile.within_seconds(window)
 
   defp verb(_resource, nil), do: nil
-  defp verb(resource, name), do: Enum.find(Mana.Verbs.declared(resource), &(to_string(&1.name) == name))
+
+  defp verb(resource, name),
+    do: Enum.find(Mana.Verbs.declared(resource), &(to_string(&1.name) == name))
 end

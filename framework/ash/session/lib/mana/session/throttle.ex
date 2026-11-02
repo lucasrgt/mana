@@ -5,7 +5,14 @@ defmodule Mana.Session.Throttle do
   def init(options), do: Map.new(options)
 
   def call(%{method: "POST", path_info: ["auth", action]} = conn, %{scope: :ip} = options)
-      when action in ["sign-in", "sign-up", "request-password-reset", "reset-password", "request-confirmation", "confirm-email"],
+      when action in [
+             "sign-in",
+             "sign-up",
+             "request-password-reset",
+             "reset-password",
+             "request-confirmation",
+             "confirm-email"
+           ],
       do: admit(conn, options, {:ip, conn.remote_ip}, 30)
 
   def call(conn, %{scope: :ip}), do: conn

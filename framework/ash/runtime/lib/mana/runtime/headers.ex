@@ -13,6 +13,9 @@ defmodule Mana.Runtime.Headers do
   @impl true
   def call(conn, _options) do
     conn = put_resp_header(conn, "x-content-type-options", "nosniff")
-    if conn.scheme == :https, do: put_resp_header(conn, "strict-transport-security", "max-age=31536000"), else: conn
+
+    if conn.scheme == :https,
+      do: put_resp_header(conn, "strict-transport-security", "max-age=31536000"),
+      else: conn
   end
 end

@@ -40,7 +40,10 @@ defmodule Mana.Integration do
   @doc "Validates the slots' adapters; raises with every problem found."
   def check!(slots, production?) do
     problems = Enum.flat_map(slots, &problems(&1, production?))
-    if problems != [], do: raise(ArgumentError, "integrations not ready:\n  " <> Enum.join(problems, "\n  "))
+
+    if problems != [],
+      do: raise(ArgumentError, "integrations not ready:\n  " <> Enum.join(problems, "\n  "))
+
     :ok
   end
 
@@ -52,13 +55,16 @@ defmodule Mana.Integration do
         ["#{inspect(slot)}: #{inspect(adapter)} is not a Mana.Integration.Adapter"]
 
       adapter.__mana_adapter__().slot != slot ->
-        ["#{inspect(slot)}: #{inspect(adapter)} implements #{inspect(adapter.__mana_adapter__().slot)}"]
+        [
+          "#{inspect(slot)}: #{inspect(adapter)} implements #{inspect(adapter.__mana_adapter__().slot)}"
+        ]
 
       production? and adapter.__mana_adapter__().fake? ->
         ["#{inspect(slot)}: fake adapter #{inspect(adapter)} in production"]
 
       production? ->
-        for name <- adapter.__mana_adapter__().env, System.get_env(name) in [nil, ""],
+        for name <- adapter.__mana_adapter__().env,
+            System.get_env(name) in [nil, ""],
             do: "#{inspect(slot)}: #{name} is not set"
 
       true ->
@@ -82,7 +88,9 @@ defmodule Mana.Integration.Adapter do
 
       @doc false
       def env!(name) do
-        unless Enum.member?(unquote(env), name), do: raise(ArgumentError, "#{name} is not declared by #{inspect(__MODULE__)}")
+        unless Enum.member?(unquote(env), name),
+          do: raise(ArgumentError, "#{name} is not declared by #{inspect(__MODULE__)}")
+
         System.fetch_env!(name)
       end
     end

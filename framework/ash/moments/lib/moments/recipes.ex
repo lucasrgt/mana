@@ -54,10 +54,23 @@ defmodule Moments.Recipes do
 
       result =
         case {module, operation} do
-          {{set, key}, "prepare"} -> in_data_scope(set.__recipe__(:data_scope?, key), repo, open_opts, fn -> set.__recipe__(:prepare, key, params["context"] || %{}) end)
-          {{set, key}, "observe"} -> scoped(params["launch"], repo, fn -> set.__recipe__(:observe, key, params["launch"] || %{}, params["projection"] || %{}) end)
-          {module, "prepare"} -> module.prepare(params["context"] || %{})
-          {module, "observe"} -> scoped(params["launch"], repo, fn -> module.observe(params["launch"] || %{}, params["projection"] || %{}) end)
+          {{set, key}, "prepare"} ->
+            in_data_scope(set.__recipe__(:data_scope?, key), repo, open_opts, fn ->
+              set.__recipe__(:prepare, key, params["context"] || %{})
+            end)
+
+          {{set, key}, "observe"} ->
+            scoped(params["launch"], repo, fn ->
+              set.__recipe__(:observe, key, params["launch"] || %{}, params["projection"] || %{})
+            end)
+
+          {module, "prepare"} ->
+            module.prepare(params["context"] || %{})
+
+          {module, "observe"} ->
+            scoped(params["launch"], repo, fn ->
+              module.observe(params["launch"] || %{}, params["projection"] || %{})
+            end)
         end
 
       case result do
@@ -92,8 +105,9 @@ defmodule Moments.Recipes do
 
   defp knob_scoped(_launch, observe), do: observe.()
 
-  defp data_scoped(%{"dataScope" => scope}, repo, observe) when is_binary(scope) and not is_nil(repo),
-    do: apply(Mana.Snapshot, :with_scope, [repo, scope, observe])
+  defp data_scoped(%{"dataScope" => scope}, repo, observe)
+       when is_binary(scope) and not is_nil(repo),
+       do: apply(Mana.Snapshot, :with_scope, [repo, scope, observe])
 
   defp data_scoped(_launch, _repo, observe), do: observe.()
 
@@ -102,8 +116,13 @@ defmodule Moments.Recipes do
   defp in_data_scope(false, _repo, _opts, prepare), do: prepare.()
 
   defp in_data_scope(true, repo, opts, prepare) do
-    unless repo && Code.ensure_loaded?(Mana.Snapshot) and Application.get_env(:mana_core, :data_scopes, false) == true,
-      do: raise(ArgumentError, "a data_scope recipe needs repo: on Moments.Recipes and config :mana_core, data_scopes: true")
+    unless (repo && Code.ensure_loaded?(Mana.Snapshot)) and
+             Application.get_env(:mana_core, :data_scopes, false) == true,
+           do:
+             raise(
+               ArgumentError,
+               "a data_scope recipe needs repo: on Moments.Recipes and config :mana_core, data_scopes: true"
+             )
 
     scope = apply(Mana.Snapshot, :open, [repo, :base, opts])
     forget_old_scopes(repo, scope)
@@ -175,7 +194,8 @@ defmodule Moments.RecipeSet do
   defmacro recipe(name, description, opts \\ [], do: block) do
     quote do
       @moments_recipes {unquote(name), unquote(description), unquote(Keyword.get(opts, :observe)),
-                        unquote(Macro.escape(block)), unquote(Keyword.get(opts, :data_scope, false))}
+                        unquote(Macro.escape(block)),
+                        unquote(Keyword.get(opts, :data_scope, false))}
     end
   end
 
@@ -195,10 +215,13 @@ defmodule Moments.RecipeSet do
 
     observes =
       for {name, _, own, _, _} <- recipes do
-        observe = own || default || raise ArgumentError, "recipe #{name} needs `observe:` (on the set or the recipe)"
+        observe =
+          own || default ||
+            raise ArgumentError, "recipe #{name} needs `observe:` (on the set or the recipe)"
 
         quote do
-          def __recipe__(:observe, unquote(name), launch, projection), do: unquote(observe)(launch, projection)
+          def __recipe__(:observe, unquote(name), launch, projection),
+            do: unquote(observe)(launch, projection)
         end
       end
 
@@ -215,9 +238,21 @@ defmodule Moments.RecipeSet do
       unquote_splicing(scoped)
 
       def __recipes__,
-        do: Map.new(unquote(Enum.map(recipes, &elem(&1, 0))), &{&1 |> to_string() |> String.replace("_", "-"), {__MODULE__, &1}})
+        do:
+          Map.new(
+            unquote(Enum.map(recipes, &elem(&1, 0))),
+            &{&1 |> to_string() |> String.replace("_", "-"), {__MODULE__, &1}}
+          )
 
-      def __recipe_descriptions__, do: Map.new(unquote(Macro.escape(Enum.map(recipes, fn {name, description, _, _, _} -> {name, description} end))))
+      def __recipe_descriptions__,
+        do:
+          Map.new(
+            unquote(
+              Macro.escape(
+                Enum.map(recipes, fn {name, description, _, _, _} -> {name, description} end)
+              )
+            )
+          )
     end
   end
 

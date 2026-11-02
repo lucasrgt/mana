@@ -25,7 +25,11 @@ defmodule Mana.Intervene.Rules do
   def rules do
     case :persistent_term.get(@key, nil) do
       nil ->
-        parsed = (System.get_env("MANA_INTERVENE") || "") |> String.split(";", trim: true) |> Enum.flat_map(&parse/1)
+        parsed =
+          (System.get_env("MANA_INTERVENE") || "")
+          |> String.split(";", trim: true)
+          |> Enum.flat_map(&parse/1)
+
         :persistent_term.put(@key, parsed)
         parsed
 

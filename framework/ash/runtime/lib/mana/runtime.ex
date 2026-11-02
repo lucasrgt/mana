@@ -68,9 +68,11 @@ defmodule Mana.Runtime do
   end
 
   defp metrics_token!(nil), do: nil
+
   defp metrics_token!(value) when byte_size(value) in 32..128 do
     if Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, value), do: value, else: invalid!("METRICS_TOKEN")
   end
+
   defp metrics_token!(_), do: invalid!("METRICS_TOKEN")
 
   defp proxy_ips!(nil), do: []

@@ -30,8 +30,16 @@ defmodule Mana.Attachments do
     args: [:attribute],
     identifier: :attribute,
     schema: [
-      attribute: [type: :atom, required: true, doc: "A `:uuid` (one file) or `{:array, :uuid}` (several) attribute."],
-      kinds: [type: {:list, :atom}, required: true, doc: "Upload kinds of `files` this attribute accepts."]
+      attribute: [
+        type: :atom,
+        required: true,
+        doc: "A `:uuid` (one file) or `{:array, :uuid}` (several) attribute."
+      ],
+      kinds: [
+        type: {:list, :atom},
+        required: true,
+        doc: "Upload kinds of `files` this attribute accepts."
+      ]
     ]
   }
 
@@ -42,7 +50,11 @@ defmodule Mana.Attachments do
   }
 
   use Spark.Dsl.Extension, sections: [@attachments], transformers: [Mana.Attachments.Transformer]
-  use Mana.Primitive, contract: "x-mana-attachments", catalog: "uploads", moments: [:fake, :observe]
+
+  use Mana.Primitive,
+    contract: "x-mana-attachments",
+    catalog: "uploads",
+    moments: [:fake, :observe]
 
   @doc "Moments `observe`: the file ids each attached attribute of `record` holds."
   def observe(record) do
@@ -51,17 +63,21 @@ defmodule Mana.Attachments do
     end
   end
 
-  @png Base.decode64!("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+  @png Base.decode64!(
+         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+       )
 
   def declared(resource), do: Spark.Dsl.Extension.get_entities(resource, [:attachments])
   def files(resource), do: Spark.Dsl.Extension.get_opt(resource, [:attachments], :files, nil)
 
   @doc "The attach declaration of `attribute`, or nil."
   def attach(resource, attribute) do
-    if Mana.Attachments in Spark.extensions(resource), do: Enum.find(declared(resource), &(&1.attribute == attribute))
+    if Mana.Attachments in Spark.extensions(resource),
+      do: Enum.find(declared(resource), &(&1.attribute == attribute))
   end
 
-  def many?(resource, attribute), do: match?({:array, _}, Ash.Resource.Info.attribute(resource, attribute).type)
+  def many?(resource, attribute),
+    do: match?({:array, _}, Ash.Resource.Info.attribute(resource, attribute).type)
 
   @impl Mana.Primitive
   def contract(resource) do
@@ -74,14 +90,25 @@ defmodule Mana.Attachments do
         "many" => many?(resource, attach.attribute),
         "kinds" =>
           for name <- attach.kinds, kind = kinds[name] do
-            %{"name" => to_string(name), "accept" => Mana.Uploads.accepted(kind), "max_bytes" => kind.max_bytes}
-            |> Map.merge(for {key, value} <- [max_side: kind.max_side, quality: kind.quality], value, into: %{}, do: {to_string(key), value})
+            %{
+              "name" => to_string(name),
+              "accept" => Mana.Uploads.accepted(kind),
+              "max_bytes" => kind.max_bytes
+            }
+            |> Map.merge(
+              for {key, value} <- [max_side: kind.max_side, quality: kind.quality],
+                  value,
+                  into: %{},
+                  do: {to_string(key), value}
+            )
           end
       }
       |> then(fn map ->
         case Ash.Resource.Info.attribute(resource, attach.attribute) do
           %{constraints: constraints} when is_list(constraints) ->
-            if is_integer(constraints[:max_length]), do: Map.put(map, "max", constraints[:max_length]), else: map
+            if is_integer(constraints[:max_length]),
+              do: Map.put(map, "max", constraints[:max_length]),
+              else: map
 
           _ ->
             map
@@ -96,16 +123,31 @@ defmodule Mana.Attachments do
   Moments and tests.
   """
   def fake(resource, attribute, owner_id) do
-    attach = attach(resource, attribute) || raise ArgumentError, "#{inspect(resource)} attaches no #{inspect(attribute)}"
+    attach =
+      attach(resource, attribute) ||
+        raise ArgumentError, "#{inspect(resource)} attaches no #{inspect(attribute)}"
+
     files = files(resource)
     kind = Enum.find(Mana.Uploads.kinds(files), &(&1.name == hd(attach.kinds)))
-    {content_type, bytes} = if "image/png" in Mana.Uploads.accepted(kind), do: {"image/png", @png}, else: {"application/pdf", "%PDF-1.4\n%%EOF\n"}
+
+    {content_type, bytes} =
+      if "image/png" in Mana.Uploads.accepted(kind),
+        do: {"image/png", @png},
+        else: {"application/pdf", "%PDF-1.4\n%%EOF\n"}
+
     id = Ash.UUID.generate()
     key = "#{Mana.Uploads.prefix(files)}/#{owner_id}/#{kind.name}/#{id}"
     :ok = Mana.Storage.put(key, bytes, content_type)
 
     files
-    |> Ash.Changeset.for_create(:register, %{id: id, owner_id: owner_id, kind: kind.name, content_type: content_type, size_bytes: byte_size(bytes), storage_key: key})
+    |> Ash.Changeset.for_create(:register, %{
+      id: id,
+      owner_id: owner_id,
+      kind: kind.name,
+      content_type: content_type,
+      size_bytes: byte_size(bytes),
+      storage_key: key
+    })
     |> Ash.create!(authorize?: false)
     |> Ash.update!(%{}, action: :mark_ready, authorize?: false)
   end
@@ -122,7 +164,11 @@ defmodule Mana.Attachments.Check do
     Enum.reduce(Mana.Attachments.declared(resource), changeset, fn attach, changeset ->
       case Mana.Uploads.Attached.validate(
              changeset,
-             [files: Mana.Attachments.files(resource), attributes: [attach.attribute], kinds: attach.kinds],
+             [
+               files: Mana.Attachments.files(resource),
+               attributes: [attach.attribute],
+               kinds: attach.kinds
+             ],
              context
            ) do
         :ok -> changeset
@@ -133,9 +179,12 @@ defmodule Mana.Attachments.Check do
 
   @impl true
   def atomic(changeset, opts, context) do
-    if Enum.any?(Mana.Attachments.declared(changeset.resource), &Ash.Changeset.changing_attribute?(changeset, &1.attribute)),
-      do: {:not_atomic, "attached files are checked against their owner"},
-      else: {:ok, change(changeset, opts, context)}
+    if Enum.any?(
+         Mana.Attachments.declared(changeset.resource),
+         &Ash.Changeset.changing_attribute?(changeset, &1.attribute)
+       ),
+       do: {:not_atomic, "attached files are checked against their owner"},
+       else: {:ok, change(changeset, opts, context)}
   end
 end
 

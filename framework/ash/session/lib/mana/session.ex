@@ -33,8 +33,11 @@ defmodule Mana.Session do
           token = user.__metadata__.token
           json(conn, 201, Map.put(view(user, token), :accessToken, token))
 
-        {:error, %AshAuthentication.Errors.AuthenticationFailed{
-          caused_by: %AshAuthentication.Errors.UnconfirmedUser{}}} when options.confirmation ->
+        {:error,
+         %AshAuthentication.Errors.AuthenticationFailed{
+           caused_by: %AshAuthentication.Errors.UnconfirmedUser{}
+         }}
+        when options.confirmation ->
           json(conn, 202, %{status: "confirmation_required"})
 
         {:error, %Ash.Error.Invalid{}} ->

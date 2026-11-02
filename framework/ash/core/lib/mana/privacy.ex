@@ -39,7 +39,11 @@ defmodule Mana.Privacy do
     for resource <- all, Mana.Resource.Info.privacy_erase!(resource) == :detach do
       resource
       |> by_subject(subject_id)
-      |> Ash.bulk_update!(:detach, %{}, authorize?: false, strategy: [:stream], return_errors?: true)
+      |> Ash.bulk_update!(:detach, %{},
+        authorize?: false,
+        strategy: [:stream],
+        return_errors?: true
+      )
     end
 
     erasable = Enum.filter(all, &(Mana.Resource.Info.privacy_erase!(&1) == :delete))
@@ -53,7 +57,11 @@ defmodule Mana.Privacy do
 
       resource
       |> by_subject(subject_id)
-      |> Ash.bulk_destroy!(action.name, %{}, authorize?: false, strategy: [:atomic, :atomic_batches, :stream], return_errors?: true)
+      |> Ash.bulk_destroy!(action.name, %{},
+        authorize?: false,
+        strategy: [:atomic, :atomic_batches, :stream],
+        return_errors?: true
+      )
     end)
 
     forget_history(domains, subject_id, erased)
@@ -62,25 +70,37 @@ defmodule Mana.Privacy do
   defp erased_subjects(resource, subject_id) do
     if Mana.History in Spark.extensions(resource) do
       type = Mana.Entity.type(resource)
-      for row <- resource |> by_subject(subject_id) |> Ash.read!(authorize?: false), do: {type, to_string(row.id)}
+
+      for row <- resource |> by_subject(subject_id) |> Ash.read!(authorize?: false),
+          do: {type, to_string(row.id)}
     else
       []
     end
   end
 
   defp forget_history(domains, subject_id, erased) do
-    for domain <- domains, log <- Ash.Domain.Info.resources(domain), Mana.History.Log in Spark.extensions(log) do
+    for domain <- domains,
+        log <- Ash.Domain.Info.resources(domain),
+        Mana.History.Log in Spark.extensions(log) do
       erased
       |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
       |> Enum.each(fn {type, ids} ->
         log
         |> Ash.Query.filter(subject_type == ^type and subject_id in ^ids)
-        |> Ash.bulk_destroy!(:destroy, %{}, authorize?: false, strategy: [:atomic, :atomic_batches, :stream], return_errors?: true)
+        |> Ash.bulk_destroy!(:destroy, %{},
+          authorize?: false,
+          strategy: [:atomic, :atomic_batches, :stream],
+          return_errors?: true
+        )
       end)
 
       log
       |> Ash.Query.filter(actor_id == ^subject_id)
-      |> Ash.bulk_update!(:forget, %{actor_id: nil, via: "erased"}, authorize?: false, strategy: [:atomic, :atomic_batches, :stream], return_errors?: true)
+      |> Ash.bulk_update!(:forget, %{actor_id: nil, via: "erased"},
+        authorize?: false,
+        strategy: [:atomic, :atomic_batches, :stream],
+        return_errors?: true
+      )
     end
 
     :ok
@@ -109,9 +129,14 @@ defmodule Mana.Privacy do
   end
 
   defp by_subject(resource, id),
-    do: Ash.Query.filter(resource, ^Ash.Expr.ref(Mana.Resource.Info.privacy_subject!(resource)) == ^id)
+    do:
+      Ash.Query.filter(
+        resource,
+        ^Ash.Expr.ref(Mana.Resource.Info.privacy_subject!(resource)) == ^id
+      )
 
-  defp identity?(resource), do: Ash.Resource.Info.primary_key(resource) == [Mana.Resource.Info.privacy_subject!(resource)]
+  defp identity?(resource),
+    do: Ash.Resource.Info.primary_key(resource) == [Mana.Resource.Info.privacy_subject!(resource)]
 
   defp name(resource), do: resource |> Module.split() |> List.last() |> Macro.underscore()
 end

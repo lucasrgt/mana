@@ -1,6 +1,15 @@
 defmodule Mana.Flow.Step do
   @moduledoc false
-  defstruct [:name, :action, :skip_if, :optional, :attempts, :bugs, :__identifier__, :__spark_metadata__]
+  defstruct [
+    :name,
+    :action,
+    :skip_if,
+    :optional,
+    :attempts,
+    :bugs,
+    :__identifier__,
+    :__spark_metadata__
+  ]
 end
 
 defmodule Mana.Flow do
@@ -44,12 +53,29 @@ defmodule Mana.Flow do
     args: [:name],
     identifier: :name,
     schema: [
-      name: [type: :atom, required: true, doc: "The cursor value while this step is the current one."],
+      name: [
+        type: :atom,
+        required: true,
+        doc: "The cursor value while this step is the current one."
+      ],
       action: [type: :atom, required: true, doc: "The update action that completes the step."],
-      skip_if: [type: :any, doc: "An expression over the record; the step is passed over while it holds."],
+      skip_if: [
+        type: :any,
+        doc: "An expression over the record; the step is passed over while it holds."
+      ],
       optional: [type: :boolean, default: false, doc: "Interfaces may offer to skip it."],
-      attempts: [type: {:list, :atom}, default: [], doc: "Other `Mana.History` actions on the record that count as attempts at the step (a code refused elsewhere, an email sent for it, noted with `Mana.History.note/3`)."],
-      bugs: [type: {:list, :atom}, default: [], doc: "Those of `attempts` whose failures are the platform's (an email that did not leave): one makes the diagnosis a bug."]
+      attempts: [
+        type: {:list, :atom},
+        default: [],
+        doc:
+          "Other `Mana.History` actions on the record that count as attempts at the step (a code refused elsewhere, an email sent for it, noted with `Mana.History.note/3`)."
+      ],
+      bugs: [
+        type: {:list, :atom},
+        default: [],
+        doc:
+          "Those of `attempts` whose failures are the platform's (an email that did not leave): one makes the diagnosis a bug."
+      ]
     ]
   }
 
@@ -60,10 +86,24 @@ defmodule Mana.Flow do
     schema: [
       cursor: [type: :atom, required: true, doc: "The attribute holding the current step."],
       done: [type: :atom, required: true, doc: "The cursor value once every step is complete."],
-      before: [type: {:list, :atom}, default: [], doc: "Cursor values outside the flow that never advance."],
-      stuck_after: [type: :any, doc: "`{amount, unit}` after entering a step to check whether it moved, or `{Module, :function}` answering it when the step is entered (a knob)."],
-      on_stuck: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :function}` called with the record and the step still current."],
-      not_reached: [type: :mfa, doc: "`{Module, :function, args}` returning the error for a step not reached."],
+      before: [
+        type: {:list, :atom},
+        default: [],
+        doc: "Cursor values outside the flow that never advance."
+      ],
+      stuck_after: [
+        type: :any,
+        doc:
+          "`{amount, unit}` after entering a step to check whether it moved, or `{Module, :function}` answering it when the step is entered (a knob)."
+      ],
+      on_stuck: [
+        type: {:tuple, [:atom, :atom]},
+        doc: "`{Module, :function}` called with the record and the step still current."
+      ],
+      not_reached: [
+        type: :mfa,
+        doc: "`{Module, :function, args}` returning the error for a step not reached."
+      ],
       queue: [type: :atom, default: :default, doc: "The Oban queue of stuck checks."]
     ]
   }
@@ -76,11 +116,17 @@ defmodule Mana.Flow do
     position = position(record)
     step = Map.get(record, cursor(record.__struct__))
     diagnosis = if position.done, do: nil, else: diagnose(record, step)
-    %{"position" => position, "diagnosis" => diagnosis && Map.take(diagnosis, [:verdict, :attempts, :failures])}
+
+    %{
+      "position" => position,
+      "diagnosis" => diagnosis && Map.take(diagnosis, [:verdict, :attempts, :failures])
+    }
   end
 
   def steps(resource), do: Spark.Dsl.Extension.get_entities(resource, [:flow])
-  defp opt(resource, key, default \\ nil), do: Spark.Dsl.Extension.get_opt(resource, [:flow], key, default)
+
+  defp opt(resource, key, default \\ nil),
+    do: Spark.Dsl.Extension.get_opt(resource, [:flow], key, default)
 
   def cursor(resource), do: opt(resource, :cursor)
   def done(resource), do: opt(resource, :done)
@@ -112,7 +158,11 @@ defmodule Mana.Flow do
     field = cursor(query.resource)
 
     for value <- order(query.resource) do
-      count = query |> Ash.Query.filter(^Ash.Expr.ref(field) == ^value) |> Ash.count!(Keyword.put_new(opts, :authorize?, false))
+      count =
+        query
+        |> Ash.Query.filter(^Ash.Expr.ref(field) == ^value)
+        |> Ash.count!(Keyword.put_new(opts, :authorize?, false))
+
       {value, count}
     end
   end
@@ -125,7 +175,12 @@ defmodule Mana.Flow do
         "done" => to_string(done(resource)),
         "steps" =>
           for step <- steps(resource) do
-            %{"name" => to_string(step.name), "action" => to_string(step.action), "optional" => step.optional, "skippable" => not is_nil(step.skip_if)}
+            %{
+              "name" => to_string(step.name),
+              "action" => to_string(step.action),
+              "optional" => step.optional,
+              "skippable" => not is_nil(step.skip_if)
+            }
           end
       }
     ]
@@ -141,7 +196,9 @@ defmodule Mana.Flow do
 
       step ->
         current = Map.get(record, cursor(resource))
-        current not in opt(resource, :before, []) and reached?(order(resource), current, step.name)
+
+        current not in opt(resource, :before, []) and
+          reached?(order(resource), current, step.name)
     end
   end
 
@@ -208,17 +265,26 @@ defmodule Mana.Flow do
   end
 
   defp skipped?(%{skip_if: nil}, _record), do: false
-  defp skipped?(%{skip_if: expression}, record), do: match?({:ok, true}, Ash.Expr.eval(expression, record: record, resource: record.__struct__))
+
+  defp skipped?(%{skip_if: expression}, record),
+    do:
+      match?({:ok, true}, Ash.Expr.eval(expression, record: record, resource: record.__struct__))
 
   defp not_reached(resource) do
     case opt(resource, :not_reached) do
-      {module, function, args} -> apply(module, function, args)
-      nil -> Mana.Error.new("flow.step_not_reached", "complete the previous step first", status: 422)
+      {module, function, args} ->
+        apply(module, function, args)
+
+      nil ->
+        Mana.Error.new("flow.step_not_reached", "complete the previous step first", status: 422)
     end
   end
 
   defp stuck_after({amount, unit}) when is_integer(amount), do: {amount, unit}
-  defp stuck_after({module, function}) when is_atom(module) and is_atom(function), do: apply(module, function, [])
+
+  defp stuck_after({module, function}) when is_atom(module) and is_atom(function),
+    do: apply(module, function, [])
+
   defp stuck_after(_), do: nil
 
   @doc false
@@ -229,8 +295,19 @@ defmodule Mana.Flow do
     with {amount, unit} <- stuck_after(opt(resource, :stuck_after)),
          true <- current != done(resource) and current not in opt(resource, :before, []) do
       inserter = Application.get_env(:mana_core, :deadline_inserter, &insert/1)
-      args = %{"resource" => inspect(resource), "id" => record.id, "step" => to_string(current), "kind" => "flow_stuck"}
-      inserter.(%{args: args, queue: opt(resource, :queue, :default), scheduled_at: DateTime.add(DateTime.utc_now(), amount, unit)})
+
+      args = %{
+        "resource" => inspect(resource),
+        "id" => record.id,
+        "step" => to_string(current),
+        "kind" => "flow_stuck"
+      }
+
+      inserter.(%{
+        args: args,
+        queue: opt(resource, :queue, :default),
+        scheduled_at: DateTime.add(DateTime.utc_now(), amount, unit)
+      })
     end
 
     :ok
@@ -250,7 +327,13 @@ defmodule Mana.Flow do
          true <- to_string(Map.get(record, cursor(resource))) == step do
       step = String.to_existing_atom(step)
       diagnosis = diagnose(record, step)
-      :telemetry.execute([:mana, :flow, :stuck], %{attempts: diagnosis.attempts}, %{resource: resource, id: id, step: step, verdict: diagnosis.verdict})
+
+      :telemetry.execute([:mana, :flow, :stuck], %{attempts: diagnosis.attempts}, %{
+        resource: resource,
+        id: id,
+        step: step,
+        verdict: diagnosis.verdict
+      })
 
       case opt(resource, :on_stuck) do
         {module, function} ->
@@ -284,7 +367,10 @@ defmodule Mana.Flow do
     require Ash.Query
     resource = record.__struct__
     declared = Enum.find(steps(resource), &(&1.name == step))
-    actions = if declared, do: Enum.map([declared.action | declared.attempts], &to_string/1), else: []
+
+    actions =
+      if declared, do: Enum.map([declared.action | declared.attempts], &to_string/1), else: []
+
     bugs = if declared, do: Enum.map(declared.bugs, &to_string/1), else: []
 
     entries =
@@ -347,7 +433,12 @@ if Code.ensure_loaded?(Oban.Worker) do
 
     @impl true
     def perform(%Oban.Job{args: %{"resource" => resource, "id" => id, "step" => step}}) do
-      resource |> String.trim_leading("Elixir.") |> String.split(".") |> Module.safe_concat() |> Mana.Flow.check_stuck(id, step)
+      resource
+      |> String.trim_leading("Elixir.")
+      |> String.split(".")
+      |> Module.safe_concat()
+      |> Mana.Flow.check_stuck(id, step)
+
       :ok
     end
   end
@@ -374,7 +465,8 @@ defmodule Mana.Flow.Transformer do
           done: [type: :boolean, allow_nil?: false]
         ]
 
-        with {:ok, dsl} <- Ash.Resource.Builder.add_change(dsl, Mana.Flow.Advance, on: [:create, :update]) do
+        with {:ok, dsl} <-
+               Ash.Resource.Builder.add_change(dsl, Mana.Flow.Advance, on: [:create, :update]) do
           Ash.Resource.Builder.add_new_calculation(dsl, :flow, :map, Mana.Flow.Position,
             public?: true,
             constraints: [fields: position],

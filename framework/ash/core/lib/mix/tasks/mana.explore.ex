@@ -12,7 +12,14 @@ defmodule Mix.Tasks.Mana.Explore do
   """
   use Mix.Task
 
-  @switches [runs: :integer, depth: :integer, seed: :integer, resource: :keep, save: :string, json: :boolean]
+  @switches [
+    runs: :integer,
+    depth: :integer,
+    seed: :integer,
+    resource: :keep,
+    save: :string,
+    json: :boolean
+  ]
 
   @impl true
   def run(args) do
@@ -28,7 +35,8 @@ defmodule Mix.Tasks.Mana.Explore do
     end
 
     if dir = cli[:save] do
-      for violation <- report.violations, do: Mix.shell().info("saved #{Mana.Explore.save(violation, dir)}")
+      for violation <- report.violations,
+          do: Mix.shell().info("saved #{Mana.Explore.save(violation, dir)}")
     end
 
     if report.violations != [], do: exit({:shutdown, 1})
@@ -37,10 +45,12 @@ defmodule Mix.Tasks.Mana.Explore do
   @doc false
   def options(cli) do
     app = Mix.Project.config()[:app]
-    configured = case Application.get_env(:mana_core, :explore) do
-      nil -> []
-      module -> module.options()
-    end
+
+    configured =
+      case Application.get_env(:mana_core, :explore) do
+        nil -> []
+        module -> module.options()
+      end
 
     domains = configured[:domains] || Application.fetch_env!(app, :ash_domains)
 

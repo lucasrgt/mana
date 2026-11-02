@@ -9,7 +9,12 @@ defmodule Mana.Error do
   def message(%{message: message}), do: message
 
   @doc "Codes produced by Mana itself rather than declared by a domain."
-  def platform_codes, do: ["platform.rate_limited", "platform.unavailable", "verb.unavailable" | Mana.Uploads.codes()]
+  def platform_codes,
+    do: [
+      "platform.rate_limited",
+      "platform.unavailable",
+      "verb.unavailable" | Mana.Uploads.codes()
+    ]
 
   def new(code, message, opts \\ []) do
     exception(

@@ -31,7 +31,11 @@ if Code.ensure_loaded?(Oban.Worker) do
 
     @impl true
     def perform(%Oban.Job{args: %{"otp_app" => otp_app}}) do
-      otp_app |> String.to_existing_atom() |> Application.fetch_env!(:ash_domains) |> Mana.Retention.purge()
+      otp_app
+      |> String.to_existing_atom()
+      |> Application.fetch_env!(:ash_domains)
+      |> Mana.Retention.purge()
+
       :ok
     end
   end

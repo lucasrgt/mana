@@ -59,11 +59,15 @@ defmodule Mana.Session.Identity do
         |> RequireConfirmed.add_calculation(strategy)
         |> Ash.read_one(authorize?: false)
         |> case do
-          {:ok, %{__struct__: ^resource} = record} -> RequireConfirmed.confirmed?(record, strategy)
-          _ -> false
+          {:ok, %{__struct__: ^resource} = record} ->
+            RequireConfirmed.confirmed?(record, strategy)
+
+          _ ->
+            false
         end
 
-      _ -> true
+      _ ->
+        true
     end
   end
 end

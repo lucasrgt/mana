@@ -19,11 +19,19 @@ defmodule Mana.Runtime.Proxy do
   def call(conn, app) do
     case Application.get_env(app, :trusted_proxy_ips, []) do
       :fly ->
-        fly(conn, get_req_header(conn, "fly-client-ip"), get_req_header(conn, "x-forwarded-proto"))
+        fly(
+          conn,
+          get_req_header(conn, "fly-client-ip"),
+          get_req_header(conn, "x-forwarded-proto")
+        )
 
       trusted ->
         if trusted != [] and get_peer_data(conn).address in trusted do
-          rewrite(conn, get_req_header(conn, "x-forwarded-for"), get_req_header(conn, "x-forwarded-proto"))
+          rewrite(
+            conn,
+            get_req_header(conn, "x-forwarded-for"),
+            get_req_header(conn, "x-forwarded-proto")
+          )
         else
           conn
         end

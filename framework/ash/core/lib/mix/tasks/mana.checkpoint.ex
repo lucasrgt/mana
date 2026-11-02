@@ -13,16 +13,34 @@ defmodule Mix.Tasks.Mana.Checkpoint do
 
   @impl true
   def run(args) do
-    {opts, _} = OptionParser.parse!(args, strict: [plan: :string, actor: :string, actor_resource: :string, keep: :boolean, verdict: :string])
+    {opts, _} =
+      OptionParser.parse!(args,
+        strict: [
+          plan: :string,
+          actor: :string,
+          actor_resource: :string,
+          keep: :boolean,
+          verdict: :string
+        ]
+      )
+
     Mix.Task.run("app.start")
 
     plan = opts |> Keyword.fetch!(:plan) |> File.read!() |> Jason.decode!()
-    actor_resource = opts |> Keyword.fetch!(:actor_resource) |> String.split(".") |> Module.safe_concat()
+
+    actor_resource =
+      opts |> Keyword.fetch!(:actor_resource) |> String.split(".") |> Module.safe_concat()
+
     actor = Ash.get!(actor_resource, Keyword.fetch!(opts, :actor), authorize?: false)
 
     result =
       if opts[:keep],
-        do: Mana.Checkpoint.keep(plan, actor, opts |> Keyword.fetch!(:verdict) |> File.read!() |> Jason.decode!()),
+        do:
+          Mana.Checkpoint.keep(
+            plan,
+            actor,
+            opts |> Keyword.fetch!(:verdict) |> File.read!() |> Jason.decode!()
+          ),
         else: Mana.Checkpoint.dry_run(plan, actor)
 
     case result do

@@ -27,14 +27,22 @@ defmodule Mix.Tasks.Mana.Why do
 
   @impl true
   def run(args) do
-    {opts, [value | _]} = OptionParser.parse!(args, strict: [log: :keep, root: :string, json: :boolean])
+    {opts, [value | _]} =
+      OptionParser.parse!(args, strict: [log: :keep, root: :string, json: :boolean])
+
     app = Mix.Project.config()[:app]
     start(app)
 
     logs =
       case Keyword.get_values(opts, :log) do
-        [] -> for domain <- Application.fetch_env!(app, :ash_domains), r <- Ash.Domain.Info.resources(domain), Mana.History.Log in Spark.extensions(r), do: r
-        names -> Enum.map(names, &(&1 |> String.split(".") |> Module.safe_concat()))
+        [] ->
+          for domain <- Application.fetch_env!(app, :ash_domains),
+              r <- Ash.Domain.Info.resources(domain),
+              Mana.History.Log in Spark.extensions(r),
+              do: r
+
+        names ->
+          Enum.map(names, &(&1 |> String.split(".") |> Module.safe_concat()))
       end
 
     slices = Mana.Why.explain(logs, value, root: Path.expand(opts[:root] || ".."))
@@ -42,12 +50,16 @@ defmodule Mix.Tasks.Mana.Why do
     if opts[:json] do
       Mix.shell().info(Jason.encode!(slices, pretty: true))
     else
-      if slices == [], do: Mix.shell().info("No recorded change set a field to #{inspect(value)}.")
+      if slices == [],
+        do: Mix.shell().info("No recorded change set a field to #{inspect(value)}.")
 
       for s <- slices do
         Mix.shell().info(
           "#{s.record} #{s.field}: #{inspect(s.before)} → #{inspect(s.after)} · #{s.set_by} (#{s.summary}) by #{s.actor.kind}#{if s.actor.via, do: " #{s.actor.via}", else: ""} at #{s.at}" <>
-            if(s.moment, do: " · #{s.moment}", else: if(s.gesture, do: " · gesture #{s.gesture}", else: ""))
+            if(s.moment,
+              do: " · #{s.moment}",
+              else: if(s.gesture, do: " · gesture #{s.gesture}", else: "")
+            )
         )
       end
     end

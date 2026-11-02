@@ -51,12 +51,19 @@ defmodule Mana.RuntimeTest do
 
   test "edge trust requires explicit bounded IP literals" do
     assert load(base()).trusted_proxy_ips == []
+
     assert load(Map.put(base(), "TRUSTED_PROXY_IPS", "127.0.0.1, ::1")).trusted_proxy_ips ==
              [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}]
 
     assert load(Map.put(base(), "TRUSTED_PROXY_IPS", "fly")).trusted_proxy_ips == :fly
 
-    for value <- ["private_ranges", "10.0.0.0/8", "proxy.example", "127.0.0.1,", String.duplicate("1", 1025)] do
+    for value <- [
+          "private_ranges",
+          "10.0.0.0/8",
+          "proxy.example",
+          "127.0.0.1,",
+          String.duplicate("1", 1025)
+        ] do
       assert_raise ArgumentError, "Invalid production setting: TRUSTED_PROXY_IPS", fn ->
         load(Map.put(base(), "TRUSTED_PROXY_IPS", value))
       end
@@ -67,6 +74,7 @@ defmodule Mana.RuntimeTest do
     assert load(base()).metrics_token == nil
     token = String.duplicate("a", 64)
     assert load(Map.put(base(), "METRICS_TOKEN", token)).metrics_token == token
+
     for value <- ["", "short", String.duplicate("a", 129), String.duplicate("a", 32) <> "\n"] do
       assert_raise ArgumentError, "Invalid production setting: METRICS_TOKEN", fn ->
         load(Map.put(base(), "METRICS_TOKEN", value))

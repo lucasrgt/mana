@@ -1,6 +1,16 @@
 defmodule Mana.Reconcile.Desired do
   @moduledoc false
-  defstruct [:name, :describe, :scope, :holds, :apply, :within, :since, :__identifier__, :__spark_metadata__]
+  defstruct [
+    :name,
+    :describe,
+    :scope,
+    :holds,
+    :apply,
+    :within,
+    :since,
+    :__identifier__,
+    :__spark_metadata__
+  ]
 end
 
 defmodule Mana.Reconcile do
@@ -52,14 +62,31 @@ defmodule Mana.Reconcile do
     schema: [
       name: [type: :atom, required: true],
       describe: [type: :string, required: true, doc: "The rule, as a person would say it."],
-      scope: [type: :any, required: true, doc: "An expression selecting the records the rule is about."],
-      holds: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :fun}`: true, false or `{false, detail}` for a record; may be left out when `within` is given."],
+      scope: [
+        type: :any,
+        required: true,
+        doc: "An expression selecting the records the rule is about."
+      ],
+      holds: [
+        type: {:tuple, [:atom, :atom]},
+        doc:
+          "`{Module, :fun}`: true, false or `{false, detail}` for a record; may be left out when `within` is given."
+      ],
       within: [
-        type: {:or, [{:tuple, [:pos_integer, {:in, [:second, :minute, :hour, :day]}]}, {:tuple, [:atom, :atom]}]},
-        doc: "How long a record may stay in scope (or fail `holds`): `{15, :minute}`, or `{Module, :fun}` answering that for a record (a window read from a knob)."
+        type:
+          {:or,
+           [
+             {:tuple, [:pos_integer, {:in, [:second, :minute, :hour, :day]}]},
+             {:tuple, [:atom, :atom]}
+           ]},
+        doc:
+          "How long a record may stay in scope (or fail `holds`): `{15, :minute}`, or `{Module, :fun}` answering that for a record (a window read from a knob)."
       ],
       since: [type: :atom, doc: "The timestamp field `within` counts from."],
-      apply: [type: {:tuple, [:atom, :atom]}, doc: "`{Module, :fun}` that brings a diverging record back; observe-only without it."]
+      apply: [
+        type: {:tuple, [:atom, :atom]},
+        doc: "`{Module, :fun}` that brings a diverging record back; observe-only without it."
+      ]
     ]
   }
 
@@ -74,7 +101,9 @@ defmodule Mana.Reconcile do
     for rule <- declared(resource) do
       records = resource |> Ash.Query.do_filter(rule.scope) |> Ash.read!(authorize?: false)
       now = opts[:now] || DateTime.utc_now()
-      diverging = for record <- records, detail = divergence(rule, record, now), do: {record, detail}
+
+      diverging =
+        for record <- records, detail = divergence(rule, record, now), do: {record, detail}
 
       {repaired, blocked} =
         if opts[:apply] && rule.apply,
@@ -91,7 +120,11 @@ defmodule Mana.Reconcile do
         end
 
       if remaining != [] do
-        :telemetry.execute([:mana, :reconcile, :diverged], %{count: length(remaining)}, %{resource: resource, rule: rule.name, state: state})
+        :telemetry.execute([:mana, :reconcile, :diverged], %{count: length(remaining)}, %{
+          resource: resource,
+          rule: rule.name,
+          state: state
+        })
       end
 
       %{
@@ -136,7 +169,9 @@ defmodule Mana.Reconcile do
   end
 
   @doc false
-  def window(%{within: {module, function}}, record) when is_atom(module) and is_atom(function), do: within_seconds(apply(module, function, [record]))
+  def window(%{within: {module, function}}, record) when is_atom(module) and is_atom(function),
+    do: within_seconds(apply(module, function, [record]))
+
   def window(%{within: within}, _record), do: within_seconds(within)
 
   @doc false
@@ -147,7 +182,9 @@ defmodule Mana.Reconcile do
 
   @doc false
   def since(%{since: field}, _record) when not is_nil(field), do: field
-  def since(_rule, record), do: if(Map.has_key?(record, :updated_at), do: :updated_at, else: :inserted_at)
+
+  def since(_rule, record),
+    do: if(Map.has_key?(record, :updated_at), do: :updated_at, else: :inserted_at)
 
   defp age(rule, record, now) when is_function(now, 1), do: age(rule, record, now.(record))
 
@@ -176,7 +213,9 @@ defmodule Mana.Reconcile do
 
   # A repaired record may leave the rule's scope altogether (a lifted
   # suspension is no longer suspended); the rule is then no longer about it.
-  defp in_scope?(rule, record), do: match?({:ok, true}, Ash.Expr.eval(rule.scope, record: record, resource: record.__struct__))
+  defp in_scope?(rule, record),
+    do:
+      match?({:ok, true}, Ash.Expr.eval(rule.scope, record: record, resource: record.__struct__))
 
   @doc "An AVP verdict of a report: each rule a criterion, converged passing."
   def verdict(subject, report) do
@@ -185,7 +224,12 @@ defmodule Mana.Reconcile do
         %{
           "criterion" => to_string(rule.rule),
           "status" => if(rule.state == :converged, do: "pass", else: "fail"),
-          "reason" => if(rule.state == :converged, do: nil, else: "#{rule.describe}: #{length(rule.diverging)} of #{rule.checked} records diverge"),
+          "reason" =>
+            if(rule.state == :converged,
+              do: nil,
+              else:
+                "#{rule.describe}: #{length(rule.diverging)} of #{rule.checked} records diverge"
+            ),
           "evidence" => Enum.map(rule.diverging, &%{"id" => &1.id, "detail" => &1.detail})
         }
       end
@@ -208,7 +252,10 @@ defmodule Mana.Reconcile.Verify do
 
   @impl true
   def transform(dsl) do
-    case Enum.find(Spark.Dsl.Transformer.get_entities(dsl, [:reconcile]), &(is_nil(&1.holds) and is_nil(&1.within))) do
+    case Enum.find(
+           Spark.Dsl.Transformer.get_entities(dsl, [:reconcile]),
+           &(is_nil(&1.holds) and is_nil(&1.within))
+         ) do
       nil ->
         {:ok, dsl}
 

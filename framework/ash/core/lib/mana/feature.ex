@@ -39,7 +39,10 @@ defmodule Mana.Feature do
     entries = :ets.lookup(@table, feature)
 
     if length(entries) > @kept do
-      entries |> Enum.sort_by(&elem(&1, 1)) |> Enum.take(length(entries) - @kept) |> Enum.each(&:ets.delete_object(@table, &1))
+      entries
+      |> Enum.sort_by(&elem(&1, 1))
+      |> Enum.take(length(entries) - @kept)
+      |> Enum.each(&:ets.delete_object(@table, &1))
     end
   end
 
@@ -62,7 +65,8 @@ defmodule Mana.Feature do
           requests: length(entries),
           errors: Enum.count(entries, &(elem(&1, 2) >= 500)),
           refused: Enum.count(entries, &(elem(&1, 2) in 400..499)),
-          p95_ms: Float.round(Enum.at(durations, max(ceil(length(durations) * 0.95) - 1, 0)) / 1000, 1)
+          p95_ms:
+            Float.round(Enum.at(durations, max(ceil(length(durations) * 0.95) - 1, 0)) / 1000, 1)
         }
       end)
       |> Enum.sort_by(&{-&1.errors, -&1.p95_ms})
@@ -89,7 +93,8 @@ defmodule Mana.Feature do
   end
 
   defp feature(resource, action) do
-    verbs = if Mana.Verbs in Spark.extensions(resource), do: Mana.Verbs.declared(resource), else: []
+    verbs =
+      if Mana.Verbs in Spark.extensions(resource), do: Mana.Verbs.declared(resource), else: []
 
     Enum.find_value(verbs, &(Mana.Verbs.action(&1) == action && &1.feature)) ||
       Enum.find_value(verbs, & &1.feature)
@@ -124,7 +129,12 @@ defmodule Mana.Feature.Plug do
         conn
         |> Plug.Conn.put_private(:mana_feature, feature)
         |> Plug.Conn.register_before_send(fn conn ->
-          Mana.Feature.record(feature, conn.status || 200, System.monotonic_time(:microsecond) - started)
+          Mana.Feature.record(
+            feature,
+            conn.status || 200,
+            System.monotonic_time(:microsecond) - started
+          )
+
           conn
         end)
     end

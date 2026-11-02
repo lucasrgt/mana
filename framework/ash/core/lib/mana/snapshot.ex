@@ -137,7 +137,12 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     end
 
     defp counts(repo) do
-      %{rows: tables} = repo.query!("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename", [], log: false)
+      %{rows: tables} =
+        repo.query!(
+          "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
+          [],
+          log: false
+        )
 
       for [table] <- tables, table != "schema_migrations", into: %{} do
         %{rows: [[count]]} = repo.query!("SELECT count(*) FROM \"#{table}\"", [], log: false)
@@ -148,7 +153,14 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     defp entries(log) do
       log
       |> Ash.read!(authorize?: false)
-      |> Enum.map(&%{subject: "#{&1.subject_type}:#{&1.subject_id}", action: &1.action, verb: &1.verb, outcome: to_string(&1.outcome)})
+      |> Enum.map(
+        &%{
+          subject: "#{&1.subject_type}:#{&1.subject_id}",
+          action: &1.action,
+          verb: &1.verb,
+          outcome: to_string(&1.outcome)
+        }
+      )
       |> Enum.sort_by(&{&1.subject, &1.action})
     end
 
@@ -157,7 +169,15 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     @doc false
     def start_repo(repo, database) do
       # A scope is a database of its own: it never shares a test's sandbox pool.
-      config = Keyword.merge(config(repo), database: database, pool_size: 2, name: nil, url: nil, pool: DBConnection.ConnectionPool)
+      config =
+        Keyword.merge(config(repo),
+          database: database,
+          pool_size: 2,
+          name: nil,
+          url: nil,
+          pool: DBConnection.ConnectionPool
+        )
+
       repo.start_link(config)
     end
 
@@ -210,7 +230,12 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     # app's pool (CREATE DATABASE cannot run in a transaction, and the source
     # must have no connections).
     defp admin(repo, sql, params \\ []) do
-      config = repo |> config() |> Keyword.take([:hostname, :port, :username, :password, :socket_dir, :ssl, :socket]) |> Keyword.put(:database, "postgres")
+      config =
+        repo
+        |> config()
+        |> Keyword.take([:hostname, :port, :username, :password, :socket_dir, :ssl, :socket])
+        |> Keyword.put(:database, "postgres")
+
       {:ok, conn} = Postgrex.start_link(config)
 
       try do
@@ -222,15 +247,26 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
 
     defp migrations_hash(dir) do
       files = dir |> Path.join("**/*.exs") |> Path.wildcard() |> Enum.sort()
-      :crypto.hash(:sha256, Enum.map(files, &[Path.relative_to(&1, dir), File.read!(&1)])) |> Base.encode16(case: :lower) |> binary_part(0, 12)
+
+      :crypto.hash(:sha256, Enum.map(files, &[Path.relative_to(&1, dir), File.read!(&1)]))
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 12)
     end
 
     defp database_name(repo, suffix), do: "#{config(repo)[:database]}_mana_#{suffix}"
     defp scope_database(repo, id), do: database_name(repo, "s_" <> id)
-    defp snapshot_database(repo, name), do: valid_name!(name) && database_name(repo, "m_" <> String.replace(name, "-", "_"))
+
+    defp snapshot_database(repo, name),
+      do: valid_name!(name) && database_name(repo, "m_" <> String.replace(name, "-", "_"))
 
     defp valid_name!(name) do
-      if is_binary(name) and Regex.match?(~r/^[a-z][a-z0-9_-]{0,30}$/, name), do: true, else: raise(ArgumentError, "snapshot names are lowercase letters, digits, - and _ (#{inspect(name)})")
+      if is_binary(name) and Regex.match?(~r/^[a-z][a-z0-9_-]{0,30}$/, name),
+        do: true,
+        else:
+          raise(
+            ArgumentError,
+            "snapshot names are lowercase letters, digits, - and _ (#{inspect(name)})"
+          )
     end
   end
 
@@ -242,7 +278,10 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
 
     def start_scope(repo, id, database), do: call({:start, repo, id, database})
     def stop_scope(repo, id), do: call({:stop, repo, id})
-    def pid!(repo, id), do: call({:pid, repo, id}) || raise(ArgumentError, "no data scope #{inspect(id)}")
+
+    def pid!(repo, id),
+      do: call({:pid, repo, id}) || raise(ArgumentError, "no data scope #{inspect(id)}")
+
     def pid(repo, id), do: call({:pid, repo, id})
     def ids(repo), do: call({:ids, repo})
     def paused(repo, id, fun), do: call({:paused, repo, id, fun}, 60_000)
@@ -268,8 +307,11 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     @impl true
     def handle_call({:start, repo, id, database}, _from, state) do
       case Mana.Snapshot.start_repo(repo, database) do
-        {:ok, pid} -> {:reply, {:ok, pid}, Map.put(state, {repo, id}, %{pid: pid, database: database})}
-        error -> {:reply, error, state}
+        {:ok, pid} ->
+          {:reply, {:ok, pid}, Map.put(state, {repo, id}, %{pid: pid, database: database})}
+
+        error ->
+          {:reply, error, state}
       end
     end
 
@@ -284,8 +326,11 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
       end
     end
 
-    def handle_call({:pid, repo, id}, _from, state), do: {:reply, get_in(state, [{repo, id}, :pid]), state}
-    def handle_call({:ids, repo}, _from, state), do: {:reply, for({{^repo, id}, _} <- state, do: id), state}
+    def handle_call({:pid, repo, id}, _from, state),
+      do: {:reply, get_in(state, [{repo, id}, :pid]), state}
+
+    def handle_call({:ids, repo}, _from, state),
+      do: {:reply, for({{^repo, id}, _} <- state, do: id), state}
 
     def handle_call({:paused, repo, id, fun}, _from, state) do
       case Map.get(state, {repo, id}) do
@@ -325,7 +370,10 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
              [id] <- get_req_header(conn, "x-mana-data-scope") do
           case Mana.Snapshot.Scopes.pid(repo, id) do
             nil ->
-              conn |> put_resp_content_type("application/json") |> send_resp(409, ~s({"errors":[{"code":"data_scope.unknown"}]})) |> halt()
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(409, ~s({"errors":[{"code":"data_scope.unknown"}]}))
+              |> halt()
 
             pid ->
               repo.put_dynamic_repo(pid)
