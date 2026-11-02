@@ -110,6 +110,16 @@ jobs:
           sdk: 3.13.3
       - run: dart pub get --enforce-lockfile
       - run: dart test test/platform_test.dart test/process_group_test.dart test/ios_transport_test.dart test/progress_test.dart
+      # The iOS transport against a real booted simulator and the real simctl.
+      - name: iOS simulator
+        run: |
+          udid=$(xcrun simctl list devices available --json |
+            jq -r '[.devices | to_entries[] | select(.key | test("SimRuntime\\.iOS-")) | .value[]] | first | .udid')
+          test -n "$udid" && test "$udid" != null
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          MOMENTS_IOS_SIMULATOR="$udid" dart test test/ios_simulator_test.dart
+          xcrun simctl shutdown "$udid"
 
   flutter:
     name: Flutter · ${{ matrix.package }}
