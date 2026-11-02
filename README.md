@@ -83,6 +83,14 @@ framework/moments/moments --help
 
 Both commands compile themselves on first use.
 
+## Checks
+
+`.github/scripts/local-ci.sh` runs CI's checks on this machine for the
+packages changed since the upstream branch; enable it before every push with
+`git config core.hooksPath .githooks`. Set `MANA_TEST_POSTGRES` to include the
+Postgres tests. The GitHub workflow (`.github/workflows/ci.yml`, with macOS and
+a real iOS simulator) runs only by hand: `gh workflow run CI`.
+
 ## Status
 
 Mana is young and used by a very small team. APIs and file formats still change

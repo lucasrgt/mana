@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# CI's checks for what this push changes (.github/scripts/local-ci.sh).
+# Enable once per clone: git config core.hooksPath .githooks
+exec "$(git rev-parse --show-toplevel)/.github/scripts/local-ci.sh"

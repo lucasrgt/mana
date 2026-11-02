@@ -1,9 +1,8 @@
 name: CI
 
+# Run by hand (Actions → CI → Run workflow, or `gh workflow run CI`): the same
+# checks run before every push on the machine itself (.githooks/pre-push).
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:

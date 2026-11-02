@@ -551,13 +551,16 @@ Future<void> _mix(List<String> arguments) async {
     if (arguments.isEmpty) {
       throw const ManaFailure('Use mana mix <mix project> [mix arguments]');
     }
+    final postgres = Platform.environment['MANA_TEST_POSTGRES'];
     await mix(
       arguments.first,
       arguments.skip(1).toList(),
       environment: {
-        for (final key in ['MIX_ENV'])
+        for (final key in ['MIX_ENV', 'MANA_TEST_POSTGRES'])
           if (Platform.environment[key] case final value?) key: value,
       },
+      // A test database on the host's loopback is reached on its network.
+      hostNetwork: postgres != null,
     );
   } on ManaFailure catch (error) {
     stderr.writeln(error.message);
