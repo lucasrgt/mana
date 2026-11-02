@@ -27,6 +27,10 @@ Future<int> pidIn(String file) async {
 
 /// A service whose shell leaves a grandchild holding the shared stdout: the
 /// shape of a server that starts a watcher or daemon of its own.
+/// [argv] as a shell command that leaves this process group, the way the
+/// host does it (setsid on Linux, Perl setpgrp on macOS, which has no setsid).
+String detached(List<String> argv) => host.inOwnGroup(argv).map((arg) => "'${arg.replaceAll("'", "'\\''")}'").join(' ');
+
 Future<({Services services, String cwd})> service(String grandchild) async {
   final cwd = temporary('moment-group-'), port = await freePort();
   File(p.join(cwd, 'source')).writeAsStringSync('one');
@@ -99,7 +103,7 @@ void main() {
   });
 
   test('a descendant that left the group keeps the pipe, but shutdown stops waiting once the child exited', () async {
-    final s = await service('setsid sleep 600');
+    final s = await service(detached(['sleep', '600']));
     final grandchild = await pidIn(p.join(s.cwd, 'grandchild.pid'));
     addTearDown(() => Process.killPid(grandchild, ProcessSignal.sigkill));
     final clock = Stopwatch()..start();
@@ -111,7 +115,11 @@ void main() {
   });
 
   test('a command whose grandchild holds the pipe finishes when the command exits', () async {
-    final child = await startGroup(['sh', '-c', 'setsid sleep 600 & echo \$!; exit 3']);
+    final child = await startGroup([
+      'sh',
+      '-c',
+      '${detached(['sleep', '600'])} & echo \$!; exit 3',
+    ]);
     final out = <int>[];
     final read = readUntilExit(child, stdout: out.addAll, stderr: (_) {}, drain: const Duration(milliseconds: 200));
     await read.timeout(const Duration(seconds: 5));

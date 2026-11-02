@@ -1,6 +1,6 @@
 # PRD — Mana 9+
 
-Status: delivered, except the first benchmark run (#31) · Owner: Mana · Baseline: an outside review scored Mana 7/10
+Status: delivered · Owner: Mana · Baseline: an outside review scored Mana 7/10
 (idea ≈ 8.5, execution ≈ 6.5). This PRD lists every point that review raised,
 checked against the code, plus what this round of work found, so execution
 catches up with the idea.
@@ -344,7 +344,7 @@ municipalities, partners).
 | 28 | `Mana.Incident` with `personal [...]`, people as roles, recorded-order replay | `incident_postgres_test`; Host Point booking: no personal value, same projection reopened | collection follows `belongs_to` from the subject |
 | 29 | `explorations "dir"`; `mix mana.explore --save`; `/_explorations/check` | `exploration_moments_test`: a seeded bug's Moment fails, then passes once fixed | no screen (`up`/`open` refuse it) |
 | 30 | `Moments.ActionGraph`; recipe preparation traced; receipts | `effect_selection_test`, `action_graph_test`; Host Point: one change module selects 10 of 42 | screen loads give no evidence; per-file granularity |
-| 31 | `mana eval benchmark`, `framework/benchmark` (12 tasks, two conditions) | harness tests with a scripted agent; every task validated (no-op fails, the real fix passes) | **no model run yet**: it spends tokens and waits for the owner's go-ahead |
+| 31 | `mana eval benchmark`, `framework/benchmark` (12 tasks, two conditions) | harness tests with a scripted agent; every task validated (no-op fails, the real fix passes) | not run: Mana is not published, so the owner dropped the public comparison; the harness stays for whenever it is wanted |
 | 32 | ash 3.37.2, ash_postgres 2.15.2, decimal, plug_crypto, assent 0.3.2 | `mix hex.audit` 0 everywhere; CI fails on any Hex, Dart or Flutter advisory | — |
 | 33 | `Mana.Uploads.Discard` (Oban job or notifier after commit) | `erasure_storage_test` | without Oban the deletion is not retried |
 
