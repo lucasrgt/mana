@@ -75,7 +75,8 @@ final class SecureSessionStore implements SessionStore {
 
   /// Runs [action] while holding this record's cross-tab lock (web) — used to
   /// serialize refresh-token rotation, which a shared cookie makes tab-global.
-  Future<T> exclusive<T>(Future<T> Function() action) => _coordination.exclusive(action);
+  Future<T> exclusive<T>(Future<T> Function() action) =>
+      _coordination.exclusive(action);
 
   /// Atomic only on the coordinated web path; native callers retain their
   /// provider contract. AshSession uses this only when [shared] is true.
@@ -133,9 +134,13 @@ DateTime? _expiry(String jwt) {
   final parts = jwt.split('.');
   if (parts.length != 3) return null;
   try {
-    final claims = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))));
+    final claims = jsonDecode(
+      utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+    );
     final exp = claims is Map ? claims['exp'] : null;
-    return exp is int ? DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true) : null;
+    return exp is int
+        ? DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true)
+        : null;
   } on FormatException {
     return null;
   }
@@ -237,11 +242,15 @@ final class AshSession {
       (_) => _observeSharedChange(),
     );
   }
+
   /// The access token for a transport the interceptor does not cover (a
   /// websocket), renewed first when it is about to expire.
   Future<String?> accessToken() async {
     final expires = _expiresAt;
-    if (rotate != null && _token != null && expires != null && expires.difference(DateTime.now().toUtc()) < renewBefore) {
+    if (rotate != null &&
+        _token != null &&
+        expires != null &&
+        expires.difference(DateTime.now().toUtc()) < renewBefore) {
       await _renew(_generation);
     }
     return _token;
@@ -488,7 +497,9 @@ final class AshSession {
       zoneValues: {_rotation: true},
     );
     final shared = _sharedStore;
-    final rotated = shared == null ? await exchange() : await shared.exclusive(exchange);
+    final rotated = shared == null
+        ? await exchange()
+        : await shared.exclusive(exchange);
     if (!_current(generation)) return null;
     await _save(rotated.refreshToken ?? _cookieRefresh, generation);
     if (!_current(generation)) return null;
@@ -500,7 +511,10 @@ final class AshSession {
   Future<void> _renew(int generation) => _renewing ??= () async {
     try {
       final stored = _observed;
-      if (stored == null || stored.isEmpty || stored.startsWith('!') && stored != _cookieRefresh) return;
+      if (stored == null ||
+          stored.isEmpty ||
+          stored.startsWith('!') && stored != _cookieRefresh)
+        return;
       await _rotated(stored, generation);
     } on DioException catch (error) {
       if (_current(generation) && error.response?.statusCode == 401) {

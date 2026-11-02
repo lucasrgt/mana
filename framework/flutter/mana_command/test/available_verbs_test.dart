@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mana_command/mana_command.dart';
-import 'package:mana_primitives/mana_primitives.dart';
 
 const _register = ManaVerb(
   resource: 'vehicle_registration',

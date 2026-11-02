@@ -26,7 +26,10 @@ final class LibraryIndependence extends AnalysisRule {
   DiagnosticCode get diagnosticCode => code;
 
   @override
-  void registerNodeProcessors(RuleVisitorRegistry registry, RuleContext context) {
+  void registerNodeProcessors(
+    RuleVisitorRegistry registry,
+    RuleContext context,
+  ) {
     final root = context.package?.root;
     if (root == null || _isApp(root)) return;
     registry.addImportDirective(this, _Visitor(this, root.provider));
@@ -42,13 +45,15 @@ final class _Visitor extends SimpleAstVisitor<void> {
 
   @override
   void visitImportDirective(ImportDirective node) {
-    final target = node.libraryImport?.importedLibrary?.firstFragment.source.fullName;
+    final target =
+        node.libraryImport?.importedLibrary?.firstFragment.source.fullName;
     if (target == null) return;
     var folder = files.getFile(target).parent;
     while (!folder.getFile('pubspec.yaml').exists) {
       if (folder.isRoot) return;
       folder = folder.parent;
     }
-    if (_isApp(folder)) rule.reportAtNode(node.uri, arguments: [p.basename(folder.path)]);
+    if (_isApp(folder))
+      rule.reportAtNode(node.uri, arguments: [p.basename(folder.path)]);
   }
 }

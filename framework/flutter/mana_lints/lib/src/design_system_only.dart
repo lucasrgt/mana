@@ -43,7 +43,10 @@ final class DesignSystemOnly extends MultiAnalysisRule {
   List<DiagnosticCode> get diagnosticCodes => [control, colour, spacing];
 
   @override
-  void registerNodeProcessors(RuleVisitorRegistry registry, RuleContext context) {
+  void registerNodeProcessors(
+    RuleVisitorRegistry registry,
+    RuleContext context,
+  ) {
     final visitor = _Visitor(this);
     registry
       ..addInstanceCreationExpression(this, visitor)
@@ -53,15 +56,42 @@ final class DesignSystemOnly extends MultiAnalysisRule {
 }
 
 const _controls = {
-  'ElevatedButton', 'TextButton', 'OutlinedButton', 'FilledButton', 'IconButton',
-  'FloatingActionButton', 'TextField', 'TextFormField', 'Checkbox', 'Switch',
-  'Radio', 'Slider', 'DropdownButton', 'DropdownMenu', 'AlertDialog',
-  'SimpleDialog', 'Dialog', 'SnackBar', 'Chip', 'ListTile', 'Card',
-  'BottomSheet', 'NavigationBar', 'TabBar', 'CupertinoButton',
-  'CupertinoTextField', 'CupertinoSwitch', 'CupertinoAlertDialog',
+  'ElevatedButton',
+  'TextButton',
+  'OutlinedButton',
+  'FilledButton',
+  'IconButton',
+  'FloatingActionButton',
+  'TextField',
+  'TextFormField',
+  'Checkbox',
+  'Switch',
+  'Radio',
+  'Slider',
+  'DropdownButton',
+  'DropdownMenu',
+  'AlertDialog',
+  'SimpleDialog',
+  'Dialog',
+  'SnackBar',
+  'Chip',
+  'ListTile',
+  'Card',
+  'BottomSheet',
+  'NavigationBar',
+  'TabBar',
+  'CupertinoButton',
+  'CupertinoTextField',
+  'CupertinoSwitch',
+  'CupertinoAlertDialog',
 };
 
-const _overlays = {'showDialog', 'showModalBottomSheet', 'showCupertinoDialog', 'showDatePicker'};
+const _overlays = {
+  'showDialog',
+  'showModalBottomSheet',
+  'showCupertinoDialog',
+  'showDatePicker',
+};
 
 String? _flutterLibrary(Element? element) {
   final uri = element?.library?.uri.toString() ?? '';
@@ -81,8 +111,13 @@ final class _Visitor extends SimpleAstVisitor<void> {
     final library = _flutterLibrary(type);
     if (name == null) return;
     if (library != null && _controls.contains(name)) {
-      rule.reportAtNode(node.constructorName, diagnosticCode: DesignSystemOnly.control, arguments: [name, library]);
-    } else if (name == 'Color' && (type?.library?.uri.toString() ?? '').startsWith('dart:ui')) {
+      rule.reportAtNode(
+        node.constructorName,
+        diagnosticCode: DesignSystemOnly.control,
+        arguments: [name, library],
+      );
+    } else if (name == 'Color' &&
+        (type?.library?.uri.toString() ?? '').startsWith('dart:ui')) {
       rule.reportAtNode(node, diagnosticCode: DesignSystemOnly.colour);
     } else if (_literalSpacing(name, node.argumentList)) {
       rule.reportAtNode(node, diagnosticCode: DesignSystemOnly.spacing);
@@ -92,15 +127,23 @@ final class _Visitor extends SimpleAstVisitor<void> {
   @override
   void visitMethodInvocation(MethodInvocation node) {
     final element = node.methodName.element;
-    if (_overlays.contains(node.methodName.name) && _flutterLibrary(element) != null) {
-      rule.reportAtNode(node.methodName, diagnosticCode: DesignSystemOnly.control, arguments: [node.methodName.name, _flutterLibrary(element)!]);
+    if (_overlays.contains(node.methodName.name) &&
+        _flutterLibrary(element) != null) {
+      rule.reportAtNode(
+        node.methodName,
+        diagnosticCode: DesignSystemOnly.control,
+        arguments: [node.methodName.name, _flutterLibrary(element)!],
+      );
     }
   }
 
   @override
   void visitPrefixedIdentifier(PrefixedIdentifier node) {
     final owner = node.prefix.element;
-    if (owner is InterfaceElement && owner.name == 'Colors' && _flutterLibrary(owner) == 'Material' && node.identifier.name != 'transparent') {
+    if (owner is InterfaceElement &&
+        owner.name == 'Colors' &&
+        _flutterLibrary(owner) == 'Material' &&
+        node.identifier.name != 'transparent') {
       rule.reportAtNode(node, diagnosticCode: DesignSystemOnly.colour);
     }
   }
@@ -112,7 +155,10 @@ final class _Visitor extends SimpleAstVisitor<void> {
         (a) => literal(a.argumentExpression),
       ),
       'SizedBox' => arguments.arguments.any(
-        (a) => a is NamedArgument && const {'width', 'height'}.contains(a.name.lexeme) && literal(a.argumentExpression),
+        (a) =>
+            a is NamedArgument &&
+            const {'width', 'height'}.contains(a.name.lexeme) &&
+            literal(a.argumentExpression),
       ),
       _ => false,
     };

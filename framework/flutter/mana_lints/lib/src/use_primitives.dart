@@ -10,7 +10,12 @@ import 'package:analyzer/error/error.dart';
 /// The same table feeds `mana capabilities` (the catalog agents read) so the
 /// lint and the catalog name the same replacement.
 final class Idiom {
-  const Idiom({required this.what, required this.use, required this.names, this.patterns = const []});
+  const Idiom({
+    required this.what,
+    required this.use,
+    required this.names,
+    this.patterns = const [],
+  });
 
   /// What the app reimplements, as the diagnostic says it.
   final String what;
@@ -49,7 +54,8 @@ final class UsePrimitives extends MultiAnalysisRule {
   UsePrimitives()
     : super(
         name: 'mana_use_primitives',
-        description: 'Apps use the Mana primitive instead of reimplementing it.',
+        description:
+            'Apps use the Mana primitive instead of reimplementing it.',
       );
 
   static const declaration = LintCode(
@@ -70,7 +76,10 @@ final class UsePrimitives extends MultiAnalysisRule {
   List<DiagnosticCode> get diagnosticCodes => [declaration, pattern];
 
   @override
-  void registerNodeProcessors(RuleVisitorRegistry registry, RuleContext context) {
+  void registerNodeProcessors(
+    RuleVisitorRegistry registry,
+    RuleContext context,
+  ) {
     final visitor = _Visitor(this);
     registry
       ..addFunctionDeclaration(this, visitor)
@@ -86,7 +95,11 @@ final class _Visitor extends SimpleAstVisitor<void> {
   void _name(Token name) {
     for (final idiom in idioms) {
       if (idiom.names.hasMatch(name.lexeme)) {
-        rule.reportAtToken(name, diagnosticCode: UsePrimitives.declaration, arguments: [name.lexeme, idiom.what, idiom.use]);
+        rule.reportAtToken(
+          name,
+          diagnosticCode: UsePrimitives.declaration,
+          arguments: [name.lexeme, idiom.what, idiom.use],
+        );
         return;
       }
     }
@@ -102,14 +115,19 @@ final class _Visitor extends SimpleAstVisitor<void> {
   void visitSimpleStringLiteral(SimpleStringLiteral node) {
     final creation = node.parent?.parent;
     final type = switch (creation) {
-      InstanceCreationExpression(:final constructorName) => constructorName.type.name.lexeme,
+      InstanceCreationExpression(:final constructorName) =>
+        constructorName.type.name.lexeme,
       MethodInvocation(:final methodName) => methodName.name,
       _ => null,
     };
     if (type != 'RegExp') return;
     for (final idiom in idioms) {
       if (idiom.patterns.any((p) => p.hasMatch(node.value))) {
-        rule.reportAtNode(node, diagnosticCode: UsePrimitives.pattern, arguments: [idiom.what, idiom.use]);
+        rule.reportAtNode(
+          node,
+          diagnosticCode: UsePrimitives.pattern,
+          arguments: [idiom.what, idiom.use],
+        );
         return;
       }
     }

@@ -20,17 +20,28 @@ final class FeatureBoundaries extends AnalysisRule {
   static const code = LintCode(
     'mana_feature_boundaries',
     "'{0}' reaches into the '{1}' feature.",
-    correctionMessage: 'Move what both features need up to their area (lib/features/{2}/).',
+    correctionMessage:
+        'Move what both features need up to their area (lib/features/{2}/).',
   );
 
   @override
   DiagnosticCode get diagnosticCode => code;
 
   @override
-  void registerNodeProcessors(RuleVisitorRegistry registry, RuleContext context) {
+  void registerNodeProcessors(
+    RuleVisitorRegistry registry,
+    RuleContext context,
+  ) {
     final root = context.package?.root.path;
     if (root == null) return;
-    registry.addImportDirective(this, _Visitor(this, p.join(root, 'lib', 'features'), context.definingUnit.file.path));
+    registry.addImportDirective(
+      this,
+      _Visitor(
+        this,
+        p.join(root, 'lib', 'features'),
+        context.definingUnit.file.path,
+      ),
+    );
   }
 }
 
@@ -50,10 +61,14 @@ final class _Visitor extends SimpleAstVisitor<void> {
   @override
   void visitImportDirective(ImportDirective node) {
     final from = featureOf(features, path);
-    final target = node.libraryImport?.importedLibrary?.firstFragment.source.fullName;
+    final target =
+        node.libraryImport?.importedLibrary?.firstFragment.source.fullName;
     if (from == null || from.$2 == null || target == null) return;
     final to = featureOf(features, target);
     if (to == null || to.$2 == null || to == from) return;
-    rule.reportAtNode(node.uri, arguments: [node.uri.stringValue ?? '', '${to.$1}/${to.$2}', to.$1]);
+    rule.reportAtNode(
+      node.uri,
+      arguments: [node.uri.stringValue ?? '', '${to.$1}/${to.$2}', to.$1],
+    );
   }
 }
