@@ -359,6 +359,7 @@ Future<Map<String, Object?>> runSuite({
             resumeOnOpen: false,
             prepare: worker.recipes.prepare,
             afterPreparedOpen: (_) => restart!(worker),
+            relaunchOnOpen: true,
           ),
           bootstrap: () => {
             ...((worker.current['launch'] as Map?) ?? const {}).cast<String, Object?>(),

@@ -62,21 +62,36 @@ final class MomentController extends ChangeNotifier {
   bool _supportsBlocker = false;
   Map<String, dynamic>? _reported;
   bool _offersScheduled = false;
+  _Report? _queued;
+  bool _reporting = false;
 
   // What the screen offers can change while its projection stays the same (a
   // row's action appears once its record loads): report again so `offered`
-  // checks see it.
+  // checks see it. The projection is read again, never the last one sent:
+  // after a navigation that one is the screen before it.
   void _offersChanged() {
     if (_disposed || _offersScheduled || _reported == null) return;
     _offersScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _offersScheduled = false;
-      final value = _reported;
+      final value = _readyProjection();
       if (value != null && !(_pending?.isActive ?? false)) {
-        unawaited(_send('observe', revision, value));
+        unawaited(_report('observe', revision, value));
       }
     });
     WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// The projections of the bindings ready for the Moment's route, read now.
+  List<Map<String, dynamic>> _readProjections() => _frameReaders.values
+      .map((read) => read())
+      .whereType<Map<String, dynamic>>()
+      .where((value) => value['route'] == projection?['route'])
+      .toList();
+
+  Map<String, dynamic>? _readyProjection() {
+    final values = _readProjections();
+    return values.length == 1 ? values.single : null;
   }
 
   int _activitySequence = 0;
@@ -189,11 +204,7 @@ final class MomentController extends ChangeNotifier {
     if (_blockers.values.firstOrNull case final reason?) {
       throw MomentRuntimeBlocked(reason);
     }
-    final values = _frameReaders.values
-        .map((read) => read())
-        .whereType<Map<String, dynamic>>()
-        .where((value) => value['route'] == projection?['route'])
-        .toList();
+    final values = _readProjections();
     if (values.length != 1) {
       throw StateError(
         'Expected one ready Moment binding; found ${values.length}',
@@ -360,36 +371,75 @@ final class MomentController extends ChangeNotifier {
     _pending?.cancel();
     final atRevision = revision;
     _pending = Timer(const Duration(milliseconds: 30), () {
-      unawaited(_send('capture', atRevision, value));
+      unawaited(_report('capture', atRevision, value));
     });
   }
 
   Future<void> observe(Map<String, dynamic> value) =>
-      _send('observe', revision, value);
+      _report('observe', revision, value);
 
-  Future<void> _send(
+  /// Sends one report at a time: the runner keeps the last one it receives,
+  /// so two in flight could land in either order and leave it showing the
+  /// older screen. Reports made meanwhile collapse into the newest
+  /// projection, saved if any of them was a capture.
+  Future<void> _report(
     String op,
     String atRevision,
     Map<String, dynamic> value,
-  ) async {
+  ) {
+    final queued = _queued;
+    if (queued != null && queued.revision == atRevision) {
+      queued
+        ..value = value
+        ..capture = queued.capture || op == 'capture'
+        ..observe = queued.observe || op == 'observe';
+      return queued.sent.future;
+    }
+    queued?.sent.complete();
+    final next = _queued = _Report(atRevision, value, capture: op == 'capture');
+    if (!_reporting) unawaited(_drainReports());
+    return next.sent.future;
+  }
+
+  Future<void> _drainReports() async {
+    _reporting = true;
+    try {
+      for (var next = _queued; next != null; next = _queued) {
+        _queued = null;
+        await _send(next);
+        next.sent.complete();
+      }
+    } finally {
+      _reporting = false;
+    }
+  }
+
+  Future<void> _send(_Report report) async {
+    final atRevision = report.revision, value = report.value;
+    final op = report.capture ? 'capture' : 'observe';
     final endpoint = _endpoint;
     if (_disposed || endpoint == null || atRevision != revision) return;
     try {
       await _reportBlocker();
       if (_disposed || _blockers.isNotEmpty || atRevision != revision) return;
-      if (op == 'observe') MomentTiming.mark(MomentMark.observeSent);
-      final response = await _client.post(
-        endpoint.resolve('/moments/$op'),
-        headers: _headers,
-        body: jsonEncode({
-          'revision': atRevision,
-          'client': clientId,
-          'sequence': ++_sequence,
-          'projection': value,
-          if (MomentAffordances.enabled) 'offered': MomentAffordances.offered,
-          if (op == 'observe') 'timing': MomentTiming.snapshot(),
-        }),
-      );
+      if (report.observe) MomentTiming.mark(MomentMark.observeSent);
+      final response = await _client
+          .post(
+            endpoint.resolve('/moments/$op'),
+            headers: _headers,
+            body: jsonEncode({
+              'revision': atRevision,
+              'client': clientId,
+              'sequence': ++_sequence,
+              'projection': value,
+              if (MomentAffordances.enabled)
+                'offered': MomentAffordances.offered,
+              if (report.observe) 'timing': MomentTiming.snapshot(),
+            }),
+          )
+          // A reply that never comes would hold back every later report; the
+          // runner refuses this one if it lands after them.
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode != 200) {
         throw StateError('Draft not saved: ${response.statusCode}');
       }
@@ -412,6 +462,15 @@ final class MomentController extends ChangeNotifier {
     _client.close();
     super.dispose();
   }
+}
+
+final class _Report {
+  _Report(this.revision, this.value, {required this.capture})
+    : observe = !capture;
+  final String revision;
+  Map<String, dynamic> value;
+  bool capture, observe;
+  final sent = Completer<void>();
 }
 
 final class MomentScope extends InheritedNotifier<MomentController> {

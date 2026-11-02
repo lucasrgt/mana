@@ -76,7 +76,7 @@ void main() {
   });
 
   testWidgets(
-    'the screen report carries what its controls offer, and goes again when that changes',
+    'the screen report carries what its controls offer, and goes again, read anew, when that changes',
     (tester) async {
       MomentAffordances.enable();
       addTearDown(MomentAffordances.disable);
@@ -109,17 +109,27 @@ void main() {
       );
       await tester.pump();
       expect(controller.revision, 'r1');
+      var filter = 'all';
+      controller.registerFrameReader(
+        Object(),
+        () => {'route': '/', 'filter': filter},
+      );
       final withdraw = MomentAffordances.offer('booking.cancel:1');
       await tester.pump();
       expect(reports, isEmpty, reason: 'Nothing to repeat before a report');
-      await controller.observe({'route': '/'});
+      await controller.observe({'route': '/', 'filter': 'all'});
       expect(reports.single['offered'], ['booking.cancel:1']);
+      // The screen changed since that report: the repeat reads it again.
+      filter = 'reservation';
       MomentAffordances.offer('booking.pay:1');
       withdraw();
       await tester.pump();
       await tester.pump();
       expect(reports, hasLength(2));
-      expect(reports.last['projection'], {'route': '/'});
+      expect(reports.last['projection'], {
+        'route': '/',
+        'filter': 'reservation',
+      });
       expect(reports.last['offered'], ['booking.pay:1']);
       controller.dispose();
       idle.complete(http.Response('', 204));

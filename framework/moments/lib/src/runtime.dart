@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show max;
 
 import 'package:mana/runtime.dart' show openPrivate, uuidV4;
 import 'package:path/path.dart' as p;
@@ -37,6 +38,7 @@ final class MomentsOptions {
     this.prepare,
     this.afterPreparedOpen,
     this.remountOnOpen = false,
+    this.relaunchOnOpen = false,
     this.onRuntimeClaim,
   });
 
@@ -58,6 +60,12 @@ final class MomentsOptions {
   /// The rebuild is then announced together with the move, so the old app
   /// never renders the new Moment with the previous launch's session.
   final bool remountOnOpen;
+
+  /// Whether [afterPreparedOpen] starts a new runtime (a suite remounting or
+  /// reopening the app). The running one is released with the move: it was
+  /// launched for the previous Moment, and taking the new one would have it
+  /// navigate, and report or save that Moment, as the previous persona.
+  final bool relaunchOnOpen;
   final void Function(String client)? onRuntimeClaim;
 
   MomentsOptions copyWith({void Function(String client)? onRuntimeClaim}) => MomentsOptions(
@@ -75,6 +83,7 @@ final class MomentsOptions {
     prepare: prepare,
     afterPreparedOpen: afterPreparedOpen,
     remountOnOpen: remountOnOpen,
+    relaunchOnOpen: relaunchOnOpen,
     onRuntimeClaim: onRuntimeClaim ?? this.onRuntimeClaim,
   );
 }
@@ -146,7 +155,7 @@ final class Moments implements WatchedMoments, GestureMoments {
   ({String id, String client})? _remount;
   _Frame? _frame;
   Map<String, Object?>? _blocker;
-  int _blockerSequence = 0, _lastCaptureSequence = 0;
+  int _blockerSequence = 0, _lastCaptureSequence = 0, _lastReportSequence = 0;
 
   /// The active runtime's requests in flight (`MomentActivity` in live_ui):
   /// what a journey's wait reads as progress. Never persisted or a criterion.
@@ -365,6 +374,7 @@ final class Moments implements WatchedMoments, GestureMoments {
     _revision = uuidV4();
     _setObserved(null);
     _lastCaptureSequence = 0;
+    _lastReportSequence = 0;
     _frame = null;
     _blocker = null;
     _blockerSequence = 0;
@@ -414,12 +424,21 @@ final class Moments implements WatchedMoments, GestureMoments {
     final rebuilds = prepare && declared;
     final armed = rebuilds && _options.remountOnOpen && canRemount() ? _armRemount() : null;
     try {
+      if (rebuilds && _options.relaunchOnOpen && _options.afterPreparedOpen != null) _releaseRuntime();
       _move(name, reset: fresh);
       if (rebuilds) await _options.afterPreparedOpen?.call(name);
     } finally {
       if (armed != null && _remount?.id == armed) _remount = null;
     }
     return _snapshot();
+  }
+
+  void _releaseRuntime() {
+    for (final waiter in [..._waiters]) {
+      reply(waiter, 409, {'error': 'Another runtime owns the draft session'});
+    }
+    _waiters.clear();
+    _activeClient = null;
   }
 
   List<String> get watchPaths => ((_contract['watch'] as List?) ?? const []).cast<String>();
@@ -626,6 +645,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         _activeClient = client;
         _setObserved(null);
         _lastCaptureSequence = 0;
+        _lastReportSequence = 0;
         _frame = null;
         _blocker = null;
         _blockerSequence = 0;
@@ -738,6 +758,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         }
         _persist({..._state!, 'projection': projection});
         _lastCaptureSequence = data['sequence']! as int;
+        _lastReportSequence = max(_lastReportSequence, _lastCaptureSequence);
         frame.sequence = data['sequence']! as int;
       }
       _setObserved({
@@ -824,6 +845,14 @@ final class Moments implements WatchedMoments, GestureMoments {
         return true;
       }
       final projection = _validate(data['projection']);
+      // Reports travel on separate connections and can be handled out of
+      // order; the runtime numbers them, so an older screen never replaces a
+      // newer one.
+      final sequence = data['sequence'];
+      if (sequence is int && sequence <= _lastReportSequence) {
+        reply(response, 409, {'error': 'Stale report sequence'});
+        return true;
+      }
       if (op == 'capture') {
         if (_preparing) throw const MomentsError('Backend preparation is in progress');
         if (!_safeInt(data['sequence']) || (data['sequence']! as int) <= _lastCaptureSequence) {
@@ -844,6 +873,7 @@ final class Moments implements WatchedMoments, GestureMoments {
         'openToObservedMs': _moveStarted == null ? null : nowMs() - _moveStarted!,
       });
       _moveStarted = null;
+      if (sequence is int) _lastReportSequence = sequence;
       reply(response, 200, {'saved': op == 'capture', 'observed': true});
     } else {
       reply(response, 404, {'error': 'Unknown Moments operation'});

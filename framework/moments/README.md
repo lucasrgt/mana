@@ -489,7 +489,9 @@ saved draft. A Moment whose own situation is anonymous, like the login screen,
 must not declare a missing session as a blocker.
 
 The bridge advertises `runtimeBlocker: 1`. Reports use revision, runtime owner
-and an increasing sequence; they accept no free text or credentials. While
+and an increasing sequence; they accept no free text or credentials. A capture or
+observation whose sequence is not above the last accepted report is refused
+(409), so a report handled late never replaces a newer screen. While
 blocked, captures, observations and frame acks are refused. Removing the block
 needs a new observation to prove restoration.
 
@@ -883,7 +885,9 @@ Each worker has its own bridge and goes through `checkMoment`: recipes,
 gestures, criteria, code identity and proofs land in `.proofs/`. Data is not isolated between workers beyond the unique fixtures
 each recipe creates. A failing journey keeps its ownership for inspection; in the suite, the worker releases it explicitly (`ownershipRecovered` in
 the result) because the effects stay in disposable fixtures. If ownership stays
-active, the worker retires instead of guessing.
+active, the worker retires instead of guessing. Each Moment starts the app
+again; the bridge releases the running app first, so the app launched for the
+previous Moment never navigates to, reports or saves the next one.
 
 **Browser (default).** A `flutter build web --profile` artifact, keyed by the
 resolved Dart sources and the defines (no code change, no rebuild), is served as

@@ -41,6 +41,12 @@ existing contract. The Dart and Ash limits are still declared separately.
 There is no restoration of an in-flight submission and no repetition of a network
 operation.
 
+The controller sends one screen report at a time, in the order the screen
+changed: reports made while one is in flight collapse into the newest
+projection (saved if any of them was a capture). A navigation (a `go` and a
+`push` in one frame, a pop) reaches the runner as the screen on top once the
+app captures after its router changes.
+
 ## Session availability gate
 
 `MomentRuntimeBlocker(reason: ..., child: ...)` connects the app's existing gate to
@@ -59,8 +65,8 @@ restoration. See [resume blocked by the session](../../moments/README.md#resume-
 In a Moments build, `MomentHost` turns on `MomentAffordances` (mana_primitives):
 every mounted `VerbGate` (mana_command) records the verb it offers, as
 `type.verb` or `type.verb:<recordId>`, and each screen report carries that list
-as `offered`. When the list changes and the projection does not, the last
-projection is reported again. The gesture driver reads a target
+as `offered`. When the list changes and the projection does not, the
+screen's projection is read again and reported. The gesture driver reads a target
 `verb:<type>.<verb>` with no record as any record's control, the first in tree
 order; `verb:<type>.<verb>:<id>` is that record's. A gesture's
 `MomentActionTrace` names its verb (from the target, or from `runVerb` as it

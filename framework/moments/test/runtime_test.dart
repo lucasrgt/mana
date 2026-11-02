@@ -745,4 +745,71 @@ void main() {
     expect((await call(bridge.url, bridge.token, '/moments/open', {'name': 'first'})).code, 200);
     expect(events, ['remount', 'restart']);
   });
+
+  test('a prepared open that relaunches the app releases the old runtime, which never takes the new Moment', () async {
+    final root = temporary('relaunch-');
+    Directory(p.join(root, 'moments')).createSync();
+    final scene = {
+      'description': 'Session',
+      'projection': {'route': '/sign-in', 'phase': 'anonymous'},
+      'checks': <Object?>[],
+      'backend': {'recipe': 'login'},
+    };
+    json(root, 'moments/manifest.json', {
+      'version': 1,
+      'watch': <Object?>[],
+      'properties': {
+        'route': {
+          'enum': ['/sign-in'],
+        },
+        'phase': {
+          'enum': ['anonymous'],
+        },
+      },
+      'moments': {'first': scene, 'second': scene},
+    });
+    final relaunched = Completer<void>();
+    final bridge = await Bridge.start(
+      project: root,
+      port: 0,
+      momentsOptions: MomentsOptions(
+        manifestFile: p.join(root, 'moments/manifest.json'),
+        prepare: (_) async {},
+        relaunchOnOpen: true,
+        afterPreparedOpen: (_) => relaunched.future,
+      ),
+    );
+    addTearDown(bridge.close);
+    Future<Answer> changes(String client, {String? since}) async {
+      final query = {'client': client, 'since': ?since};
+      final (:code, :value) = await call(
+        bridge.url,
+        bridge.token,
+        '/moments/changes?${Uri(queryParameters: query).query}',
+      );
+      return {'status': code, ...value};
+    }
+
+    Future<int> observe(String client, Object? revision) async =>
+        (await call(bridge.url, bridge.token, '/moments/observe', {
+          'revision': revision,
+          'client': client,
+          'projection': {'route': '/sign-in', 'phase': 'anonymous'},
+        })).code;
+
+    final first = await changes('a');
+    final waiting = changes('a', since: first['revision']! as String);
+    final opened = call(bridge.url, bridge.token, '/moments/open', {'name': 'second'});
+    final told = await waiting;
+    expect(told['status'], 409, reason: 'The old app is not handed the new Moment');
+    expect(told.containsKey('state'), isFalse);
+    final moved = await moment(bridge, 'look');
+    expect((moved['state']! as Map)['name'], 'second');
+    expect(await observe('a', moved['revision']), 409);
+    final fresh = await changes('b');
+    expect(fresh['revision'], moved['revision']);
+    expect(await observe('b', fresh['revision']), 200);
+    relaunched.complete();
+    expect((await opened).code, 200);
+  });
 }

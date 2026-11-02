@@ -228,6 +228,27 @@ void main() {
     expect(await offered(List.filled(257, 'booking.pay')), isNull);
   });
 
+  test('a report handled after a newer one never replaces the screen the newer one showed', () async {
+    final f = Fixture('moment-report-order-');
+    await f.start(initialName: 'inbox');
+    final revision = (await f.moments('changes?client=app')).data['revision'];
+    Map<String, Object?> report(int sequence, String filter) => {
+      'revision': revision,
+      'client': 'app',
+      'sequence': sequence,
+      'projection': {...projection, 'filter': filter, 'ids': 'id', 'read': 'no'},
+    };
+    Future<Object?> shown() async =>
+        (((await f.moments('look')).data['observed']! as Map)['projection'] as Map)['filter'];
+
+    expect((await f.moments('capture', report(2, 'all'))).status, 200);
+    expect((await f.moments('observe', report(1, 'reservation'))).status, 409);
+    expect(await shown(), 'all');
+    expect((await f.moments('observe', report(3, 'reservation'))).status, 200);
+    expect((await f.moments('capture', report(3, 'all'))).status, 409);
+    expect(await shown(), 'reservation');
+  });
+
   test('post-compile frame challenges reject old reports, wrong owners, duplicates and undeclared fields', () async {
     final f = Fixture('moment-frame-');
     final bridge = await f.start(initialName: 'inbox');
