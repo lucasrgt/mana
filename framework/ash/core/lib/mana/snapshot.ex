@@ -258,8 +258,10 @@ if Code.ensure_loaded?(Postgrex) and Code.ensure_loaded?(Ecto.Migrator) do
     defp database_name(repo, suffix), do: "#{config(repo)[:database]}_mana_#{suffix}"
     defp scope_database(repo, id), do: database_name(repo, "s_" <> id)
 
-    defp snapshot_database(repo, name),
-      do: valid_name!(name) && database_name(repo, "m_" <> String.replace(name, "-", "_"))
+    defp snapshot_database(repo, name) do
+      valid_name!(name)
+      database_name(repo, "m_" <> String.replace(name, "-", "_"))
+    end
 
     defp valid_name!(name) do
       if is_binary(name) and Regex.match?(~r/^[a-z][a-z0-9_-]{0,30}$/, name),

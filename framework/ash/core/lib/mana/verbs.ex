@@ -55,8 +55,8 @@ defmodule Mana.Verbs do
   `feature` reach the contract as `x-mana-verbs` on the resource schema
   (`Mana.Domain.OpenApi.finish/2`).
   """
+
   # Optional dependencies, called only when the app has them.
-  @compile {:no_warn_undefined, [AshJsonApi.Domain.Info]}
 
   alias Ash.Query.Calculation
   alias Ash.Resource.Calculation.Expression
@@ -193,7 +193,7 @@ defmodule Mana.Verbs do
       for verb <- declared(resource),
           not verb.collection,
           knob_on?(verb, actor),
-          holds?(verb, record, resource, actor, stored.(when_calculation(verb))),
+          holds?(verb, record, resource, actor, stored.(when_calculation(verb)), opts),
           flow_allows?(resource, record, verb),
           allowed?(verb, record, actor, opts),
           do: to_string(verb.name)
@@ -201,7 +201,7 @@ defmodule Mana.Verbs do
     related =
       for {child, verb} <- children(resource),
           knob_on?(verb, actor),
-          holds?(verb, record, resource, actor, stored.(child_calculation(child, verb))),
+          holds?(verb, record, resource, actor, stored.(child_calculation(child, verb)), opts),
           can_create?(child, verb, %{elem(verb.from, 1) => record.id}, actor),
           do: "#{Mana.Entity.type(child)}.#{verb.name}"
 
@@ -282,27 +282,29 @@ defmodule Mana.Verbs do
   `input` now, or the error its declaration names; generic actions call it
   before they act (create actions are gated on their own).
   """
-  def allowed(resource, name, actor, input \\ %{}) do
+  def allowed(resource, name, actor, input \\ %{}, opts \\ []) do
     verb = verb!(resource, name)
 
     cond do
       not knob_on?(verb, actor) ->
         {:error, Mana.Error.new("feature.disabled", "this is turned off right now", status: 403)}
 
-      collection_holds?(resource, verb, actor, input) ->
+      collection_holds?(resource, verb, actor, input, opts) ->
         :ok
 
       true ->
-        {:error, refusal(resource, verb, actor, input)}
+        {:error, refusal(resource, verb, actor, input, opts)}
     end
   end
 
   @doc false
-  def refusal(resource, %{unavailable: {module, function}, from: from}, actor, input) do
+  def refusal(resource, verb, actor, input, opts \\ [])
+
+  def refusal(resource, %{unavailable: {module, function}, from: from}, actor, input, opts) do
     parent =
       with {parent, field} <- from,
            id when not is_nil(id) <- input[field] || input[to_string(field)],
-           {:ok, record} <- Ash.get(parent, id, authorize?: false) do
+           {:ok, record} <- Ash.get(parent, id, authorize?: false, tenant: opts[:tenant]) do
         record
       else
         _ -> nil
@@ -312,19 +314,21 @@ defmodule Mana.Verbs do
       unavailable(resource, %{unavailable: nil, name: :verb})
   end
 
-  def refusal(resource, verb, _actor, _input), do: unavailable(resource, verb)
+  def refusal(resource, verb, _actor, _input, _opts), do: unavailable(resource, verb)
 
   @doc false
-  def collection_holds?(_resource, %{from: {parent, field}} = verb, actor, input) do
+  def collection_holds?(resource, verb, actor, input, opts \\ [])
+
+  def collection_holds?(_resource, %{from: {parent, field}} = verb, actor, input, opts) do
     with id when not is_nil(id) <- input[field] || input[to_string(field)],
-         {:ok, record} <- Ash.get(parent, id, authorize?: false) do
-      holds?(verb, record, parent, actor)
+         {:ok, record} <- Ash.get(parent, id, authorize?: false, tenant: opts[:tenant]) do
+      holds?(verb, record, parent, actor, :error, opts)
     else
       _ -> false
     end
   end
 
-  def collection_holds?(_resource, verb, actor, _input), do: precondition?(verb, actor)
+  def collection_holds?(_resource, verb, actor, _input, _opts), do: precondition?(verb, actor)
 
   @doc false
   def unavailable(_resource, %{unavailable: nil, name: name}),
@@ -424,15 +428,13 @@ defmodule Mana.Verbs do
       (is_nil(knobs) or is_nil(verb.feature) or Mana.Knobs.feature_on?(knobs, verb.feature, actor))
   end
 
-  defp holds?(verb, record, resource, actor, stored \\ :error)
+  defp holds?(%{when: nil}, _record, _resource, _actor, _stored, _opts), do: true
 
-  defp holds?(%{when: nil}, _record, _resource, _actor, _stored), do: true
-
-  defp holds?(%{when: {module, function}}, record, _resource, actor, _stored),
+  defp holds?(%{when: {module, function}}, record, _resource, actor, _stored, _opts),
     do: apply(module, function, [record, actor]) == true
 
-  defp holds?(%{when: expression}, record, resource, actor, stored),
-    do: decide(expression, record, resource, actor, stored) == {:ok, true}
+  defp holds?(%{when: expression}, record, resource, actor, stored, opts),
+    do: decide_with(expression, record, resource, actor, stored, opts) == {:ok, true}
 
   @doc false
   def condition(expression, actor), do: Ash.Expr.fill_template(expression, actor: actor)
@@ -440,13 +442,13 @@ defmodule Mana.Verbs do
   @doc """
   Evaluates a verb's `when` on `record`: in memory when what it reads is
   loaded, otherwise (an aggregate, a related calculation) asked of the stored
-  row by its primary key.
+  row by its primary key (in `opts[:tenant]` for a multitenant resource).
   """
-  def decide(expression, record, resource, actor),
-    do: decide(expression, record, resource, actor, :error)
+  def decide(expression, record, resource, actor, opts \\ []),
+    do: decide_with(expression, record, resource, actor, :error, opts)
 
   # `{:ok, value}` in `stored` is the stored row's answer, already loaded.
-  defp decide(expression, record, resource, actor, stored) do
+  defp decide_with(expression, record, resource, actor, stored, opts) do
     condition = condition(expression, actor)
 
     case Ash.Expr.eval(condition,
@@ -456,12 +458,11 @@ defmodule Mana.Verbs do
          ) do
       {:ok, value} -> {:ok, value}
       _ when stored != :error -> stored
-      _ -> stored(condition, record, resource)
+      _ -> stored(condition, record, resource, opts)
     end
   end
 
-  defp stored(condition, record, resource) do
-    require Ash.Query
+  defp stored(condition, record, resource, opts) do
     keys = Ash.Resource.Info.primary_key(resource)
 
     if keys != [] and Enum.all?(keys, &(not is_nil(Map.get(record, &1)))) do
@@ -469,7 +470,7 @@ defmodule Mana.Verbs do
        resource
        |> Ash.Query.do_filter(Map.to_list(Map.take(record, keys)))
        |> Ash.Query.do_filter(condition)
-       |> Ash.exists?(authorize?: false)}
+       |> Ash.exists?(authorize?: false, tenant: opts[:tenant])}
     else
       :unknown
     end
@@ -569,42 +570,6 @@ defmodule Mana.Verbs do
 
   def archetypes(%Mana.Verbs.Verb{} = verb) do
     ["authorization"] ++ if(verb.when && not verb.idempotent, do: ["lifecycle-gate"], else: [])
-  end
-
-  @doc """
-  Marks each JSON:API operation with the verbs it performs
-  (`x-mana-verb: ["booking.cancel"]`), so a client knows from the route
-  alone how a call retries and whether it may wait offline.
-  """
-  def put_operations(spec, domains) do
-    marks =
-      for domain <- domains,
-          route <- AshJsonApi.Domain.Info.routes(domain),
-          route.name,
-          resource = route.resource,
-          Mana.Verbs in Spark.extensions(resource),
-          names =
-            for(
-              verb <- declared(resource),
-              action(verb) == route.action,
-              do: "#{Mana.Entity.type(resource)}.#{verb.name}"
-            ),
-          names != [],
-          into: %{},
-          do: {route.name, names}
-
-    Map.update(spec, "paths", %{}, fn paths ->
-      Map.new(paths, fn {path, operations} ->
-        {path,
-         Map.new(operations, fn
-           {method, %{"operationId" => id} = operation} when is_map_key(marks, id) ->
-             {method, Map.put(operation, "x-mana-verb", marks[id])}
-
-           other ->
-             other
-         end)}
-      end)
-    end)
   end
 
   @impl Mana.Primitive
@@ -763,7 +728,9 @@ defmodule Mana.Verbs do
   end
 
   defp br_format?(type),
-    do: function_exported?(type, :format, 0) and match?("br-" <> _, type.format())
+    do:
+      Code.ensure_loaded?(type) and function_exported?(type, :format, 0) and
+        match?("br-" <> _, type.format())
 
   defp match_source(%Regex{source: source}), do: source
   defp match_source({m, f, a}), do: match_source(apply(m, f, a))
@@ -1025,7 +992,9 @@ defmodule Mana.Verbs.WhenGate do
     with %{} = verb <- verb(changeset),
          true <- changeset.valid? and not Mana.Verbs.offer_check?(changeset),
          {:ok, held} when held in [false, nil] <-
-           Mana.Verbs.decide(verb.when, changeset.data, changeset.resource, context.actor) do
+           Mana.Verbs.decide(verb.when, changeset.data, changeset.resource, context.actor,
+             tenant: changeset.tenant
+           ) do
       {:error, unavailable(changeset.resource, verb)}
     else
       _ -> :ok
@@ -1070,7 +1039,6 @@ defmodule Mana.Verbs.Recheck do
   # for the transaction and `when` is asked again of the row as it stands
   # now, so the second one is refused instead of applying over the first.
   use Ash.Resource.Change
-  require Ash.Query
   alias Ash.Resource.Info
 
   # AshPostgres is the consumer's dependency, not this package's.
@@ -1098,7 +1066,7 @@ defmodule Mana.Verbs.Recheck do
       changeset.resource
       |> Ash.Query.do_filter(Map.to_list(Map.take(record, Info.primary_key(changeset.resource))))
       |> Ash.Query.do_filter(Mana.Verbs.condition(verb.when, actor))
-      |> Ash.exists?(authorize?: false)
+      |> Ash.exists?(authorize?: false, tenant: changeset.tenant)
 
     if holds?,
       do: changeset,
@@ -1139,9 +1107,15 @@ defmodule Mana.Verbs.CollectionGate do
         input = Map.merge(changeset.attributes, changeset.arguments)
 
         if not changeset.valid? or Mana.Verbs.offer_check?(changeset) or
-             Mana.Verbs.collection_holds?(changeset.resource, verb, context.actor, input),
+             Mana.Verbs.collection_holds?(changeset.resource, verb, context.actor, input,
+               tenant: changeset.tenant
+             ),
            do: :ok,
-           else: {:error, Mana.Verbs.refusal(changeset.resource, verb, context.actor, input)}
+           else:
+             {:error,
+              Mana.Verbs.refusal(changeset.resource, verb, context.actor, input,
+                tenant: changeset.tenant
+              )}
     end
   end
 

@@ -9,6 +9,14 @@ defmodule Mana.BRTest do
     assert {:error, _} = Ash.Type.cast_input(Mana.BR.Cnpj, "11.222.333/0001-80", [])
   end
 
+  test "an alphanumeric CNPJ is valid, stored uppercase without punctuation" do
+    assert {:ok, "12ABC34501DE35"} = Ash.Type.cast_input(Mana.BR.Cnpj, "12.ABC.345/01DE-35", [])
+    assert {:ok, "12ABC34501DE35"} = Ash.Type.cast_input(Mana.BR.Cnpj, "12.abc.345/01de-35", [])
+    assert {:error, _} = Ash.Type.cast_input(Mana.BR.Cnpj, "12.ABC.345/01DE-36", [])
+    assert {:error, _} = Ash.Type.cast_input(Mana.BR.Cnpj, "12.ABC.345/01DE-3A", [])
+    assert {:error, _} = Ash.Type.cast_input(Mana.BR.Cnpj, "AA.AAA.AAA/AAAA-AA", [])
+  end
+
   test "plates, phones and CEPs are canonical" do
     assert {:ok, "ABC1D23"} = Ash.Type.cast_input(Mana.BR.Plate, "abc-1d23", [])
     assert {:ok, "ABC1234"} = Ash.Type.cast_input(Mana.BR.Plate, "ABC 1234", [])

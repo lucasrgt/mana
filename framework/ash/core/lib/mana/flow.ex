@@ -347,7 +347,7 @@ defmodule Mana.Flow do
   defp notify_stuck(nil, _record, _step, _diagnosis), do: :ok
 
   defp notify_stuck({module, function}, record, step, diagnosis) do
-    if function_exported?(module, function, 3),
+    if Code.ensure_loaded?(module) and function_exported?(module, function, 3),
       do: apply(module, function, [record, step, diagnosis]),
       else: apply(module, function, [record, step])
   end

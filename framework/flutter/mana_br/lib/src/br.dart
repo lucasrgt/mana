@@ -10,10 +10,20 @@ abstract final class BR {
         _check(numbers, 10, const [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]);
   }
 
+  /// Uppercase letters and digits, the stored form of a CNPJ.
+  static String cnpj(String value) =>
+      value.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
+
+  /// 12 base characters in 0-9 or A-Z and 2 numeric check digits: the
+  /// alphanumeric CNPJ issued since July 2026 (numeric ones stay valid). Each
+  /// character is worth its code minus 48, as in `Mop.Br.Cnpj`.
   static bool isCnpj(String value) {
-    final digits = BR.digits(value);
-    if (digits.length != 14 || _same(digits)) return false;
-    final numbers = digits.split('').map(int.parse).toList(growable: false);
+    final cnpj = BR.cnpj(value);
+    if (!RegExp(r'^[0-9A-Z]{12}[0-9]{2}$').hasMatch(cnpj) ||
+        RegExp(r'^(.)\1+$').hasMatch(cnpj)) {
+      return false;
+    }
+    final numbers = cnpj.codeUnits.map((c) => c - 48).toList(growable: false);
     return _check(numbers, 12, const [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]) &&
         _check(numbers, 13, const [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
   }
@@ -51,8 +61,19 @@ abstract final class BR {
   static String maskCpf(String value) =>
       _mask(digits(value), const [3, 3, 3, 2], const ['.', '.', '-']);
 
-  static String maskCnpj(String value) =>
-      _mask(digits(value), const [2, 3, 3, 4, 2], const ['.', '.', '/', '-']);
+  /// Letters are kept in the 12 base characters; the check digits are digits.
+  static String maskCnpj(String value) {
+    final cnpj = BR.cnpj(value);
+    final base = cnpj.length > 12 ? cnpj.substring(0, 12) : cnpj;
+    final check = cnpj.length > 12
+        ? cnpj.substring(12).replaceAll(RegExp(r'\D'), '')
+        : '';
+    return _mask(
+      base + check,
+      const [2, 3, 3, 4, 2],
+      const ['.', '.', '/', '-'],
+    );
+  }
 
   static String maskCep(String value) =>
       _mask(digits(value), const [5, 3], const ['-']);
@@ -161,9 +182,11 @@ enum BrFormat {
     return complete ? mask(value) : value;
   }
 
-  /// The canonical value the server stores: digits, or the normalized plate.
+  /// The canonical value the server stores: digits, or the normalized CNPJ
+  /// and plate.
   String canonical(String value) => switch (this) {
     plate => BR.plate(value),
+    cnpj => BR.cnpj(value),
     phone => BR.phone(value) ?? BR.digits(value),
     _ => BR.digits(value),
   };

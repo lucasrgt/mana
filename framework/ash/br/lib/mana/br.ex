@@ -1,32 +1,35 @@
 defmodule Mana.BR do
   @moduledoc """
   Brazilian identifiers as Ash types. Each accepts formatted input, stores the
-  canonical form (digits; plates uppercase) and rejects invalid documents with the
-  official check digits. Kept out of `mana_core`: a country's scalars are not core.
+  canonical form (digits; CNPJ and plates uppercase alphanumeric) and rejects invalid
+  documents with the official check digits. Kept out of `mana_core`: a country's
+  scalars are not core.
+
+  CPF and CNPJ are decided by `Mop.Br.Cpf` and `Mop.Br.Cnpj`, whose laws (the check
+  digit is always a digit; generated check digits always validate) are proved for
+  every input in `framework/mop/mop_br`.
   """
 
+  alias Mop.Br
+
   @doc "Valid CPF (11 digits, mod-11 check digits, not all equal)."
-  def cpf?(digits) when byte_size(digits) == 11,
-    do:
-      digits =~ ~r/^\d{11}$/ and not same?(digits) and check(digits, 9, Enum.to_list(10..2//-1)) and
-        check(digits, 10, Enum.to_list(11..2//-1))
+  def cpf?(digits), do: Br.Cpf.valid?(digits)
 
-  def cpf?(_), do: false
-
-  @doc "Valid CNPJ (14 digits, mod-11 check digits, not all equal)."
-  def cnpj?(digits) when byte_size(digits) == 14,
-    do:
-      digits =~ ~r/^\d{14}$/ and not same?(digits) and
-        check(digits, 12, [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]) and
-        check(digits, 13, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
-
-  def cnpj?(_), do: false
+  @doc """
+  Valid CNPJ: 12 base characters in 0-9 or A-Z and 2 numeric check digits (the
+  alphanumeric CNPJ the Receita Federal issues since July 2026; numeric ones stay
+  valid), not all equal. Takes the canonical form: uppercase, no punctuation.
+  """
+  def cnpj?(cnpj), do: Br.Cnpj.valid?(cnpj)
 
   @doc "A legacy (ABC1234) or Mercosul (ABC1D23) plate."
   def plate?(plate),
     do: plate =~ ~r/^[A-Z]{3}[0-9]{4}$/ or plate =~ ~r/^[A-Z]{3}[0-9][A-Z][0-9]{2}$/
 
   def digits(value), do: String.replace(to_string(value), ~r/\D/, "")
+
+  @doc "A CNPJ's canonical form: uppercase letters and digits, punctuation dropped."
+  def cnpj(value), do: to_string(value) |> String.upcase() |> String.replace(~r/[^0-9A-Z]/, "")
 
   def plate(value),
     do: to_string(value) |> String.replace(~r/[^[:alnum:]]/u, "") |> String.upcase()
@@ -48,7 +51,7 @@ defmodule Mana.BR do
   @doc false
   def cast_cpf(value), do: value |> digits() |> then(&if(cpf?(&1), do: {:ok, &1}, else: :error))
   @doc false
-  def cast_cnpj(value), do: value |> digits() |> then(&if(cnpj?(&1), do: {:ok, &1}, else: :error))
+  def cast_cnpj(value), do: value |> cnpj() |> then(&if(cnpj?(&1), do: {:ok, &1}, else: :error))
   @doc false
   def cast_cep(value),
     do: value |> digits() |> then(&if(byte_size(&1) == 8, do: {:ok, &1}, else: :error))
@@ -56,21 +59,6 @@ defmodule Mana.BR do
   @doc false
   def cast_plate(value),
     do: value |> plate() |> then(&if(plate?(&1), do: {:ok, &1}, else: :error))
-
-  defp same?(digits), do: digits |> String.graphemes() |> Enum.uniq() |> length() == 1
-
-  defp check(digits, position, weights) do
-    sum =
-      weights
-      |> Enum.with_index()
-      |> Enum.reduce(0, fn {w, i}, acc ->
-        acc + String.to_integer(binary_part(digits, i, 1)) * w
-      end)
-
-    remainder = rem(sum, 11)
-    expected = if remainder < 2, do: 0, else: 11 - remainder
-    String.to_integer(binary_part(digits, position, 1)) == expected
-  end
 end
 
 defmodule Mana.BR.Type do
@@ -119,7 +107,7 @@ defmodule Mana.BR.Cpf do
 end
 
 defmodule Mana.BR.Cnpj do
-  @moduledoc "CNPJ, stored as 14 digits."
+  @moduledoc "CNPJ, numeric or alphanumeric, stored as 14 uppercase characters."
   use Mana.BR.Type,
     format: "br-cnpj",
     normalize: &Mana.BR.cast_cnpj/1,

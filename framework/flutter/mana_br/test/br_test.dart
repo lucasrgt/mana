@@ -12,6 +12,19 @@ void main() {
     expect(BR.isCnpj('00000000000000'), isFalse);
   });
 
+  test('an alphanumeric CNPJ validates and masks like Mana.BR', () {
+    expect(BR.isCnpj('12.ABC.345/01DE-35'), isTrue);
+    expect(BR.isCnpj('12abc34501de35'), isTrue);
+    expect(BR.isCnpj('12.ABC.345/01DE-36'), isFalse);
+    expect(BR.isCnpj('12ABC34501DE3A'), isFalse);
+    expect(BR.isCnpj('AAAAAAAAAAAAAA'), isFalse);
+    expect(BR.maskCnpj('12abc34501de35'), '12.ABC.345/01DE-35');
+    expect(BR.maskCnpj('12ABC34501DEXY'), '12.ABC.345/01DE');
+    expect(BrFormat.cnpj.canonical('12.abc.345/01de-35'), '12ABC34501DE35');
+    expect(BrFormat.cnpj.display('12ABC34501DE35'), '12.ABC.345/01DE-35');
+    expect(BrFormat.cnpj.keyboard, TextInputType.text);
+  });
+
   test(
     'masks add separators only before a following digit and drop extra digits',
     () {

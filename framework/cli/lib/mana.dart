@@ -1,6 +1,7 @@
 export 'src/agents.dart';
 export 'src/assets.dart';
 export 'src/capabilities.dart';
+export 'src/flutter_adapter.dart';
 export 'src/failure.dart';
 export 'src/features.dart';
 export 'src/graph.dart';

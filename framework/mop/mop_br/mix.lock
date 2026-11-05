@@ -1,0 +1,3 @@
+%{
+  "lynx": {:git, "https://github.com/josevalim/lynx.git", "0bd83e0cdb7d4081ac2ae49e9bde62d6eb50cbdc", [ref: "0bd83e0cdb7d4081ac2ae49e9bde62d6eb50cbdc"]},
+}

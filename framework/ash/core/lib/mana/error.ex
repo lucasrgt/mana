@@ -25,20 +25,4 @@ defmodule Mana.Error do
       meta: Map.new(Keyword.get(opts, :meta, %{}))
     )
   end
-
-  if Code.ensure_loaded?(AshJsonApi.ToJsonApiError) do
-    defimpl AshJsonApi.ToJsonApiError do
-      def to_json_api_error(error) do
-        %AshJsonApi.Error{
-          id: Ash.UUID.generate(),
-          status_code: error.status,
-          code: error.code,
-          title: error.code,
-          detail: error.message,
-          source_parameter: error.field && to_string(error.field),
-          meta: error.meta
-        }
-      end
-    end
-  end
 end

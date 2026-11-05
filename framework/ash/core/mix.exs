@@ -7,7 +7,8 @@ defmodule ManaCore.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       consolidate_protocols: Mix.env() != :test,
-      elixirc_paths: if(Mix.env() == :test, do: ["lib", "test/support"], else: ["lib"]),
+      elixirc_paths:
+        if(Mix.env() == :test, do: ["lib", "test/support", "test/fixtures"], else: ["lib"]),
       deps: [
         {:ash, "~> 3.37 and >= 3.37.2"},
         {:ash_json_api, "~> 1.0", optional: true},

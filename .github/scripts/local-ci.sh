@@ -2,9 +2,11 @@
 # usage: local-ci.sh [base]   (default: the upstream of the current branch)
 # CI's checks, on this machine, for the packages changed since base: each
 # Elixir package (deps, hex.audit, format, Credo strict with ManaLint,
-# compile and test with warnings as errors, in the pinned toolchain), cli and
+# compile and test with warnings as errors, in the pinned toolchain), each MOP
+# package with its laws proved (the pinned toolchain plus Lean), cli and
 # moments (format, analyze, test), each Flutter package (format, analyze,
-# test), the agent skill, and mana new to green when the starter changed.
+# test), the boundary between the Flutter and Elixir packages, the agent
+# skill, and mana new to green when the starter changed.
 # Postgres-tagged tests run when MANA_TEST_POSTGRES names a database.
 set -euo pipefail
 
@@ -18,17 +20,31 @@ ran=0
 touched() { grep -q "^$1" <<<"$changed"; }
 step() { echo "· $*"; ran=1; }
 
+step "boundary between the Flutter and Elixir packages"
+.github/scripts/boundary.sh
+
 for dir in framework/ash/*/; do
   dir=${dir%/}
   [ -f "$dir/mix.exs" ] || continue
-  touched "$dir/" || touched framework/ash/.credo.exs || touched framework/ash/lint/ || continue
+  touched "$dir/" || touched framework/ash/.credo.exs || touched framework/ash/lint/ ||
+    { [ "$dir" = framework/ash/web ] && touched framework/catalog.toml; } || continue
   step "Elixir $(basename "$dir")"
   "$mana" mix "$dir" do deps.get + hex.audit + format --check-formatted + compile --warnings-as-errors + credo --strict
   MIX_ENV=test "$mana" mix "$dir" test --warnings-as-errors
 done
 
+for dir in framework/mop/*/; do
+  dir=${dir%/}
+  [ -f "$dir/mix.exs" ] || continue
+  touched "$dir/" || touched framework/mop/Dockerfile || continue
+  step "Laws $(basename "$dir")"
+  docker build -q -t mop-laws framework/mop >/dev/null
+  MOP_PROJECT=$(basename "$dir") framework/mop/run.sh sh -c \
+    'mix deps.get >/dev/null && mix format --check-formatted && mix compile --warnings-as-errors && mix test'
+done
+
 for pkg in cli moments; do
-  touched "framework/$pkg/" || continue
+  touched "framework/$pkg/" || { [ "$pkg" = cli ] && touched framework/catalog.toml; } || continue
   step "Dart $pkg"
   (cd "framework/$pkg" && dart pub get --enforce-lockfile >/dev/null &&
     dart format --output=none --set-exit-if-changed bin lib test && dart analyze && dart test)

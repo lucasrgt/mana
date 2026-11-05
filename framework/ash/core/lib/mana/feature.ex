@@ -13,9 +13,7 @@ defmodule Mana.Feature do
   percentile in milliseconds.
   """
   # Optional dependencies, called only when the app has them.
-  @compile {:no_warn_undefined, [AshJsonApi.Domain.Info]}
   use GenServer
-  alias AshJsonApi.Domain.Info
 
   @table __MODULE__
   @kept 2_000
@@ -76,84 +74,12 @@ defmodule Mana.Feature do
     end
   end
 
-  @doc "The routes of `domains` under `prefix`, each with the feature it belongs to."
-  def routes(domains, prefix) do
-    for domain <- domains,
-        route <- Info.routes(domain),
-        feature = feature(route.resource, route.action),
-        feature != nil do
-      {String.upcase(to_string(route.method)), segments(prefix <> route.route), feature}
-    end
-  end
-
-  @doc "The feature a request to `method` `path` belongs to, from `routes/2`."
-  def of(routes, method, path) do
-    got = path |> String.split("/", trim: true)
-
-    Enum.find_value(routes, fn {route_method, want, feature} ->
-      if route_method == method and matches?(want, got), do: feature
-    end)
-  end
-
-  defp feature(resource, action) do
+  @doc "The feature `action` of `resource` belongs to: its verb's, or for a read any of the resource's verbs'."
+  def of_action(resource, action) do
     verbs =
       if Mana.Verbs in Spark.extensions(resource), do: Mana.Verbs.declared(resource), else: []
 
     Enum.find_value(verbs, &(Mana.Verbs.action(&1) == action && &1.feature)) ||
       Enum.find_value(verbs, & &1.feature)
-  end
-
-  defp segments(path), do: String.split(path, "/", trim: true)
-
-  defp matches?(want, got) when length(want) == length(got),
-    do: Enum.zip(want, got) |> Enum.all?(fn {w, g} -> String.starts_with?(w, ":") or w == g end)
-
-  defp matches?(_want, _got), do: false
-end
-
-defmodule Mana.Feature.Plug do
-  @moduledoc "Labels each request with its feature (`Mana.Feature`) and records its outcome and duration."
-  @behaviour Plug
-
-  @impl true
-  def init(opts), do: {Keyword.fetch!(opts, :otp_app), Keyword.get(opts, :prefix, "/api")}
-
-  @impl true
-  def call(conn, {otp_app, prefix}) do
-    routes = routes(otp_app, prefix)
-
-    case Mana.Feature.of(routes, conn.method, conn.request_path) do
-      nil ->
-        conn
-
-      feature ->
-        started = System.monotonic_time(:microsecond)
-
-        conn
-        |> Plug.Conn.put_private(:mana_feature, feature)
-        |> Plug.Conn.register_before_send(fn conn ->
-          Mana.Feature.record(
-            feature,
-            conn.status || 200,
-            System.monotonic_time(:microsecond) - started
-          )
-
-          conn
-        end)
-    end
-  end
-
-  defp routes(otp_app, prefix) do
-    key = {Mana.Feature, otp_app, prefix}
-
-    case :persistent_term.get(key, nil) do
-      nil ->
-        routes = Mana.Feature.routes(Application.fetch_env!(otp_app, :ash_domains), prefix)
-        :persistent_term.put(key, routes)
-        routes
-
-      routes ->
-        routes
-    end
   end
 end

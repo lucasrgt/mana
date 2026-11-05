@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [br, contracts, core, lint, moments, runtime, session, upgrade]
+        package: [br, contracts, core, lint, moments, runtime, session, upgrade, web]
     # The digest of framework/ash/toolchain/Dockerfile: Elixir 1.18.4, OTP 27.3.4.18.
     container:
       image: elixir@sha256:09b37446f1b24a280890c4b294eec6a53ba2501a2289959b483d849035e1053c
@@ -202,3 +202,4 @@ jobs:
         with:
           sdk: 3.13.3
       - run: framework/cli/mana capabilities skill --check
+      - run: .github/scripts/boundary.sh
