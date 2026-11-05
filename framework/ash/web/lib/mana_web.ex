@@ -9,7 +9,7 @@ defmodule ManaWeb do
   tests.
   """
 
-  @implements ~w(errors verbs)
+  @implements ~w(errors moments verbs)
 
   @doc "The catalog ids this adapter implements."
   def implements, do: @implements

@@ -58,7 +58,10 @@ defmodule ManaWeb.Verbs do
 
   @doc """
   Renders its content only when `record` offers `verb`, passing the verb's
-  description (`describe/2`) to `:let`.
+  description (`describe/2`) to `:let`. The content is marked with
+  `data-mana-verb="type.verb:<id>"` (in an element with `display: contents`, so
+  layout is untouched), the identity a Flutter `VerbGate` gives its control:
+  `ManaWeb.Moments` reads what a screen offers from these marks.
   """
   attr :record, :map, required: true
   attr :verb, :atom, required: true
@@ -68,14 +71,20 @@ defmodule ManaWeb.Verbs do
     assigns =
       assign(assigns,
         offered: offered?(assigns.record, assigns.verb),
-        described: describe(assigns.record.__struct__, assigns.verb)
+        described: describe(assigns.record.__struct__, assigns.verb),
+        mark: mark(assigns.record, assigns.verb)
       )
 
     ~H"""
-    <%= if @offered do %>
+    <span :if={@offered} data-mana-verb={@mark} style="display: contents">
       {render_slot(@inner_block, @described)}
-    <% end %>
+    </span>
     """
+  end
+
+  @doc "The identity of `record`'s `verb`: `type.verb:<id>`, as records list what they offer."
+  def mark(record, verb) do
+    "#{Mana.Entity.type(record.__struct__)}.#{verb}:#{record.id}"
   end
 
   @doc """

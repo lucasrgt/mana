@@ -95,3 +95,11 @@ journey are distinct evidence.
 In practice, a compatible HTTP rename passed the generator and then failed in an
 isolated real consumer, and a new required input was refused before the package was
 swapped; in both cases the previous package was restored byte for byte.
+
+## Shared by both Moments runners
+
+`moments/avp-verdicts.json` holds the AVP verdict each criteria report must get: the
+Dart runner (`framework/moments`, `test/verdict_parity_test.dart`) and the LiveView
+runner (`framework/ash/web`, `ManaWeb.Moments.Verdict`) are both tested against it,
+so a Moment judged on Flutter and on LiveView gets the same verdict. Change a case
+here, and both runners follow.

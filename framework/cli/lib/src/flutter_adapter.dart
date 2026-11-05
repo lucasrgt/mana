@@ -59,4 +59,8 @@ const flutterImplements = <String, List<String>>{
   'feature-health': ['cli/lib/src/client.dart'],
   'new-project': ['cli/lib/src/new_project.dart'],
   'undo': ['flutter/mana_command/lib/src/history_view.dart'],
+  'moments': [
+    'flutter/live_ui/lib/src/moments.dart',
+    'flutter/live_ui/lib/src/moment_gestures.dart',
+  ],
 };

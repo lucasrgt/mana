@@ -1,0 +1,399 @@
+[
+  {
+    "case": "every criterion held",
+    "subject": "close-ticket",
+    "status": "passed",
+    "checks": [
+      {
+        "name": "reopenable",
+        "status": "passed",
+        "verb": "ticket.reopen",
+        "expected": "offered",
+        "observed": [
+          "ticket.reopen:1"
+        ]
+      },
+      {
+        "name": "closed",
+        "status": "passed",
+        "field": "status",
+        "expected": "closed",
+        "observed": "closed"
+      }
+    ],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "close-ticket",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "reopenable",
+          "status": "pass",
+          "evidence": {
+            "expected": "offered",
+            "observed": [
+              "ticket.reopen:1"
+            ]
+          }
+        },
+        {
+          "criterionId": "closed",
+          "status": "pass",
+          "evidence": {
+            "field": "status",
+            "expected": "closed",
+            "observed": "closed"
+          }
+        }
+      ],
+      "outcome": "pass",
+      "acceptanceScore": 1.0
+    }
+  },
+  {
+    "case": "a field criterion failed",
+    "subject": "close-ticket",
+    "status": "failed",
+    "checks": [
+      {
+        "name": "closed",
+        "status": "failed",
+        "field": "status",
+        "expected": "closed",
+        "observed": "open"
+      },
+      {
+        "name": "reopenable",
+        "status": "passed",
+        "expected": "offered",
+        "observed": []
+      }
+    ],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "close-ticket",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "closed",
+          "status": "fail",
+          "reason": "status: expected closed, observed open",
+          "evidence": {
+            "field": "status",
+            "expected": "closed",
+            "observed": "open"
+          }
+        },
+        {
+          "criterionId": "reopenable",
+          "status": "pass",
+          "evidence": {
+            "expected": "offered",
+            "observed": []
+          }
+        }
+      ],
+      "outcome": "fail",
+      "acceptanceScore": 0.5
+    }
+  },
+  {
+    "case": "a verb criterion failed",
+    "subject": "stale",
+    "status": "failed",
+    "checks": [
+      {
+        "name": "not_closable",
+        "status": "failed",
+        "verb": "ticket.close",
+        "expected": "not-offered",
+        "observed": [
+          "ticket.close:1"
+        ]
+      }
+    ],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "stale",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "not_closable",
+          "status": "fail",
+          "reason": "Criterion not_closable did not hold",
+          "evidence": {
+            "expected": "not-offered",
+            "observed": [
+              "ticket.close:1"
+            ]
+          }
+        }
+      ],
+      "outcome": "fail",
+      "acceptanceScore": 0.0
+    }
+  },
+  {
+    "case": "the journey failed with no failed criterion",
+    "subject": "journey",
+    "status": "failed",
+    "reason": "close: no control offers ticket.close",
+    "checks": [
+      {
+        "name": "reopenable",
+        "status": "passed",
+        "expected": "offered",
+        "observed": [
+          "ticket.reopen:1"
+        ]
+      }
+    ],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "journey",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "reopenable",
+          "status": "pass",
+          "evidence": {
+            "expected": "offered",
+            "observed": [
+              "ticket.reopen:1"
+            ]
+          }
+        },
+        {
+          "criterionId": "moment-run",
+          "status": "fail",
+          "reason": "close: no control offers ticket.close"
+        }
+      ],
+      "outcome": "fail",
+      "acceptanceScore": 0.5
+    }
+  },
+  {
+    "case": "the journey failed with no reason",
+    "subject": "journey",
+    "status": "failed",
+    "checks": [],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "journey",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "moment-run",
+          "status": "fail",
+          "reason": "The journey failed"
+        }
+      ],
+      "outcome": "fail",
+      "acceptanceScore": 0.0
+    }
+  },
+  {
+    "case": "evidence was unavailable",
+    "subject": "rename",
+    "status": "unavailable",
+    "checks": [
+      {
+        "name": "closable",
+        "status": "passed",
+        "expected": "offered",
+        "observed": [
+          "ticket.close:1"
+        ]
+      },
+      {
+        "name": "restored",
+        "status": "unavailable",
+        "reason": "Nothing to restore"
+      }
+    ],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "rename",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "closable",
+          "status": "pass",
+          "evidence": {
+            "expected": "offered",
+            "observed": [
+              "ticket.close:1"
+            ]
+          }
+        },
+        {
+          "criterionId": "restored",
+          "status": "unresolved",
+          "reason": "Nothing to restore"
+        }
+      ],
+      "outcome": "inconclusive",
+      "acceptanceScore": 1.0
+    }
+  },
+  {
+    "case": "nothing could be observed",
+    "subject": "rename",
+    "status": "unavailable",
+    "reason": "title: fill steps do not run",
+    "checks": [],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "rename",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "moment-observation",
+          "status": "unresolved",
+          "reason": "title: fill steps do not run"
+        }
+      ],
+      "outcome": "inconclusive",
+      "acceptanceScore": null
+    }
+  },
+  {
+    "case": "nothing at all",
+    "subject": "empty",
+    "status": "unavailable",
+    "checks": [],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "empty",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "moment-observation",
+          "status": "unresolved",
+          "reason": "The Moment could not be observed"
+        }
+      ],
+      "outcome": "inconclusive",
+      "acceptanceScore": null
+    }
+  },
+  {
+    "case": "a criterion does not apply",
+    "subject": "phone",
+    "status": "passed",
+    "checks": [
+      {
+        "name": "native_only",
+        "status": "not-applicable",
+        "reason": "Only on native"
+      },
+      {
+        "name": "closable",
+        "status": "passed"
+      }
+    ],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "phone",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "native_only",
+          "status": "not-applicable",
+          "reason": "Only on native"
+        },
+        {
+          "criterionId": "closable",
+          "status": "pass"
+        }
+      ],
+      "outcome": "pass",
+      "acceptanceScore": 1.0
+    }
+  },
+  {
+    "case": "only criteria that do not apply",
+    "subject": "phone",
+    "status": "passed",
+    "checks": [
+      {
+        "name": "native_only",
+        "status": "not-applicable"
+      }
+    ],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "phone",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "native_only",
+          "status": "not-applicable"
+        }
+      ],
+      "outcome": "inconclusive",
+      "acceptanceScore": null
+    }
+  },
+  {
+    "case": "a numeric field failed",
+    "subject": "count",
+    "status": "failed",
+    "checks": [
+      {
+        "name": "count",
+        "status": "failed",
+        "field": "count",
+        "expected": 2,
+        "observed": 3
+      },
+      {
+        "name": "flag",
+        "status": "passed",
+        "field": "flag",
+        "expected": true,
+        "observed": true
+      }
+    ],
+    "verdict": {
+      "protocol": "avp",
+      "protocolVersion": "0.4.0",
+      "subject": "count",
+      "archetype": "moment-criteria",
+      "results": [
+        {
+          "criterionId": "count",
+          "status": "fail",
+          "reason": "count: expected 2, observed 3",
+          "evidence": {
+            "field": "count",
+            "expected": 2,
+            "observed": 3
+          }
+        },
+        {
+          "criterionId": "flag",
+          "status": "pass",
+          "evidence": {
+            "field": "flag",
+            "expected": true,
+            "observed": true
+          }
+        }
+      ],
+      "outcome": "fail",
+      "acceptanceScore": 0.5
+    }
+  }
+]
