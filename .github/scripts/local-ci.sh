@@ -5,7 +5,8 @@
 # compile and test with warnings as errors, in the pinned toolchain), each MOP
 # package with its laws proved (the pinned toolchain plus Lean), cli and
 # moments (format, analyze, test), each Flutter package (format, analyze,
-# test), the agent skill, and mana new to green when the starter changed.
+# test), the boundary between the Flutter and Elixir packages, the agent
+# skill, and mana new to green when the starter changed.
 # Postgres-tagged tests run when MANA_TEST_POSTGRES names a database.
 set -euo pipefail
 
@@ -18,6 +19,9 @@ ran=0
 
 touched() { grep -q "^$1" <<<"$changed"; }
 step() { echo "· $*"; ran=1; }
+
+step "boundary between the Flutter and Elixir packages"
+.github/scripts/boundary.sh
 
 for dir in framework/ash/*/; do
   dir=${dir%/}
@@ -40,7 +44,7 @@ for dir in framework/mop/*/; do
 done
 
 for pkg in cli moments; do
-  touched "framework/$pkg/" || continue
+  touched "framework/$pkg/" || { [ "$pkg" = cli ] && touched framework/catalog.toml; } || continue
   step "Dart $pkg"
   (cd "framework/$pkg" && dart pub get --enforce-lockfile >/dev/null &&
     dart format --output=none --set-exit-if-changed bin lib test && dart analyze && dart test)

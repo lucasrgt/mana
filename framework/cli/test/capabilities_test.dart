@@ -3,10 +3,47 @@ import 'dart:io';
 import 'package:mana/mana.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
+import 'package:toml/toml.dart';
 
 String framework() => p.normalize(p.join(Directory.current.path, '..'));
 
 void main() {
+  // The catalog's Flutter column is what flutterImplements maps: neither may
+  // move alone (mana_web's catalog test holds the LiveView column).
+  test(
+    'the catalog says available in Flutter exactly for what the Flutter adapter maps',
+    () {
+      final file = File(p.join(framework(), 'catalog.toml'));
+      final entries =
+          TomlDocument.parse(file.readAsStringSync()).toMap()['capability']
+              as List;
+      final available = [
+        for (final entry in entries.cast<Map>())
+          if (entry['adapters'] case {'flutter': 'available'})
+            entry['id'] as String,
+      ]..sort();
+      expect(available, flutterImplements.keys.toList()..sort());
+    },
+  );
+
+  test('every file the Flutter adapter maps exists on the Dart side', () {
+    for (final MapEntry(key: id, value: files) in flutterImplements.entries) {
+      expect(files, isNotEmpty, reason: id);
+      for (final file in files) {
+        expect(
+          file.startsWith('flutter/') || file.startsWith('cli/lib/'),
+          isTrue,
+          reason: '$id: $file is not Flutter adapter code',
+        );
+        expect(
+          File(p.join(framework(), file)).existsSync(),
+          isTrue,
+          reason: '$id: $file',
+        );
+      }
+    }
+  });
+
   test(
     'the framework catalog loads and every entry points to existing docs',
     () {

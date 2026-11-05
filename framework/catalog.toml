@@ -10,7 +10,9 @@ version = 1
 # Each core or primitive capability says where its client half stands: `adapters = "server"`
 # when it has none, otherwise its status in each adapter (Flutter, LiveView): "available",
 # "planned", or { not_applicable = "why" }. mana_web's tests hold the LiveView column to what
-# mana_web implements, so the two adapters cannot drift silently.
+# mana_web implements (ManaWeb.implements/0), and the CLI's tests hold the Flutter column to the
+# Dart files that implement each one (framework/cli/lib/src/flutter_adapter.dart), so neither
+# adapter can drift silently.
 
 [[capability]]
 id = "features"
