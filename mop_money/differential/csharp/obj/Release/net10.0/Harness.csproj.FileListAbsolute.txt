@@ -1,0 +1,14 @@
+/w/differential/csharp/bin/Release/net10.0/Harness
+/w/differential/csharp/bin/Release/net10.0/Harness.deps.json
+/w/differential/csharp/bin/Release/net10.0/Harness.runtimeconfig.json
+/w/differential/csharp/bin/Release/net10.0/Harness.dll
+/w/differential/csharp/bin/Release/net10.0/Harness.pdb
+/w/differential/csharp/obj/Release/net10.0/Harness.GeneratedMSBuildEditorConfig.editorconfig
+/w/differential/csharp/obj/Release/net10.0/Harness.AssemblyInfoInputs.cache
+/w/differential/csharp/obj/Release/net10.0/Harness.AssemblyInfo.cs
+/w/differential/csharp/obj/Release/net10.0/Harness.csproj.CoreCompileInputs.cache
+/w/differential/csharp/obj/Release/net10.0/Harness.dll
+/w/differential/csharp/obj/Release/net10.0/refint/Harness.dll
+/w/differential/csharp/obj/Release/net10.0/Harness.pdb
+/w/differential/csharp/obj/Release/net10.0/Harness.genruntimeconfig.cache
+/w/differential/csharp/obj/Release/net10.0/ref/Harness.dll
