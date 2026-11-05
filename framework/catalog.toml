@@ -7,6 +7,11 @@
 # not rebuild it by hand in the meantime).
 version = 1
 
+# Each core or primitive capability says where its client half stands: `adapters = "server"`
+# when it has none, otherwise its status in each adapter (Flutter, LiveView): "available",
+# "planned", or { not_applicable = "why" }. mana_web's tests hold the LiveView column to what
+# mana_web implements, so the two adapters cannot drift silently.
+
 [[capability]]
 id = "features"
 name = "Feature map"
@@ -46,6 +51,7 @@ id = "contracts"
 name = "API contract and generated client"
 layer = "core"
 status = "available"
+adapters = { flutter = "available", live = { not_applicable = "a LiveView calls Ash directly; the JSON:API contract is how the Flutter adapter reaches the server" } }
 summary = "Ash resources export OpenAPI; Mana generates the Dart client and blocks breaking changes with oasdiff."
 keywords = ["contract", "OpenAPI", "client", "API", "endpoint", "dio", "generated"]
 use = "Change the Ash resource, then run mana client generate. Never edit the generated client by hand."
@@ -57,6 +63,7 @@ id = "validation"
 name = "Validation on both sides"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "Every verb's inputs reach the client with the rules its Ash action enforces (required, lengths, regex, ranges, one_of, uuid, dates, Mana.BR formats and uniqueness); a field checks them as the user types, and the server's refusal lands on the field it names."
 keywords = ["validation", "validate", "field", "input", "rule", "required", "length", "mask", "keyboard", "field error", "form"]
 use = "Server: nothing new — constraints on the action's attributes and arguments are the rules. Client: BookingVerbs.counter.input('counter_note') gives a VerbInput; in Flutter (mana_command) TextFormField(validator: input.validator(message), keyboardType: input.keyboard, inputFormatters: input.formatters) and send input.value(text); on a refusal verbFieldErrors(response.data) maps codes to fields; a unique input (a single-attribute identity) gets uniqueValidator(input, taken) — debounced, the server still decides. Plain checks: input.check(value)."
@@ -68,6 +75,7 @@ id = "mana-br"
 name = "Brazilian identifiers"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "CPF, CNPJ (numeric or the alphanumeric one issued since July 2026), CEP, phone and plate: validated, canonical and masked the same on server and client; CPF and CNPJ are decided by Mop.Br, whose laws are proved. The schema carries format br-cpf | br-cnpj | br-cep | br-phone | br-plate."
 keywords = ["cpf", "validate cpf", "cnpj", "cep", "phone", "license plate", "document", "mask", "check digit", "brazil", "address"]
 use = "Server: attribute type Mana.BR.Cpf (Cnpj, Cep, Phone, Plate). Flutter: import package:mana_br; BrFormat.cpf.formatter / .keyboard / .validator() / .display(), BR.isCpf, BR.maskCep."
@@ -92,9 +100,10 @@ id = "errors"
 name = "Error catalog"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = "available" }
 summary = "Stable product error codes and 4xx status per refusal, declared in the Ash domain and exported as the ErrorCode enum."
 keywords = ["error", "error code", "error message", "refusal", "4xx"]
-use = "errors do ... end in the domain (Mana.Domain); raise Domain.error(:name); clients map ErrorCode to copy."
+use = "errors do ... end in the domain (Mana.Domain); raise Domain.error(:name); clients map ErrorCode to copy. LiveView (mana_web): ManaWeb.Verbs.refusal(error) answers the declared code, message and field of a refused run."
 replaces = ["matching error message strings in the app", "ad-hoc error maps"]
 docs = "framework/ash/core/README.md"
 
@@ -103,6 +112,7 @@ id = "access"
 name = "Public access and rate limits"
 layer = "primitive"
 status = "available"
+adapters = "server"
 summary = "Which actions are public and their rate limits, declared in the resource (Mana.Resource access) and enforced inside the action; Mana.Router derives the public routes."
 keywords = ["public", "rate limit", "limit", "authentication", "public route"]
 use = "access do public :action, rate_limit: ... end in the resource."
@@ -114,6 +124,7 @@ id = "privacy"
 name = "Privacy (LGPD export and erasure)"
 layer = "primitive"
 status = "available"
+adapters = "server"
 summary = "Resources declare privacy; Mana.Privacy exports a person's rows through the declared projection and erases them."
 keywords = ["privacy", "LGPD", "GDPR", "export data", "delete account", "erasure"]
 use = "privacy do ... end in each resource holding personal data. erase :detach keeps rows other records still name (a place a booking was at) and cuts them from the person through the resource's detach update action; erasing also drops the history of deleted records and forgets the person as the actor of the rest (actor_id cleared, via: \"erased\"), and the entries that remain about the person's kept or detached rows, or that the person made, read \"[erased]\" for every personal field (privacy personal — export [...], personal [:name, :email] names the exported fields that say who the person is; every exported field when personal is not given — and history redact): a kept booking's status and total stay readable. Mana.Privacy.personal(resource) lists them. Call erase inside the transaction that closes the account: everything it does follows it. A Mana.Uploads resource's stored objects go only after the erasure commits (see uploads): an erasure that rolls back keeps them."
@@ -125,6 +136,7 @@ id = "retention"
 name = "Retention"
 layer = "primitive"
 status = "available"
+adapters = "server"
 summary = "Rows past a declared age are deleted on a schedule (Mana.Retention.Worker under Oban)."
 keywords = ["retention", "expire", "cleanup", "delete old", "cron"]
 use = "retention do delete_after :expires_at, days: 30 end in the resource."
@@ -136,6 +148,7 @@ id = "uploads"
 name = "Uploads, storage and attachments"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "Files go straight to object storage through short-lived signed URLs; kinds declare accepted types, size and thumbnails; a resource declares which attributes hold files (Mana.Attachments), which checks ownership, reaches the contract and the client, and fakes a ready file for Moments."
 keywords = ["upload", "photo", "image", "file", "attachment", "document", "thumbnail", "storage", "s3", "avatar"]
 use = "Files resource: uploads do kind :photo, accept: :images, max_bytes: ..., thumbnail: 320 end (Mana.Uploads); policies decide who calls request_upload and the update confirm (policy action([:read, :confirm]) do authorize_if expr(owner_id == ^actor(:id)) end; route it as patch :confirm, route: \"/:id/confirm\"); confirm is ready once stored, a no-op once ready, and inserts the thumbnail job in its transaction. Destroying a file (any destroy, Mana.Privacy.erase included) deletes its object and thumbnail only after commit: with Oban on the repo a job inserted in the destroy's transaction (discard_queue), retried, a missing object counting as deleted; without Oban an Ash notifier after the outermost commit (a bulk destroy needs notify?: true; a failure goes to the error reporter). Holder: extensions: [Mana.Attachments]; attachments do files MyApp.Asset; attach :cover_photo_id, kinds: [:photo] end; calculate :cover_url, :string, {Mana.Uploads.Url, attribute: :cover_photo_id}. Flutter: uploadAttachment(account, photo, PropertyAttachments.coverPhotoId) from the app's account package (rejects before uploading). Moments/tests: Mana.Attachments.fake(Property, :cover_photo_id, owner_id). An attachment of a list attribute carries max (the attribute's max_length constraint) to the client: XAttachments.extraPhotoIds.max. kind max_side:/quality: reach clients through x-mana-attachments so images are shrunk before upload. Flutter: AttachmentUploads (progress, retry of a failed file, max respected) and AttachmentField."
@@ -147,6 +160,7 @@ id = "integrations"
 name = "Integrations"
 layer = "primitive"
 status = "available"
+adapters = "server"
 summary = "Provider slots with an adapter per environment; production refuses to boot with a fake or unconfigured adapter."
 keywords = ["integration", "provider", "sms", "email", "stripe", "adapter"]
 use = "use Mana.Integration, otp_app: ... for each provider (SMS, e-mail, payments)."
@@ -158,6 +172,7 @@ id = "webhooks"
 name = "Webhooks"
 layer = "primitive"
 status = "available"
+adapters = "server"
 summary = "Provider webhooks received with the raw body intact so signatures are checked over the exact bytes; events sent to another system's webhook durably, signed, retried, once per event id, optionally at a date."
 keywords = ["webhook", "signature", "stripe", "provider", "outbound webhook", "notify another system", "callback", "hmac"]
 use = "Receiving: mount Mana.Webhook in the endpoint before Plug.Parsers. Sending: config :mana_core, :webhooks, site: [url: ..., secret: ..., prefix: \"x-myapp\"]; Mana.Webhook.deliver(:site, \"document.effective\", data, id: \"document-#{id}\", at: doc.effective_at) inserts an Oban job (queue :webhooks) with the change, which POSTs {id, type, occurred_at, data} with <prefix>-id, <prefix>-type, <prefix>-signature: sha256=<HMAC> and idempotency-key, retries until 2xx and waits while the endpoint is unconfigured; the same id is one event."
@@ -169,6 +184,7 @@ id = "search"
 name = "Free-text search"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "A read narrowed by a case-insensitive text over declared string and string-array fields and string fields of embedded values and arrays, optionally ignoring accents, with LIKE wildcards escaped, filtered in the query."
 keywords = ["search", "query", "filter", "ilike", "text", "unaccent", "accent", "array", "tags"]
 use = "prepare({Mana.Search, fields: [:name, :city, :tags, services: :label]}) in the read action; an {:array, :string} field matches when any element does, and services: :label (or services: [:label, :note]) matches a string field of an embedded value or of any element of an embedded array, in the query. unaccent: true (AshPostgres only, raises elsewhere) matches São João and Sao Joao alike; add \"unaccent\" to the repo's installed_extensions and run mix ash.codegen for the extension's migration."
@@ -180,6 +196,7 @@ id = "enums-shapes"
 name = "Enums and shapes"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = { not_applicable = "a LiveView reads the Ash types themselves; nothing is generated" } }
 summary = "Closed value sets (use Mana.Enum) and named embedded objects (use Mana.Shape) published once in the API."
 keywords = ["enum", "closed list", "values", "embedded object"]
 use = "use Mana.Enum, values: [...]; use Mana.Shape on embedded resources."
@@ -191,6 +208,7 @@ id = "session"
 name = "Session"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = { not_applicable = "a LiveView keeps the Phoenix session AshAuthentication sets; there is no bearer to refresh" } }
 summary = "Short sessions with rotating refresh over AshAuthentication (server) and AshSession in Flutter, which injects the Bearer only on the configured origin."
 keywords = ["session", "login", "token", "refresh", "bearer", "authentication"]
 use = "Server: framework/ash/session. Flutter: AshSession over the generated client's transport, ManaSecureStorage for persistence."
@@ -202,6 +220,7 @@ id = "commands"
 name = "Commands"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = { not_applicable = "a LiveView holds its state in its process; there is no client view model" } }
 summary = "Stateful commands for view models (Query, RowAction, QuietAfterDispose, CommandBuilder, typed Refusal)."
 keywords = ["command", "loading", "error", "view model", "button"]
 use = "Flutter: package:mana_command in view models; CommandBuilder in views."
@@ -213,6 +232,7 @@ id = "pagination"
 name = "Paged reads"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "OffsetPage<T> (mana_command) turns a counted Ash offset page into items, total, hasNext and hasPrevious, refusing a page that does not match the window asked for."
 keywords = ["pagination", "page", "list", "offset", "total", "count", "next page"]
 use = "Server: pagination offset?: true, default_limit: 25, max_page_size: 100, countable: :by_default in the read. Flutter: final doc = (await api.listX(page: ListXPageParameter((b) => b..limit = limit..offset = offset..count = true))).data!; OffsetPage.fromAsh(items: doc.data ?? const [], metadata: doc.meta?['page']?.value, requestedOffset: offset, requestedLimit: limit) from package:mana_command (count = true or the total is missing and the page is refused); page.total, page.hasNext, page.hasPrevious drive the list."
@@ -235,6 +255,7 @@ id = "runtime"
 name = "Release runtime"
 layer = "core"
 status = "available"
+adapters = "server"
 summary = "Explicit release configuration, edge, metrics and readiness for Ash/Phoenix."
 keywords = ["release", "deploy", "production", "config", "metrics"]
 use = "Dependency {:mana_runtime, path: ...}; Mana.Runtime.load! in runtime.exs."
@@ -246,6 +267,7 @@ id = "agents"
 name = "Setup and agent guidance"
 layer = "core"
 status = "available"
+adapters = "server"
 summary = "mana.toml declares products, setup tasks and agent skills. mana setup runs the tasks, links each agent's skills where it looks for them (.claude/skills, .agents/skills) and keeps this catalog's core in AGENTS.md, which CLAUDE.md imports, so every Claude and Codex session starts with it; mana doctor fails when any of that drifted."
 keywords = ["setup", "doctor", "agent", "skill", "claude", "codex", "AGENTS.md", "CLAUDE.md"]
 use = "framework/cli/mana setup (or setup --skip-tasks after a framework update), then a plain claude or codex in the project. Never edit the mana:core block in AGENTS.md: change the catalog and run setup; the project's own notes go outside it."
@@ -268,6 +290,7 @@ id = "entities"
 name = "Live entities and deadlines"
 layer = "core"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "A resource's committed changes are announced on entity:<type>:<id> and entity:<type>:for:<user> (only the id; clients read again through the API; never for a change that rolled back), and its deadlines are durable Oban jobs inserted with the change that enters the watched state (one per record while it waits), run only if the state still holds under the record's lock."
 keywords = ["entity", "live", "real time", "realtime", "auto refresh", "deadline", "expire", "cron", "websocket", "channel", "refresh the screen", "on change", "subscribe", "pubsub", "LiveEntity"]
 use = "Server: extensions: [Mana.Entity]; entity do broadcast MyAppWeb.Endpoint; audience [:owner_id]; deadline :expire, action: :expire, when: expr(status == :open), after: {30, :minute} end; mount once channel \"entity:*\", Mana.Entity.Channel, assigns: %{otp_app: :my_app} (serves every live resource). A repair a deadline missed belongs in Mana.Reconcile with apply; a rule that a record must leave a state in time is desired :x, \"...\", scope: expr(status == :accepted), within: {15, :minute} or within: {MyApp.Rules, :answer_window} (a {n, unit} read from a knob per record; since: :updated_at by default; holds: optional with within), which exploration also checks on a moved clock. A rule's holds: is preferably an expression (holds: expr(not is_nil(charge_id))), asked in the query so only diverging records are read; holds: {Mod, :fun} is called per record in scope (the scope is streamed). A repair that crashes is reported to config :mana_core, :error_reporter, {Mod, :fun}; one the domain refuses leaves the record blocked. Flutter (mana_live): once at the app root ManaLiveScope(changes: PhoenixEntityChanges.api(baseUrl, token: session.accessToken), me: <signed-in user id listenable>, child: ...) — put it in the app's account scope; then the widget that shows the records declares what it follows — LiveEntity.of(MunicipalityEntity.entity, onChange: viewModel.load, child: screen) follows the signed-in user's records (the generated XEntity.entity), LiveEntity.of(entity, id: recordId, ...) one record, LiveEntity.view(BookingViews.reservationCard, onChange: ..., child: ...) a view declared live: true. It subscribes while mounted and cancels when it leaves; widgets on the same topic share one channel; after a dropped connection comes back every followed screen reads again once (EntityTopics.missed), so no timer polls. No subscription code in view models. A resource may declare watchers: {Mod, :fun}(user) for who follows every record of it on entity:<type>:all (an operator queue); Flutter LiveEntity.of(XEntity.entity, all: true). Deadline conditions are asked of the stored row, so they may use relationships (exists(charges, ...)); on Postgres a deadline asks again under the record's lock (Mana.Lock), so a payment that committed meanwhile wins, and the updates and destroys of a resource with deadlines are non-atomic for that lock. Bulk actions announce only with notify?: true. Moments: Mana.Entity.observe(record) (topics, deadlines that hold) and fake(resource, id, deadline) (a deadline comes due now)."
@@ -279,9 +302,10 @@ id = "verbs"
 name = "Verbs"
 layer = "core"
 status = "available"
+adapters = { flutter = "available", live = "available" }
 summary = "Each domain action declared once with when it is offered, its risk, inverse, idempotency and feature. Every record carries the verbs it offers the actor now (state + Ash policies); the server refuses the action when `when` does not hold (with the domain error named by unavailable:, idempotent verbs let through), so the state rule is written once; the client gets typed constants; Flutter shows, confirms and undoes from them."
 keywords = ["verb", "action", "button", "permission", "can", "hateoas", "cancel", "accept", "undo", "confirm"]
-use = "Server: extensions: [Mana.Verbs]; verbs do verb :cancel, when: expr(status != :closed and (host_id == ^actor(:id) or starts_at > datetime_add(now(), 24, :hour))), unavailable: :not_cancellable, risk: :money, inverse: :reopen end (when sees ^actor, so per-person rules live there too) — the verb's action is an update/destroy on the record (not a generic action taking an id), and reads load :verbs. What is created or done with no record of its own is a collection verb on the resource it creates: verb :request, collection: true, from: {MyApp.Service, :service_id}, when: expr(public == true) is offered by the parent (its verbs list \"booking.request\") and refused on create when the parent does not hold; without from, when: {Mod, :fun}(actor) and Mana.Verbs.available/2 (Flutter account.available, an AvailableVerbs) say what the person may start (offers yes until the first answer and keeps the last answer when a refresh fails; the app refreshes it after the session or profile change and after any write, since a write can open or close an offer); a parent's verbs also list its children (\"charge.checkout\" on a booking), and a write that moves the record can ask fields[type]=verbs to get the next offer in its reply; a generic action is guarded by its collection verb automatically; unavailable: {Mod, :fun} answers the precise refusal. Steps of a Mana.Flow declared as verbs are offered as the flow reaches them. Declare confirm: true when a riskless verb still deserves a second look (the client asks; money and destructive verbs always ask). Client: BookingVerbs.cancel (generated). Flutter (mana_command): VerbGate(verb:, offered: record.verbs, run:, confirm:, builder:) for a control of its own; runVerb(context, verb, offered:, run: / collect: + runWith:, confirm:) for action-bar items, menus and dialogs a view model drives — collect gathers the verb's inputs from a form (checked against its VerbInput rules; the form stands for the confirmation) and runWith receives them; entry.offers(BookingVerbs.x) to show or hide. Verification: Mana.Verbs.archetypes/1 names the AVP archetypes a verb claims (authorization; lifecycle-gate when its when is enforced); an app keeps one AVP test that discovers every declared verb, fails on a verb with no fixture, and runs those archetypes through the real endpoint. Declare external: \"stripe\" (or \"email\", \"sms\") on a verb whose action reaches an outside system: checkpoints refuse it, History.replay refuses it (or skips it with external: :skip), and it can never queue offline. Each JSON:API operation carries x-mana-verb with the verbs it performs. A change to one record runs one at a time and re-checks when: on the stored row (concurrent accepts: one lands), under Mana.Lock.record(repo, \"type:id\") (a 64-bit transaction lock; only the actions that take it are non-atomic). Loading :verbs answers every record's when: in the read's own query (each expression when is a private boolean calculation), and Ash.can? runs without queries; a policy or action that errors while the offer is checked goes to config :mana_core, :error_reporter and the verb is not offered. Flutter: VerbForm(XVerbs.y) builds the form from the verb's inputs (controllers, set for non-text inputs, validate, unique via taken, submit placing server refusals on fields)."
+use = "Server: extensions: [Mana.Verbs]; verbs do verb :cancel, when: expr(status != :closed and (host_id == ^actor(:id) or starts_at > datetime_add(now(), 24, :hour))), unavailable: :not_cancellable, risk: :money, inverse: :reopen end (when sees ^actor, so per-person rules live there too) — the verb's action is an update/destroy on the record (not a generic action taking an id), and reads load :verbs. What is created or done with no record of its own is a collection verb on the resource it creates: verb :request, collection: true, from: {MyApp.Service, :service_id}, when: expr(public == true) is offered by the parent (its verbs list \"booking.request\") and refused on create when the parent does not hold; without from, when: {Mod, :fun}(actor) and Mana.Verbs.available/2 (Flutter account.available, an AvailableVerbs) say what the person may start (offers yes until the first answer and keeps the last answer when a refresh fails; the app refreshes it after the session or profile change and after any write, since a write can open or close an offer); a parent's verbs also list its children (\"charge.checkout\" on a booking), and a write that moves the record can ask fields[type]=verbs to get the next offer in its reply; a generic action is guarded by its collection verb automatically; unavailable: {Mod, :fun} answers the precise refusal. Steps of a Mana.Flow declared as verbs are offered as the flow reaches them. Declare confirm: true when a riskless verb still deserves a second look (the client asks; money and destructive verbs always ask). Client: BookingVerbs.cancel (generated). Flutter (mana_command): VerbGate(verb:, offered: record.verbs, run:, confirm:, builder:) for a control of its own; runVerb(context, verb, offered:, run: / collect: + runWith:, confirm:) for action-bar items, menus and dialogs a view model drives — collect gathers the verb's inputs from a form (checked against its VerbInput rules; the form stands for the confirmation) and runWith receives them; entry.offers(BookingVerbs.x) to show or hide. Verification: Mana.Verbs.archetypes/1 names the AVP archetypes a verb claims (authorization; lifecycle-gate when its when is enforced); an app keeps one AVP test that discovers every declared verb, fails on a verb with no fixture, and runs those archetypes through the real endpoint. Declare external: \"stripe\" (or \"email\", \"sms\") on a verb whose action reaches an outside system: checkpoints refuse it, History.replay refuses it (or skips it with external: :skip), and it can never queue offline. Each JSON:API operation carries x-mana-verb with the verbs it performs. A change to one record runs one at a time and re-checks when: on the stored row (concurrent accepts: one lands), under Mana.Lock.record(repo, \"type:id\") (a 64-bit transaction lock; only the actions that take it are non-atomic). Loading :verbs answers every record's when: in the read's own query (each expression when is a private boolean calculation), and Ash.can? runs without queries; a policy or action that errors while the offer is checked goes to config :mana_core, :error_reporter and the verb is not offered. Flutter: VerbForm(XVerbs.y) builds the form from the verb's inputs (controllers, set for non-text inputs, validate, unique via taken, submit placing server refusals on fields). LiveView (mana_web): <ManaWeb.Verbs.gate :let={verb} record={@record} verb={:cancel}> renders its content only when the record (read with :verbs for the actor) offers the verb, passing describe/2 (risk, confirm?, inverse, idempotent?, feature); ManaWeb.Verbs.run(record, :cancel, input, scope: scope) runs its update or destroy action and records it under the verb's feature."
 replaces = ["switch over a status in the app to decide if a button shows", "duplicating 'can do X' rules in the app", "confirm dialogs decided per screen"]
 docs = "framework/ash/core/lib/mana/verbs.ex"
 
@@ -291,6 +315,7 @@ id = "views"
 name = "Views"
 layer = "core"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "What each screen reads from a resource, declared once on the resource: its read loads exactly those calculations, the contract carries the view, and the generated client gives the sparse fieldset that asks the server for nothing more."
 keywords = ["view", "screen", "fields", "card", "list", "sparse", "fieldset", "load", "payload"]
 use = "Server: extensions: [Mana.Views]; views do view :reservation_card, fields: [:status, :verbs, ...], live: true, describe: \"...\" end; the read that serves it: prepare({Mana.Views.Load, view: :reservation_card}). Client: operations.listX(fields: BuiltMap(BookingViews.reservationCard.sparse)). Flutter: each view is also a typed class <Type><View>View (fields typed from the attributes model, .fields for the sparse request, .of(record)); read records through it."
@@ -302,6 +327,7 @@ id = "primitives"
 name = "Primitives mechanism"
 layer = "core"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "How a fullstack piece is built: a Spark extension on Ash resources that `use Mana.Primitive` with a contract key, a catalog id and Moments hooks; its contract lands on the resource schema and in info.x-mana-primitives, mana client generate writes its Dart half (refusing keys it has no writer for), and mana doctor checks it is catalogued."
 keywords = ["primitive", "extension", "dsl", "spark", "contract", "generator", "x-mana", "new capability"]
 use = "Server: use Spark.Dsl.Extension, sections: [...]; use Mana.Primitive, contract: \"x-mana-things\", catalog: \"things\", moments: [:fake]; @impl Mana.Primitive def contract(resource). Client: a PrimitiveWriter in framework/cli/lib/src/primitives.dart and the types in framework/flutter/mana_primitives. Discovery: a [[capability]] here. Examples: Mana.Verbs, Mana.Views, Mana.Attachments. Moments hooks are public functions of those names (observe/capture/restore/fake); Mana.Primitive.hooks_implemented?/1 checks every declared one exists."
@@ -313,6 +339,7 @@ id = "history"
 name = "History"
 layer = "primitive"
 status = "available"
+adapters = "server"
 summary = "Every create, update and destroy of a resource is recorded as it happens — who (user, system deadline or agent), which verb, inputs, before and after, failed attempts with their error code — in a log resource with its own retention; a record's history answers only to whoever may read the record."
 keywords = ["history", "audit", "log", "who did it", "timeline", "activity", "feed", "track changes", "replay", "reproduce", "recreate"]
 use = "Log: a resource with extensions: [Mana.History.Log, Mana.Resource]; history_log do subjects [MyApp.Booking] end; retention do delete_after :at, days: 730 end; route index :of, route: \"/:subject_type/:subject_id\". Subject: extensions: [Mana.History]; history do log MyApp.HistoryEntry; redact [:secret] end; verb ..., narrate: \"cancelled the booking\". Agent changes: pass context: %{mana_agent: \"name\"}. Replay: Mana.History.fixture(Log, \"booking\", id, %{user_id => \"host\"}) exports the entries with roles (commit it, e.g. backend/priv/moments/replays/*.json); Mana.History.replay(Booking, entries, actor: %{\"host\" => host, \"traveler\" => traveler}, params: fn action, params -> ... end) rebuilds a new record that ends where it ended — a Moment recipe built on it is hosts:host-replayed-counter. Several records whose steps depend on each other (a place published once its service is): Mana.History.replay_all([%{key: :place, resource: Place, entries: ...}, ...], params: fn key, action, params, rebuilt -> ... end) performs every entry in recorded order across them. A history that starts with an update (a row written outside its actions) replays with seed: Mana.History.seed_state(Resource, id, attributes) and is refused with :not_created without it. Flutter: ManaHistoryEntry.fromJson(attributes) and HistoryTimeline(entries:, entry:) from mana_command. Mana.History.note(resource, id, %{action:, via:, outcome:}) records what happened around a record (deliveries, webhooks; replay skips notes). Time travel: the log's :as_of action (route it) answers the record as it stood at a moment. A failure reported to error_reporter keeps the report id. The entry commits with its change: when it cannot be written the action is refused (Mana.History.NotRecorded, entry code history.not_recorded) and the error reporter hears of it. Telemetry [:mana, :history, :entry] (after the commit, never for a rolled-back change) and mix mana.history.export --since feed the warehouse. Flutter: HistoryView (Undo on the newest change whose inverse is offered; tap an entry for as-of)."
@@ -324,6 +351,7 @@ id = "recovery"
 name = "Declared recovery"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = { not_applicable = "a LiveView has no offline queue; the server is the state" } }
 summary = "Each verb declares how it survives failure: retry: n resends transient failures, offline: :queue keeps it in a device queue that survives restarts (only idempotent verbs, never money — compile-time rules); screens never test connectivity; on the server, run_all undoes done steps through their inverse when a later one fails."
 keywords = ["offline", "no network", "no internet", "queue", "retry", "try again", "resend", "connection", "compensate", "saga", "network failure"]
 use = "Server: verb :mark_read, idempotent: true, retry: 2, offline: :queue; Mana.Verbs.run_all([{record, :verb, params}, ...], actor) compensates. Flutter: deviceVerbRunner(slot:, verbs: NotificationVerbs.all, send:) from the app's account package (VerbRunner in mana_command) — run(verb, id) answers done/queued/failed, flush() on load, stateOf(verb, id) for the button. Every call is covered without wrapping it: the contract marks each operation with the verbs it performs (x-mana-verb), the client generates ManaOperations.all, and the account installs VerbPolicy (Dio), which resends a transient failure up to the verb's retry and keeps an offline: :queue call on the device (answered 202) until the API answers again. Mana.Reconcile escalate: config :mana_core, :reconcile_escalate, {Mod, :fun} receives every rule's report of each run (open an operator case on diverging, close it on converged)."
@@ -335,6 +363,7 @@ id = "flows"
 name = "Flows"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "A multi-step journey kept on the record (onboarding, checkout, KYC): the server moves a cursor through declared steps — refusing steps not reached, passing over skip_if steps, never moving back — so it resumes on any device; records expose flow progress, funnel/2 counts each step (of a query too, e.g. leaving test accounts out), and when a step stalls — counted from when the record entered it, its creation included — a durable job diagnoses it from the record's history — :bug (technical failures) or :abandoned (no attempt, or refused inputs then silence) — emits [:mana, :flow, :stuck] telemetry and calls on_stuck(record, step, diagnosis)."
 keywords = ["flow", "step", "onboarding", "sign up", "wizard", "progress", "resume", "abandonment", "funnel", "stuck", "diagnosis", "dropped off"]
 use = "Server: extensions: [Mana.Flow]; flow do cursor :lifecycle_state; step :terms_pending, action: :advance_terms; step :address_pending, action: :save_address, skip_if: expr(...); done :complete; stuck_after {2, :day}; on_stuck {MyApp.Hosts.Actions, :remind_onboarding}; not_reached {MyApp.Hosts, :error, [:previous_step_incomplete]}; queue :maintenance end; load :flow in the read. Mana.Flow.funnel(Resource) or Mana.Flow.funnel(Ash.Query.filter(Resource, ...)); A step's attempts: [:code_refused, :email_sent] are other history actions that count as tries at it (noted with Mana.History.note(Resource, id, %{action: :code_refused, outcome: :failed, error: \"code\"}) where they happen) and bugs: [:email_sent] those whose failure is the platform's, so diagnose/2 tells a wrong code (abandoned) from an email that never left (bug). Client: HostFlow.flow (ManaFlow) — stepOf/indexOf/progress of the record's cursor. stuck_after may be {Mod, :fun} returning {amount, unit} when the step is entered (a knob). Flutter: FlowScreens<S>(XFlow.flow, [(screen, step or null)]) lays the app's screens over the journey (resume(cursor, passed:), progress, previous/next); FlowBuilder draws the current one with its position."
@@ -346,6 +375,7 @@ id = "notifications"
 name = "Notifications"
 layer = "primitive"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "The notices a resource sends are declared next to the actions that cause them — recipient (attribute or :counterpart from Mana.Entity's audience, never the actor), template, category, channels, deep link — and go out after the action succeeds through the app's sender; clients follow the declared link and group preferences by category."
 keywords = ["notification", "notice", "push", "email", "inbox", "notify", "reminder", "deep link", "preferences", "quiet hours", "group", "fallback", "sms"]
 use = "Server: extensions: [Mana.Notifications]; notifications do sender MyApp.Notifications.Sender; notify :accept, to: :traveler_id, template: \"reservation.confirmed\", category: :reservations, opens: \"/traveler/reservations?booking=:id\", channels: [:inbox, :email]; notify :cancel, to: :counterpart, template: ... end; payload: [:city, :rejection_reason] copies attributes into the notice for the template's {city} text; when the recipient or the data is not on the record, to: {Mod, :fun} and payload: {Mod, :fun} compute them from it. Sender: @behaviour Mana.Notifications.Sender; deliver(%{to:, template:, channels:, payload:, record:}) → :ok | {:error, _}. Delivery rules in the section: preferences {Mod, :allows?} (user, category, channel; inbox always kept), quiet_hours {Mod, :until} (outbound channels held as a job), group_within {10, :minute} (repeats about the same record go to the inbox only), and per notice fallback: true (try channels in order until one delivers). Flutter: ManaNotification.of(BookingNotifications.all, templateKey)?.link(payload). Notices go out after the action commits; each delivery joins the record's history (sent, failed, held). With Oban running on the resource's repo, notices are an outbox: one job per notice inserted in the action's transaction (dropped on rollback), a channel the sender failed retried by its own job; without Oban they are sent after commit by an Ash notifier (lost on a crash, not retried). group_within needs Mana.Notifications.Groups in the supervision tree (children: [Mana.Notifications.Groups, ...]); without it the resource's notifying actions are refused. Grouping is per node. A sender may answer {:failed, [{channel, reason}]}. Flutter: ManaNotices.all (generated) gives a delivery's category and link; InboxController (filter, unread, optimistic read); notificationChoices + NotificationPreferences for category x channel switches."
@@ -368,6 +398,7 @@ id = "agent-verbs"
 name = "Agent over verbs"
 layer = "core"
 status = "available"
+adapters = "server"
 summary = "Agents act on the running app the way its screens do: open an entry (a view declared with entry:) and get its records with the verbs each offers now and their inputs; follow one of those verbs and get the record after. A verb not offered cannot be followed; follows are recorded in history as the agent's. Served over HTTP by Mana.Agent.Plug and to MCP clients by mana mcp."
 keywords = ["agent", "mcp", "tool", "hateoas", "open", "follow", "automation", "assistant", "operate the app"]
 use = "Server: views do view :agenda_card, fields: [...], entry: :as_host end; forward \"/agent\", Mana.Agent.Plug, domains: [...] behind authentication. Agent: MANA_AGENT_TOKEN=<access token> framework/cli/mana mcp --api http://127.0.0.1:5318 --agent planner (tools entries, open, follow). In code: Mana.Agent.open/4, Mana.Agent.follow/7."
@@ -379,6 +410,7 @@ id = "knobs"
 name = "Knobs"
 layer = "primitive"
 status = "available"
+adapters = "server"
 summary = "Values that change while the app runs, often by someone who is not a developer: declared and typed in code with a default (a value or an MFA, so configuration stays the fallback), only the current value stored (with history of who changed it), gradual rollout to listed actors or a percent, verbs gated server-side by a knob, and stale knobs listed for removal."
 keywords = ["knob", "flag", "feature flag", "toggle", "switch", "kill switch", "live configuration", "rollout", "percentage", "no deploy", "tuning"]
 use = "Server: defmodule MyApp.Knobs do use Mana.Knobs, store: MyApp.KnobValue; knob :platform_checkout_enabled, :boolean, default: {MyApp.Payments, :configured, [:platform_checkout_enabled]}, feature: \"payments\" end; the store resource uses extensions: [Mana.Knobs.Store, Mana.History]; config :mana_core, :knobs, MyApp.Knobs; start Mana.Knobs.Cache in the supervision tree (children: [Mana.Knobs.Cache, ...]; knobs raise without it): each node rereads shared values every knob_ttl_ms (5 s), changes made on the node show at once, scoped values are always read from the store. Read MyApp.Knobs.get(:name) / enabled?(:name, actor); set(:name, value | %{\"value\", \"actors\", \"percent\"}, by); unset(:name); stale(). Verb: verb :apply_coupon, knob: :coupons_enabled. Expose GET/POST routes for operators when they need to change knobs from an admin screen. Ask first: does a non-developer need to change it while the app runs? If not, it is configuration. Number knobs take min: and max:, and set refuses values outside them. knob :reviews_enabled, :boolean, enables: \"reviews\" turns every verb of that feature (and its sub-features) on and off on the server and in what is offered."
@@ -478,6 +510,7 @@ id = "feature-health"
 name = "Feature health"
 layer = "core"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "Every JSON:API request labelled with the feature of the verb it reaches; requests, server errors, refusals and p95 per feature over the last minutes."
 keywords = ["health", "feature", "latency", "p95", "errors", "observability"]
 use = "Start Mana.Feature in the supervision tree; plug Mana.Feature.Plug, otp_app: :my_app, prefix: \"/api\" before the router; Mana.Feature.report(minutes) for an operator panel."
@@ -490,6 +523,7 @@ id = "new-project"
 name = "New project and lab"
 layer = "core"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "mana new writes a whole project around Mana (Ash backend, Flutter app, generated client, Moments, Mana as a pinned submodule); mana lab runs that backend against a Moments sandbox."
 keywords = ["new project", "start", "template", "scaffold", "bootstrap", "submodule", "lab", "sandbox database"]
 use = "mana new <folder> [--mana-ref <release>] then moments suite --headless --project app; MANA_MOMENTS_INSTANCE=app/moments/.backend/instance.json mana lab prepare|serve|test|mix. Replace the starter Notes domain with yours and keep the wiring (OpenApi module, recipes, MomentHost/MomentViewBinding in the app)."
@@ -578,6 +612,7 @@ id = "undo"
 name = "Undo from history"
 layer = "core"
 status = "available"
+adapters = { flutter = "available", live = "planned" }
 summary = "The newest change a person made to a record is taken back through its verb's declared inverse, while the record offers it; the undo records via: undo:<entry id> and is not itself undoable."
 keywords = ["undo", "take back", "revert", "inverse", "desfazer", "history"]
 use = "Server: Mana.Undo.last(record, actor, within: {5, :minute}) / Mana.Undo.undo(record, actor). Flutter (mana_command): HistoryView(verbs: XVerbs.all, offered: record.verbs, me: userId, undo: (inverse) => ...) offers it on the newest entry (undoable/4 applies the same rules); VerbGate(showUndo:) offers it right after the verb ran."

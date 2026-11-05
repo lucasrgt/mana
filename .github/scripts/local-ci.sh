@@ -22,7 +22,8 @@ step() { echo "· $*"; ran=1; }
 for dir in framework/ash/*/; do
   dir=${dir%/}
   [ -f "$dir/mix.exs" ] || continue
-  touched "$dir/" || touched framework/ash/.credo.exs || touched framework/ash/lint/ || continue
+  touched "$dir/" || touched framework/ash/.credo.exs || touched framework/ash/lint/ ||
+    { [ "$dir" = framework/ash/web ] && touched framework/catalog.toml; } || continue
   step "Elixir $(basename "$dir")"
   "$mana" mix "$dir" do deps.get + hex.audit + format --check-formatted + compile --warnings-as-errors + credo --strict
   MIX_ENV=test "$mana" mix "$dir" test --warnings-as-errors
