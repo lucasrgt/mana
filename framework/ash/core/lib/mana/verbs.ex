@@ -463,7 +463,6 @@ defmodule Mana.Verbs do
   end
 
   defp stored(condition, record, resource, opts) do
-    require Ash.Query
     keys = Ash.Resource.Info.primary_key(resource)
 
     if keys != [] and Enum.all?(keys, &(not is_nil(Map.get(record, &1)))) do
