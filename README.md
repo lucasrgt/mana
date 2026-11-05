@@ -11,7 +11,7 @@ Phoenix.
 
 | Pacote | Módulos | Provado |
 |---|---|---|
-| [`mop_br`](mop_br) | `Mop.Br.Cnpj` | dígito verificador sempre de 0 a 9; gerar e validar são consistentes |
+| [`mop_br`](mop_br) | `Mop.Br.Cnpj`, `Mop.Br.Cpf` | dígito verificador sempre de 0 a 9; gerar e validar são consistentes (nos dois) |
 | [`mop_money`](mop_money) | `Mop.Money.Split` | o rateio fecha exatamente com o total |
 | [`mop_access`](mop_access) | `Mop.Access` | permissões por papel e override: fail-closed, deny vence, ação não aplicável nunca, tela = servidor |
 
