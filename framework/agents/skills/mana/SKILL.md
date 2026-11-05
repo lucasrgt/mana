@@ -178,7 +178,7 @@ Every verb's inputs reach the client with the rules its Ash action enforces (req
 
 ### Brazilian identifiers (`mana-br`)
 
-CPF, CNPJ, CEP, phone and plate: validated, canonical and masked the same on server and client. The schema carries format br-cpf | br-cnpj | br-cep | br-phone | br-plate.
+CPF, CNPJ (numeric or the alphanumeric one issued since July 2026), CEP, phone and plate: validated, canonical and masked the same on server and client; CPF and CNPJ are decided by Mop.Br, whose laws are proved. The schema carries format br-cpf | br-cnpj | br-cep | br-phone | br-plate.
 
 - **Use:** Server: attribute type Mana.BR.Cpf (Cnpj, Cep, Phone, Plate). Flutter: import package:mana_br; BrFormat.cpf.formatter / .keyboard / .validator() / .display(), BR.isCpf, BR.maskCep.
 - **Instead of:** CPF/CNPJ/CEP/phone/plate masks written in an app; check-digit validators in Dart; regular expressions for Brazilian documents
@@ -330,6 +330,14 @@ Every Moment check and journey report carries an AVP verdict: pass, fail, not-ap
 - **Use:** Read report.verdict (or the 'Veredito AVP' line) instead of inferring success from exit codes or logs.
 - **Instead of:** ad-hoc success reports; trusting a passing build as acceptance
 - **Docs:** `framework/moments/lib/src/verdict.dart`
+
+### Proved laws (MOP) (`laws`)
+
+Pure rules whose properties are proved for every input with Lynx and checked by Lean's kernel on Mana's own toolchain: Mop.Br (CPF and CNPJ check digits), Mop.Money.Split (installments always close with the total) and Mop.Access (role defaults and per-user overrides: fail-closed, deny wins, an action the resource does not expose is never allowed, the screen offers exactly what the server allows). A proof states what holds; tests and Moments cover what no law does.
+
+- **Use:** Depend on the package (mop_br, mop_money, mop_access under framework/mop) and call its pure functions (Mop.Money.Split.rescale/2, Mop.Access.allowed?/6 and offered/5); Mana.BR already validates through Mop.Br. Laws live in each package's test/laws and run with framework/mop/run.sh (the pinned Elixir plus Lean 4.35); a change to a rule must keep its laws proved.
+- **Instead of:** check-digit and rounding code tested only by examples; permission checks written per screen; rules repeated in each app
+- **Docs:** `framework/mop/README.md`
 
 ### Mana lints (`lints`)
 

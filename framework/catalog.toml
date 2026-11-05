@@ -68,12 +68,24 @@ id = "mana-br"
 name = "Brazilian identifiers"
 layer = "primitive"
 status = "available"
-summary = "CPF, CNPJ, CEP, phone and plate: validated, canonical and masked the same on server and client. The schema carries format br-cpf | br-cnpj | br-cep | br-phone | br-plate."
+summary = "CPF, CNPJ (numeric or the alphanumeric one issued since July 2026), CEP, phone and plate: validated, canonical and masked the same on server and client; CPF and CNPJ are decided by Mop.Br, whose laws are proved. The schema carries format br-cpf | br-cnpj | br-cep | br-phone | br-plate."
 keywords = ["cpf", "validate cpf", "cnpj", "cep", "phone", "license plate", "document", "mask", "check digit", "brazil", "address"]
 use = "Server: attribute type Mana.BR.Cpf (Cnpj, Cep, Phone, Plate). Flutter: import package:mana_br; BrFormat.cpf.formatter / .keyboard / .validator() / .display(), BR.isCpf, BR.maskCep."
 replaces = ["CPF/CNPJ/CEP/phone/plate masks written in an app", "check-digit validators in Dart", "regular expressions for Brazilian documents"]
 detector = "mana_lints: mana_use_primitives (Dart) and ManaLint.Check.BrazilianIdentifier (Elixir, mix credo)"
 docs = "framework/flutter/mana_br/README.md"
+
+[[capability]]
+id = "laws"
+name = "Proved laws (MOP)"
+layer = "verification"
+status = "available"
+summary = "Pure rules whose properties are proved for every input with Lynx and checked by Lean's kernel on Mana's own toolchain: Mop.Br (CPF and CNPJ check digits), Mop.Money.Split (installments always close with the total) and Mop.Access (role defaults and per-user overrides: fail-closed, deny wins, an action the resource does not expose is never allowed, the screen offers exactly what the server allows). A proof states what holds; tests and Moments cover what no law does."
+keywords = ["proof", "proved", "law", "lynx", "lean", "formal verification", "property", "split", "installments", "permissions", "rbac", "role", "override", "mop"]
+use = "Depend on the package (mop_br, mop_money, mop_access under framework/mop) and call its pure functions (Mop.Money.Split.rescale/2, Mop.Access.allowed?/6 and offered/5); Mana.BR already validates through Mop.Br. Laws live in each package's test/laws and run with framework/mop/run.sh (the pinned Elixir plus Lean 4.35); a change to a rule must keep its laws proved."
+replaces = ["check-digit and rounding code tested only by examples", "permission checks written per screen", "rules repeated in each app"]
+docs = "framework/mop/README.md"
+
 
 [[capability]]
 id = "errors"

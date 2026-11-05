@@ -24,7 +24,7 @@ final class BrInputFormatter extends TextInputFormatter {
 extension BrFormatInput on BrFormat {
   /// The keyboard the field should open.
   TextInputType get keyboard => switch (this) {
-    BrFormat.plate => TextInputType.text,
+    BrFormat.plate || BrFormat.cnpj => TextInputType.text,
     BrFormat.phone => TextInputType.phone,
     _ => TextInputType.number,
   };

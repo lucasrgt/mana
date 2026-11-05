@@ -8,6 +8,7 @@ defmodule ManaBr.MixProject do
       elixir: "~> 1.18",
       deps: [
         {:ash, "~> 3.37 and >= 3.37.2"},
+        {:mop_br, path: "../../mop/mop_br"},
         {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
         {:mana_lint, path: "../lint", only: [:dev, :test], runtime: false}
       ]

@@ -7,7 +7,7 @@ os fluxos terão Moments.
 
 Tudo é ecossistema Elixir comum: cada macro é um pacote Mix, as leis rodam no ExUnit, e a
 integração com Ash será um pacote à parte (`mop_ash`). Os núcleos não dependem de Ash nem de
-Phoenix.
+Phoenix. Dentro do Mana, são a camada de baixo: `Mana.BR` valida CPF e CNPJ por `mop_br`.
 
 | Pacote | Módulos | Provado |
 |---|---|---|
@@ -19,17 +19,20 @@ O registro das decisões está em [docs/decisoes.md](docs/decisoes.md).
 
 ## Usar num projeto
 
+Dentro do Mana, por caminho (como os demais pacotes do framework):
+
 ```elixir
-{:mop_access, git: "https://github.com/lucasrgt/mop.git", sparse: "mop_access"}
+{:mop_access, path: "mana/framework/mop/mop_access"}
 ```
 
 O Lynx é dependência só de teste de cada pacote: o projeto que usa a macro não o baixa.
 
 ## Rodar as leis
 
-As provas precisam de Elixir 1.20, OTP 29 e Lean 4.35.0. O `Dockerfile` monta esse ambiente:
+As leis são conferidas no mesmo Elixir e OTP fixados do Mana (`framework/ash/toolchain`), mais o
+Lean 4.35.0: a prova vale para o código que de fato roda. O `Dockerfile` monta esse ambiente:
 
 ```sh
-docker build -t mop-lean .
+docker build -t mop-laws .
 MOP_PROJECT=mop_access ./run.sh sh -c 'mix deps.get && mix test'
 ```
