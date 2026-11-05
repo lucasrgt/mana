@@ -37,7 +37,7 @@ Atualizado em 2026-11-05.
 
 ## Primeira demo (2026-11-05)
 
-Em `mop-lean/mop_br`, com Lynx no commit `0bd83e0`, Elixir 1.20.5, OTP 29.1.2 e Lean 4.35.0:
+Em `mop_br`, com Lynx no commit `0bd83e0`, Elixir 1.20.5, OTP 29.1.2 e Lean 4.35.0:
 
 - Provado para todas as entradas: o dígito verificador fica sempre entre 0 e 9; quaisquer 12 caracteres alfanuméricos completados por `check_digits/1` formam um CNPJ que `valid_codes?/1` aceita.
 - Recusado: a variante com `remainder < 1` falha na mesma lei. Contraexemplo: soma 1 → 10.
@@ -56,7 +56,7 @@ Em `mop-lean/mop_br`, com Lynx no commit `0bd83e0`, Elixir 1.20.5, OTP 29.1.2 e 
 
 ## Segunda macro: `Mop.Money.Split` (2026-11-05)
 
-Em `mop-lean/mop_money`:
+Em `mop_money`:
 
 - Provado para todas as entradas: o `rescale` fecha exatamente com o total.
 - Recusado: a variante que esquece o resto (contraexemplo `[1, 1, 1]` em 100 → 99).
@@ -65,7 +65,7 @@ Em `mop-lean/mop_money`:
 
 ## Terceira macro: `Mop.Access` (2026-11-05)
 
-Em `mop-lean/mop_access`, a matriz RBAC do PubPauta (ADR 0002) como funções puras e totais.
+Em `mop_access`, a matriz RBAC do PubPauta (ADR 0002) como funções puras e totais.
 
 - Provado: superusuário pode tudo; recurso sem política fecha; `Deny` vence; ação não aplicável nunca é liberada; `Allow` libera ação aplicável; sem override vale o papel; o oferecido à tela é exatamente o autorizado.
 - Achado no PubPauta: `UserPermissions.Effective` deixa um override liberar ação não aplicável, e `SetUserPermissions` nunca apaga essas linhas. Latente (só aparece se um recurso deixar de expor uma ação), mas servidor e tela discordam e o admin não consegue remover. Demo em `demo/bug_override_before_applicable.exs`.
