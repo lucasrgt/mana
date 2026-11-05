@@ -19,7 +19,8 @@ defmodule ManaWeb.MixProject do
         {:mana_core, path: "../core"},
         {:phoenix_live_view, "~> 1.1"},
         {:moments, path: "../moments"},
-        {:lazy_html, ">= 0.1.0"},
+        # Only the Moments runner (ManaWeb.Moments) uses it, in the app's tests.
+        {:lazy_html, ">= 0.1.0", optional: true},
         {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
         {:mana_lint, path: "../lint", only: [:dev, :test], runtime: false},
         {:simple_sat, "~> 0.1 and >= 0.1.1", only: :test},
