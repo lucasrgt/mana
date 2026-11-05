@@ -3,12 +3,18 @@
 Small, opinionated Spark extensions for product contracts that Ash does not cover
 natively. `framework/catalog.toml` says what each one replaces and how to use it.
 
+The core holds no transport: what a JSON:API client needs (the OpenAPI finishing,
+the `x-mana-*` contracts, public routes, request labelling by feature, the error
+format) lives in `contracts`. Where a resource also declares JSON:API, the core
+reuses its type name for channel and log names, and nothing else.
+
 - `Mana.Domain` — `errors` catalog: stable codes and 4xx status per refusal;
-  `Domain.error(:name)` builds a `Mana.Error`; `Mana.Domain.OpenApi` exports the
-  codes as the `ErrorCode` enum.
+  `Domain.error(:name)` builds a `Mana.Error`; `Mana.Domain.OpenApi` (in
+  `contracts`) exports the codes as the `ErrorCode` enum.
 - `Mana.Resource` — `access`: which actions are public (no session) and their rate
   limits, enforced inside the action. A public action must decide its rate limit.
-- `Mana.Router` — derives public routes for the identity plug from `access`.
+- `Mana.Router` (in `contracts`) — derives public JSON:API routes for the identity
+  plug from `access`.
 - `Mana.Integration` — provider slots with adapters per environment; production
   refuses to boot with a fake or unconfigured adapter.
 - `Mana.Resource` — `retention`: `delete_after :expires_at, days: 30`; rows past it are

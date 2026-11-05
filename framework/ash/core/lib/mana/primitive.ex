@@ -25,8 +25,8 @@ defmodule Mana.Primitive do
   what the outside world or the clock would do. Each hook is a public
   function of that name on the primitive (`hooks_implemented?/1` checks it).
   """
+
   # Optional dependencies, called only when the app has them.
-  @compile {:no_warn_undefined, [AshJsonApi.Resource.Info]}
 
   @hooks [:capture, :restore, :fake, :observe]
 
@@ -63,53 +63,4 @@ defmodule Mana.Primitive do
 
   def primitive?(module),
     do: Code.ensure_loaded?(module) and function_exported?(module, :__mana_primitive__, 0)
-
-  @doc "Each resource's primitive contracts on its schema, and the primitives used under `info.x-mana-primitives`."
-  def put_contracts(spec, domains) do
-    spec = Mana.Verbs.put_operations(spec, domains)
-
-    placed =
-      for domain <- domains,
-          resource <- Ash.Domain.Info.resources(domain),
-          AshJsonApi.Resource in Spark.extensions(resource),
-          type = to_string(AshJsonApi.Resource.Info.type(resource)),
-          is_map(get_in(spec, ["components", "schemas", type])),
-          primitive <- of(resource),
-          value = primitive.contract(resource),
-          value not in [nil, [], %{}],
-          do: {type, primitive, value}
-
-    spec =
-      Enum.reduce(placed, spec, fn {type, primitive, value}, spec ->
-        put_in(
-          spec,
-          ["components", "schemas", type, primitive.__mana_primitive__().contract],
-          value
-        )
-      end)
-
-    case placed |> Enum.map(&elem(&1, 1)) |> Enum.uniq() do
-      [] ->
-        spec
-
-      used ->
-        manifest =
-          for primitive <- Enum.sort_by(used, & &1.__mana_primitive__().contract) do
-            meta = primitive.__mana_primitive__()
-
-            %{
-              "contract" => meta.contract,
-              "catalog" => meta.catalog,
-              "moments" => Enum.map(meta.moments, &to_string/1)
-            }
-          end
-
-        Map.update(
-          spec,
-          "info",
-          %{"x-mana-primitives" => manifest},
-          &Map.put(&1, "x-mana-primitives", manifest)
-        )
-    end
-  end
 end

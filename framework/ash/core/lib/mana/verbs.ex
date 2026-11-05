@@ -55,8 +55,8 @@ defmodule Mana.Verbs do
   `feature` reach the contract as `x-mana-verbs` on the resource schema
   (`Mana.Domain.OpenApi.finish/2`).
   """
+
   # Optional dependencies, called only when the app has them.
-  @compile {:no_warn_undefined, [AshJsonApi.Domain.Info]}
 
   alias Ash.Query.Calculation
   alias Ash.Resource.Calculation.Expression
@@ -571,42 +571,6 @@ defmodule Mana.Verbs do
     ["authorization"] ++ if(verb.when && not verb.idempotent, do: ["lifecycle-gate"], else: [])
   end
 
-  @doc """
-  Marks each JSON:API operation with the verbs it performs
-  (`x-mana-verb: ["booking.cancel"]`), so a client knows from the route
-  alone how a call retries and whether it may wait offline.
-  """
-  def put_operations(spec, domains) do
-    marks =
-      for domain <- domains,
-          route <- AshJsonApi.Domain.Info.routes(domain),
-          route.name,
-          resource = route.resource,
-          Mana.Verbs in Spark.extensions(resource),
-          names =
-            for(
-              verb <- declared(resource),
-              action(verb) == route.action,
-              do: "#{Mana.Entity.type(resource)}.#{verb.name}"
-            ),
-          names != [],
-          into: %{},
-          do: {route.name, names}
-
-    Map.update(spec, "paths", %{}, fn paths ->
-      Map.new(paths, fn {path, operations} ->
-        {path,
-         Map.new(operations, fn
-           {method, %{"operationId" => id} = operation} when is_map_key(marks, id) ->
-             {method, Map.put(operation, "x-mana-verb", marks[id])}
-
-           other ->
-             other
-         end)}
-      end)
-    end)
-  end
-
   @impl Mana.Primitive
   def contract(resource) do
     for verb <- declared(resource) do
@@ -763,7 +727,9 @@ defmodule Mana.Verbs do
   end
 
   defp br_format?(type),
-    do: function_exported?(type, :format, 0) and match?("br-" <> _, type.format())
+    do:
+      Code.ensure_loaded?(type) and function_exported?(type, :format, 0) and
+        match?("br-" <> _, type.format())
 
   defp match_source(%Regex{source: source}), do: source
   defp match_source({m, f, a}), do: match_source(apply(m, f, a))
