@@ -747,6 +747,32 @@ defmodule ManaCoreTest do
     end
   end
 
+  test "a verb on a multitenant resource is offered, guarded and refused within its tenant" do
+    shelf =
+      ManaCoreTest.Shelf
+      |> Ash.Changeset.for_create(:create, %{}, tenant: "acme")
+      |> Ash.create!()
+
+    book =
+      ManaCoreTest.Book
+      |> Ash.Changeset.for_create(:create, %{shelf_id: shelf.id}, tenant: "acme")
+      |> Ash.create!()
+
+    actor = %{id: Ash.UUID.generate()}
+    assert Mana.Verbs.offered(shelf, actor, tenant: "acme") == []
+
+    assert {:error, error} =
+             shelf |> Ash.Changeset.for_update(:close, %{}, tenant: "acme") |> Ash.update()
+
+    assert inspect(error) =~ "verb.unavailable"
+
+    Ash.destroy!(book, tenant: "acme")
+    assert Mana.Verbs.offered(shelf, actor, tenant: "acme") == ["close"]
+
+    assert %{status: :closed} =
+             shelf |> Ash.Changeset.for_update(:close, %{}, tenant: "acme") |> Ash.update!()
+  end
+
   describe "history" do
     test "each change is recorded with its author, inputs, before and after, and failures too" do
       owner = %{id: Ash.UUID.generate()}

@@ -837,6 +837,77 @@ defmodule ManaCoreTest.Slot do
   end
 end
 
+defmodule ManaCoreTest.Book do
+  @moduledoc false
+  use Ash.Resource, domain: ManaCoreTest.Domain, data_layer: Ash.DataLayer.Ets
+
+  multitenancy do
+    strategy(:attribute)
+    attribute(:org)
+  end
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:org, :string, allow_nil?: false, public?: true)
+  end
+
+  relationships do
+    belongs_to(:shelf, ManaCoreTest.Shelf, allow_nil?: false, public?: true)
+  end
+
+  actions do
+    defaults([:read, :destroy, create: [:shelf_id]])
+  end
+end
+
+defmodule ManaCoreTest.Shelf do
+  @moduledoc false
+  # A multitenant resource whose verb asks an aggregate: deciding it reads the stored rows,
+  # which only exist in the record's tenant.
+  use Ash.Resource,
+    domain: ManaCoreTest.Domain,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [Mana.Verbs]
+
+  multitenancy do
+    strategy(:attribute)
+    attribute(:org)
+  end
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:org, :string, allow_nil?: false, public?: true)
+
+    attribute(:status, :atom,
+      constraints: [one_of: [:open, :closed]],
+      default: :open,
+      public?: true
+    )
+  end
+
+  relationships do
+    has_many(:books, ManaCoreTest.Book)
+  end
+
+  aggregates do
+    count(:books_left, :books)
+  end
+
+  actions do
+    defaults([:read, create: [:status]])
+
+    # Not atomic: the ETS data layer would run an atomic update's validation without the tenant.
+    update :close do
+      require_atomic?(false)
+      change(set_attribute(:status, :closed))
+    end
+  end
+
+  verbs do
+    verb(:close, when: expr(status == :open and books_left == 0))
+  end
+end
+
 defmodule ManaCoreTest.Domain do
   @moduledoc false
   use Ash.Domain, extensions: [Mana.Domain], validate_config_inclusion?: false
@@ -862,6 +933,8 @@ defmodule ManaCoreTest.Domain do
     resource(ManaCoreTest.KnobValue)
     resource(ManaCoreTest.Alert)
     resource(ManaCoreTest.Mention)
+    resource(ManaCoreTest.Shelf)
+    resource(ManaCoreTest.Book)
   end
 
   errors do

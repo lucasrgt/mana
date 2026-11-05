@@ -539,7 +539,6 @@ defmodule Mana.Uploads.Thumbnail do
   # Optional dependencies, called only when the app has them.
   @compile {:no_warn_undefined,
             [Mana.Uploads.Thumbnail.Worker, Oban, Vix.Vips.Image, Vix.Vips.Operation]}
-  require Logger
   alias Ash.Resource.Info
   alias Mana.Uploads.Thumbnail.Worker
   alias Vix.Vips.Image

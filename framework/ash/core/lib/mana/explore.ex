@@ -1032,7 +1032,6 @@ defmodule Mana.Explore do
   defp kind_text(:forbidden), do: "refused by policy"
   defp kind_text(:unavailable), do: "refused by its own when"
   defp kind_text(:raised), do: "crashed"
-  defp kind_text(kind), do: to_string(kind)
 
   defp probe(_ctx, state, move) do
     case record(state, move.ref) do
