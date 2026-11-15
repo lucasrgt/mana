@@ -25,7 +25,7 @@ plugins:
   one that has it; what apps share flows down to them.
 - `mana_use_primitives`: a hand-written mask, validator or parser for
   something a Mana primitive owns is reported with the primitive to use.
-- `mana_small_files`: a hand-written Dart file stays at or under 300 lines.
+- `mana_small_files`: a hand-written Dart file stays at or under 200 lines.
   A screen past it holds more than one idea; its sections, dialogs, sheets and
   view model go to their own files in the same feature folder. Generated files
   (`*.g.dart`, `*.freezed.dart`, `*.mocks.dart`, `GENERATED CODE`) are not

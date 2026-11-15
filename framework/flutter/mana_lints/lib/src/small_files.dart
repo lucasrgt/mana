@@ -8,7 +8,7 @@ import 'package:analyzer/error/error.dart';
 /// Most lines a hand-written Dart file may have. A screen past it holds more
 /// than one idea: its sections, dialogs and view model go to their own files
 /// beside it, the way the backend keeps one resource or action per module.
-const maxFileLines = 300;
+const maxFileLines = 200;
 
 /// A hand-written Dart file stays at or under [maxFileLines] lines. Generated
 /// files (`*.g.dart`, `*.freezed.dart`, `*.mocks.dart`, or a first line that
