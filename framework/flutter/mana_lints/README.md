@@ -1,6 +1,6 @@
 # mana_lints
 
-Analyzer plugin for Flutter apps built on a shared design system. Three lints,
+Analyzer plugin for Flutter apps built on a shared design system. Five lints,
 each enabled per package in `analysis_options.yaml`:
 
 ```yaml
@@ -11,6 +11,8 @@ plugins:
       mana_design_system_only: true   # apps
       mana_feature_boundaries: true   # apps
       mana_library_independence: true # shared libraries
+      mana_use_primitives: true       # everywhere
+      mana_small_files: true          # everywhere
 ```
 
 - `mana_design_system_only`: screens compose the design system. No raw
@@ -21,6 +23,13 @@ plugins:
   outside `lib/features`, never another feature's files.
 - `mana_library_independence`: a package without `lib/main.dart` never imports
   one that has it; what apps share flows down to them.
+- `mana_use_primitives`: a hand-written mask, validator or parser for
+  something a Mana primitive owns is reported with the primitive to use.
+- `mana_small_files`: a hand-written Dart file stays at or under 300 lines.
+  A screen past it holds more than one idea; its sections, dialogs, sheets and
+  view model go to their own files in the same feature folder. Generated files
+  (`*.g.dart`, `*.freezed.dart`, `*.mocks.dart`, `GENERATED CODE`) are not
+  counted.
 
 Diagnostics show in the editor and in `dart analyze` run at the package root;
 `flutter analyze` does not surface analyzer plugins. A deliberate exception is

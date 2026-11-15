@@ -333,10 +333,10 @@ Every Moment check and journey report carries an AVP verdict: pass, fail, not-ap
 
 ### Mana lints (`lints`)
 
-Analyzer rules: design-system only, feature boundaries, library independence, use primitives.
+Analyzer rules: design-system only, feature boundaries, library independence, use primitives, small files (300 lines).
 
 - **Use:** Enabled in each app's analysis_options.yaml; run dart analyze at the package root (flutter analyze does not show plugins). The Elixir half is in ManaLint (mix credo --strict, see lint): RecordBroadcast, RecordDateJob, ImperativeNotice and BrazilianIdentifier report code that reimplements a primitive, and know its legitimate places from the code itself (the module that is the notifications sender, the entity's broadcaster, Mana itself); there is no comment that keeps a finding.
-- **Instead of:** review comments about raw Material widgets, cross-feature imports or reimplemented primitives
+- **Instead of:** review comments about raw Material widgets, cross-feature imports or reimplemented primitives; screens of a thousand lines holding every dialog and section
 - **Docs:** `framework/flutter/mana_lints/README.md`
 
 ### Sensors (`sensors`)

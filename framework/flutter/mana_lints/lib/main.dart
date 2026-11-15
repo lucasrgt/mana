@@ -4,6 +4,7 @@ import 'package:analysis_server_plugin/registry.dart';
 import 'src/design_system_only.dart';
 import 'src/feature_boundaries.dart';
 import 'src/library_independence.dart';
+import 'src/small_files.dart';
 import 'src/use_primitives.dart';
 
 final plugin = ManaLints();
@@ -20,6 +21,7 @@ final class ManaLints extends Plugin {
       ..registerLintRule(DesignSystemOnly())
       ..registerLintRule(FeatureBoundaries())
       ..registerLintRule(LibraryIndependence())
+      ..registerLintRule(SmallFiles())
       ..registerLintRule(UsePrimitives());
   }
 }
