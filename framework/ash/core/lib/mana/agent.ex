@@ -57,13 +57,17 @@ defmodule Mana.Agent do
 
   @doc """
   Performs the collection verb `qualified` (`"type.verb"`) with `params`
-  when it is available to the actor; answers what it created or returned.
+  when its knob and precondition allow it (`Mana.Verbs.allowed/4`); the
+  action's own policies then decide on the real input. `available/2` asks
+  `Ash.can` with no input, which a policy on the created row (`user_id ==
+  actor`) cannot pass, so it is no gate for starting. Answers what it
+  created or returned.
   """
   def start(domains, qualified, params, actor, opts \\ []) do
     with [type, name] <- split_qualified(qualified),
          {:ok, resource} <- resource(domains, type),
          %{} = verb <- collection_verb(resource, name),
-         true <- startable(domains, qualified, verb, actor) do
+         true <- startable(resource, verb, params, actor) do
       context = %{mana_agent: Keyword.get(opts, :agent, "agent")}
       action = Ash.Resource.Info.action(resource, Mana.Verbs.action(verb))
 
@@ -89,10 +93,11 @@ defmodule Mana.Agent do
       {:error, %{reason: "not_offered"}}
   end
 
-  defp startable(domains, qualified, verb, actor) do
-    if verb.from != nil or qualified in Mana.Verbs.available(domains, actor),
-      do: true,
-      else: {:error, %{reason: "not_offered"}}
+  defp startable(resource, verb, params, actor) do
+    case Mana.Verbs.allowed(resource, verb.name, actor, params) do
+      :ok -> true
+      {:error, error} -> {:error, %{reason: "not_offered", code: Mana.History.error_code(error)}}
+    end
   end
 
   defp perform(resource, %{type: :create, name: name}, params, opts),
