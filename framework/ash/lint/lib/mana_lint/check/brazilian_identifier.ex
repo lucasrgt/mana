@@ -10,7 +10,9 @@ defmodule ManaLint.Check.BrazilianIdentifier do
       patterns: [
         ~r/\\d\{3\}(?:\\[.\/-]|[()?.\/ -])*\\d\{3\}(?:\\[.\/-]|[()?.\/ -])*\\d\{3\}/,
         ~r/\\d\{2\}(?:\\[.\/-]|[()?.\/ -])*\\d\{3\}(?:\\[.\/-]|[()?.\/ -])*\\d\{3\}(?:\\[.\/-]|[()?.\/ -])*\\d\{4\}/,
-        ~r/\\d\{5\}(?:\\[.\/-]|[()?.\/ -])*\\d\{3\}/
+        ~r/\\d\{5\}(?:\\[.\/-]|[()?.\/ -])*\\d\{3\}/,
+        # An alphanumeric CNPJ's groups: a class with letters, 2 then 3, or 12.
+        ~r/\[[^\]]*A-Z[^\]]*\]\{2\}(?:\\[.\/-]|[()?.\/ -])*\[[^\]]*A-Z[^\]]*\]\{3\}|\[[^\]]*A-Z[^\]]*\]\{12\}/
       ],
       primitives: [~r/^Mana\.BR(\.|$)/]
     ],
@@ -19,7 +21,8 @@ defmodule ManaLint.Check.BrazilianIdentifier do
       Flags Brazilian identifiers handled by hand: a function named for
       validating, formatting, masking or parsing a CPF, CNPJ, CEP or plate
       (`valid_cpf?`, `format_cep`, `cnpj_valid?`), and a regex for their
-      digit groups (`~r/\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}/`, `~r/\\d{5}-?\\d{3}/`).
+      digit groups (`~r/\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}/`, `~r/\\d{5}-?\\d{3}/`,
+      the alphanumeric CNPJ's `~r/[0-9A-Z]{12}\\d{2}/`).
 
       Check digits, masks and canonical forms written per app drift apart:
       one accepts a formatted CPF, another only digits; the server's rule

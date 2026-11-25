@@ -12,6 +12,30 @@ void main() {
     expect(BR.isCnpj('00000000000000'), isFalse);
   });
 
+  test('alphanumeric CNPJs use the same check digits as numeric ones', () {
+    expect(BR.isCnpj('12.ABC.345/01DE-35'), isTrue);
+    expect(BR.isCnpj('12abc34501de35'), isTrue);
+    expect(BR.isCnpj('11444777000161'), isTrue);
+    expect(BR.isCnpj('12.ABC.345/01DE-36'), isFalse);
+    expect(BR.isCnpj('12ABC34501DE3A'), isFalse);
+    expect(BR.isCnpj('AAAAAAAAAAAAAA'), isFalse);
+    expect(BR.isCnpj('12ABC34501DE3'), isFalse);
+    expect(BR.cnpj(' 12.abc.345/01de-35 '), '12ABC34501DE35');
+    expect(BrFormat.cnpj.canonical('12.abc.345/01de-35'), '12ABC34501DE35');
+    expect(BR.maskCnpj('12abc34501de35'), '12.ABC.345/01DE-35');
+    expect(BR.maskCnpj('12ABC34501DEX3'), '12.ABC.345/01DE-3');
+    expect(BR.maskCnpj('12a'), '12.A');
+    expect(BrFormat.cnpj.display('12ABC34501DE35'), '12.ABC.345/01DE-35');
+    expect(BrFormat.cnpj.keyboard, TextInputType.text);
+    expect(BrFormat.cnpj.capitalization, TextCapitalization.characters);
+    expect(BrFormat.cpf.capitalization, TextCapitalization.none);
+    final edited = BrFormat.cnpj.formatter.formatEditUpdate(
+      TextEditingValue.empty,
+      const TextEditingValue(text: '12abc345'),
+    );
+    expect(edited.text, '12.ABC.345');
+  });
+
   test(
     'masks add separators only before a following digit and drop extra digits',
     () {

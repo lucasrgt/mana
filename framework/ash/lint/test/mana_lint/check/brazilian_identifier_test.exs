@@ -11,13 +11,15 @@ defmodule ManaLint.Check.BrazilianIdentifierTest do
 
       def format_cep(cep), do: String.replace(cep, ~r/^(\d{5})(\d{3})$/, "\\1-\\2")
       def cnpj_valid?(cnpj), do: cnpj =~ ~r/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/
+      def new_cnpj?(cnpj), do: cnpj =~ ~r/^[0-9A-Z]{2}\.?[0-9A-Z]{3}\.?[0-9A-Z]{3}\/?[0-9A-Z]{4}-?\d{2}$/
+      def bare_cnpj?(cnpj), do: cnpj =~ ~r/^[A-Z0-9]{12}\d{2}$/
     end
     """
     |> to_source_file()
     |> run_check(Check)
     |> assert_issues(fn issues ->
       assert issues |> Enum.map(& &1.trigger) |> Enum.sort() ==
-               ["cnpj_valid?", "format_cep", "valid_cpf?", "~r", "~r", "~r"]
+               ["cnpj_valid?", "format_cep", "valid_cpf?", "~r", "~r", "~r", "~r", "~r"]
     end)
   end
 
@@ -31,6 +33,8 @@ defmodule ManaLint.Check.BrazilianIdentifierTest do
     defmodule App.People do
       def with_cpf(person), do: Map.take(person, [:cpf])
       def code(value), do: value =~ ~r/^\d{4}$/
+      def plate?(value), do: value =~ ~r/^[A-Z]{3}[0-9]{4}$/
+      def country(value), do: value =~ ~r/^[A-Z]{2}$/
     end
     """
     |> to_source_file()

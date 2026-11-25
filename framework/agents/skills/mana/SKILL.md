@@ -178,9 +178,9 @@ Every verb's inputs reach the client with the rules its Ash action enforces (req
 
 ### Brazilian identifiers (`mana-br`)
 
-CPF, CNPJ, CEP, phone and plate: validated, canonical and masked the same on server and client. The schema carries format br-cpf | br-cnpj | br-cep | br-phone | br-plate.
+CPF, CNPJ (numeric or alphanumeric), CEP, phone and plate: validated, canonical and masked the same on server and client. The schema carries format br-cpf | br-cnpj | br-cep | br-phone | br-plate.
 
-- **Use:** Server: attribute type Mana.BR.Cpf (Cnpj, Cep, Phone, Plate). Flutter: import package:mana_br; BrFormat.cpf.formatter / .keyboard / .validator() / .display(), BR.isCpf, BR.maskCep.
+- **Use:** Server: attribute type Mana.BR.Cpf (Cnpj, Cep, Phone, Plate). Flutter: import package:mana_br; BrFormat.cpf.formatter / .keyboard / .capitalization / .validator() / .display(), BR.isCpf, BR.maskCep.
 - **Instead of:** CPF/CNPJ/CEP/phone/plate masks written in an app; check-digit validators in Dart; regular expressions for Brazilian documents
 - **Enforced by:** mana_lints: mana_use_primitives (Dart) and ManaLint.Check.BrazilianIdentifier (Elixir, mix credo)
 - **Docs:** `framework/flutter/mana_br/README.md`

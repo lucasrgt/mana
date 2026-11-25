@@ -10,10 +10,19 @@ abstract final class BR {
         _check(numbers, 10, const [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]);
   }
 
+  /// Uppercase alphanumerics, the stored form of a CNPJ.
+  static String cnpj(String value) =>
+      value.replaceAll(RegExp('[^A-Za-z0-9]'), '').toUpperCase();
+
+  /// Numeric or alphanumeric (Receita Federal, from July 2026): 12
+  /// characters `[0-9A-Z]` and 2 mod-11 check digits; a character weighs its
+  /// ASCII code minus 48, so a numeric CNPJ keeps its old digits.
   static bool isCnpj(String value) {
-    final digits = BR.digits(value);
-    if (digits.length != 14 || _same(digits)) return false;
-    final numbers = digits.split('').map(int.parse).toList(growable: false);
+    final cnpj = BR.cnpj(value);
+    if (!RegExp(r'^[0-9A-Z]{12}[0-9]{2}$').hasMatch(cnpj) || _same(cnpj)) {
+      return false;
+    }
+    final numbers = cnpj.codeUnits.map((c) => c - 48).toList(growable: false);
     return _check(numbers, 12, const [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]) &&
         _check(numbers, 13, const [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
   }
@@ -46,13 +55,20 @@ abstract final class BR {
         RegExp(r'^[A-Z]{3}[0-9][A-Z][0-9]{2}$').hasMatch(plate);
   }
 
-  /// Masks while typing: separators appear only once a digit follows them,
-  /// extra digits are dropped.
+  /// Masks while typing: separators appear only once a character follows
+  /// them, extra characters are dropped.
   static String maskCpf(String value) =>
       _mask(digits(value), const [3, 3, 3, 2], const ['.', '.', '-']);
 
-  static String maskCnpj(String value) =>
-      _mask(digits(value), const [2, 3, 3, 4, 2], const ['.', '.', '/', '-']);
+  /// Letters are kept only in the first 12 characters: the check digits are
+  /// numeric.
+  static String maskCnpj(String value) {
+    final cnpj = BR.cnpj(value);
+    final typed = cnpj.length <= 12
+        ? cnpj
+        : cnpj.substring(0, 12) + digits(cnpj.substring(12));
+    return _mask(typed, const [2, 3, 3, 4, 2], const ['.', '.', '/', '-']);
+  }
 
   static String maskCep(String value) =>
       _mask(digits(value), const [5, 3], const ['-']);
@@ -75,7 +91,7 @@ abstract final class BR {
     return plate.length > 7 ? plate.substring(0, 7) : plate;
   }
 
-  static bool _same(String digits) => RegExp(r'^(\d)\1+$').hasMatch(digits);
+  static bool _same(String value) => RegExp(r'^(.)\1+$').hasMatch(value);
 
   static bool _check(List<int> numbers, int position, List<int> weights) {
     var sum = 0;
@@ -161,8 +177,10 @@ enum BrFormat {
     return complete ? mask(value) : value;
   }
 
-  /// The canonical value the server stores: digits, or the normalized plate.
+  /// The canonical value the server stores: digits, or the normalized CNPJ
+  /// or plate.
   String canonical(String value) => switch (this) {
+    cnpj => BR.cnpj(value),
     plate => BR.plate(value),
     phone => BR.phone(value) ?? BR.digits(value),
     _ => BR.digits(value),
