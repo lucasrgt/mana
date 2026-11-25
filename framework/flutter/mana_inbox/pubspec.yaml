@@ -1,0 +1,16 @@
+name: mana_inbox
+description: Headless notifications inbox controller, read-state tracking, and live scope for Flutter apps built with Mana.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
