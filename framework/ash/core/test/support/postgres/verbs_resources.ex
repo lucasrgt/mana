@@ -8,6 +8,8 @@ defmodule PostgresTest.VerbsDomain do
   resources do
     resource(PostgresTest.VerbsShelf)
     resource(PostgresTest.VerbsBook)
+    resource(PostgresTest.VerbsTenantShelf)
+    resource(PostgresTest.VerbsTenantBook)
   end
 
   def create_tables!(repo) do
@@ -20,11 +22,21 @@ defmodule PostgresTest.VerbsDomain do
       "CREATE TABLE IF NOT EXISTS verbs_books (id uuid PRIMARY KEY, shelf_id uuid NOT NULL)"
     )
 
+    repo.query!("""
+    CREATE TABLE IF NOT EXISTS verbs_tenant_shelves (
+      id uuid PRIMARY KEY, org_id uuid NOT NULL, status text NOT NULL DEFAULT 'open')
+    """)
+
+    repo.query!("""
+    CREATE TABLE IF NOT EXISTS verbs_tenant_books (
+      id uuid PRIMARY KEY, org_id uuid NOT NULL, shelf_id uuid NOT NULL)
+    """)
+
     :ok
   end
 
   def truncate!(repo) do
-    repo.query!("TRUNCATE verbs_shelves, verbs_books")
+    repo.query!("TRUNCATE verbs_shelves, verbs_books, verbs_tenant_shelves, verbs_tenant_books")
     :ok
   end
 end
@@ -130,5 +142,92 @@ defmodule PostgresTest.VerbsBook do
     policy action_type(:create) do
       authorize_if(actor_present())
     end
+  end
+end
+
+defmodule PostgresTest.VerbsTenantShelf do
+  @moduledoc false
+  # An attribute-multitenant shelf: every query of it, the verb gates' own
+  # included, has to run inside the record's tenant.
+  use Ash.Resource,
+    domain: PostgresTest.VerbsDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [Mana.Verbs]
+
+  postgres do
+    table("verbs_tenant_shelves")
+    repo(PostgresTest.Repo)
+  end
+
+  multitenancy do
+    strategy(:attribute)
+    attribute(:org_id)
+  end
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:org_id, :uuid, allow_nil?: false, public?: true)
+
+    attribute(:status, :atom,
+      constraints: [one_of: [:open, :closed]],
+      default: :open,
+      allow_nil?: false,
+      public?: true
+    )
+  end
+
+  relationships do
+    has_many(:books, PostgresTest.VerbsTenantBook, destination_attribute: :shelf_id)
+  end
+
+  aggregates do
+    count(:book_count, :books)
+  end
+
+  actions do
+    defaults([:read, create: [:status]])
+    update(:close, change: set_attribute(:status, :closed))
+    update(:tidy)
+  end
+
+  verbs do
+    verb(:close, when: expr(status == :open))
+    verb(:tidy, when: expr(book_count > 1))
+  end
+end
+
+defmodule PostgresTest.VerbsTenantBook do
+  @moduledoc false
+  use Ash.Resource,
+    domain: PostgresTest.VerbsDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [Mana.Verbs]
+
+  postgres do
+    table("verbs_tenant_books")
+    repo(PostgresTest.Repo)
+  end
+
+  multitenancy do
+    strategy(:attribute)
+    attribute(:org_id)
+  end
+
+  attributes do
+    uuid_primary_key(:id)
+    attribute(:org_id, :uuid, allow_nil?: false, public?: true)
+    attribute(:shelf_id, :uuid, allow_nil?: false, public?: true)
+  end
+
+  actions do
+    defaults([:read, create: [:shelf_id]])
+  end
+
+  verbs do
+    verb(:create,
+      collection: true,
+      from: {PostgresTest.VerbsTenantShelf, :shelf_id},
+      when: expr(status == :open)
+    )
   end
 end

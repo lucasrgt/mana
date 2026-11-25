@@ -282,27 +282,29 @@ defmodule Mana.Verbs do
   `input` now, or the error its declaration names; generic actions call it
   before they act (create actions are gated on their own).
   """
-  def allowed(resource, name, actor, input \\ %{}) do
+  def allowed(resource, name, actor, input \\ %{}, opts \\ []) do
     verb = verb!(resource, name)
 
     cond do
       not knob_on?(verb, actor) ->
         {:error, Mana.Error.new("feature.disabled", "this is turned off right now", status: 403)}
 
-      collection_holds?(resource, verb, actor, input) ->
+      collection_holds?(resource, verb, actor, input, opts) ->
         :ok
 
       true ->
-        {:error, refusal(resource, verb, actor, input)}
+        {:error, refusal(resource, verb, actor, input, opts)}
     end
   end
 
   @doc false
-  def refusal(resource, %{unavailable: {module, function}, from: from}, actor, input) do
+  def refusal(resource, verb, actor, input, opts \\ [])
+
+  def refusal(resource, %{unavailable: {module, function}, from: from}, actor, input, opts) do
     parent =
       with {parent, field} <- from,
            id when not is_nil(id) <- input[field] || input[to_string(field)],
-           {:ok, record} <- Ash.get(parent, id, authorize?: false) do
+           {:ok, record} <- Ash.get(parent, id, authorize?: false, tenant: opts[:tenant]) do
         record
       else
         _ -> nil
@@ -312,19 +314,21 @@ defmodule Mana.Verbs do
       unavailable(resource, %{unavailable: nil, name: :verb})
   end
 
-  def refusal(resource, verb, _actor, _input), do: unavailable(resource, verb)
+  def refusal(resource, verb, _actor, _input, _opts), do: unavailable(resource, verb)
 
   @doc false
-  def collection_holds?(_resource, %{from: {parent, field}} = verb, actor, input) do
+  def collection_holds?(resource, verb, actor, input, opts \\ [])
+
+  def collection_holds?(_resource, %{from: {parent, field}} = verb, actor, input, opts) do
     with id when not is_nil(id) <- input[field] || input[to_string(field)],
-         {:ok, record} <- Ash.get(parent, id, authorize?: false) do
+         {:ok, record} <- Ash.get(parent, id, authorize?: false, tenant: opts[:tenant]) do
       holds?(verb, record, parent, actor)
     else
       _ -> false
     end
   end
 
-  def collection_holds?(_resource, verb, actor, _input), do: precondition?(verb, actor)
+  def collection_holds?(_resource, verb, actor, _input, _opts), do: precondition?(verb, actor)
 
   @doc false
   def unavailable(_resource, %{unavailable: nil, name: name}),
@@ -460,6 +464,15 @@ defmodule Mana.Verbs do
     end
   end
 
+  # A record of an attribute-multitenant resource names its own tenant; the
+  # stored row is asked inside it, as every query of such a resource must be.
+  @doc false
+  def tenant_of(resource, record) do
+    if Ash.Resource.Info.multitenancy_strategy(resource) == :attribute,
+      do: Map.get(record, Ash.Resource.Info.multitenancy_attribute(resource)),
+      else: Map.get(record.__metadata__ || %{}, :tenant)
+  end
+
   defp stored(condition, record, resource) do
     require Ash.Query
     keys = Ash.Resource.Info.primary_key(resource)
@@ -469,7 +482,7 @@ defmodule Mana.Verbs do
        resource
        |> Ash.Query.do_filter(Map.to_list(Map.take(record, keys)))
        |> Ash.Query.do_filter(condition)
-       |> Ash.exists?(authorize?: false)}
+       |> Ash.exists?(authorize?: false, tenant: tenant_of(resource, record))}
     else
       :unknown
     end
@@ -966,13 +979,17 @@ defmodule Mana.Verbs.Guarded do
 
     case Enum.find(
            applicable,
-           &(Mana.Verbs.allowed(input.resource, &1.name, context.actor, input.arguments) == :ok)
+           &(Mana.Verbs.allowed(input.resource, &1.name, context.actor, input.arguments,
+               tenant: input.tenant
+             ) == :ok)
          ) do
       nil when applicable == [] ->
         inner(input, opts, context)
 
       nil ->
-        Mana.Verbs.allowed(input.resource, hd(applicable).name, context.actor, input.arguments)
+        Mana.Verbs.allowed(input.resource, hd(applicable).name, context.actor, input.arguments,
+          tenant: input.tenant
+        )
 
       _ ->
         inner(input, opts, context)
@@ -1098,7 +1115,7 @@ defmodule Mana.Verbs.Recheck do
       changeset.resource
       |> Ash.Query.do_filter(Map.to_list(Map.take(record, Info.primary_key(changeset.resource))))
       |> Ash.Query.do_filter(Mana.Verbs.condition(verb.when, actor))
-      |> Ash.exists?(authorize?: false)
+      |> Ash.exists?(authorize?: false, tenant: changeset.tenant)
 
     if holds?,
       do: changeset,
@@ -1139,9 +1156,15 @@ defmodule Mana.Verbs.CollectionGate do
         input = Map.merge(changeset.attributes, changeset.arguments)
 
         if not changeset.valid? or Mana.Verbs.offer_check?(changeset) or
-             Mana.Verbs.collection_holds?(changeset.resource, verb, context.actor, input),
+             Mana.Verbs.collection_holds?(changeset.resource, verb, context.actor, input,
+               tenant: changeset.tenant
+             ),
            do: :ok,
-           else: {:error, Mana.Verbs.refusal(changeset.resource, verb, context.actor, input)}
+           else:
+             {:error,
+              Mana.Verbs.refusal(changeset.resource, verb, context.actor, input,
+                tenant: changeset.tenant
+              )}
     end
   end
 
