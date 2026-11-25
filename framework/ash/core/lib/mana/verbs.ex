@@ -202,7 +202,9 @@ defmodule Mana.Verbs do
       for {child, verb} <- children(resource),
           knob_on?(verb, actor),
           holds?(verb, record, resource, actor, stored.(child_calculation(child, verb))),
-          can_create?(child, verb, %{elem(verb.from, 1) => record.id}, actor),
+          can_create?(child, verb, %{elem(verb.from, 1) => record.id}, actor,
+            tenant: opts[:tenant] || tenant_of(resource, record)
+          ),
           do: "#{Mana.Entity.type(child)}.#{verb.name}"
 
     own ++ related
@@ -350,8 +352,8 @@ defmodule Mana.Verbs do
   @doc false
   def offer_check?(changeset), do: changeset.context[@offer_check] == true
 
-  defp can_create?(resource, verb, input, actor),
-    do: can({resource, action(verb), input}, actor, [], verb)
+  defp can_create?(resource, verb, input, actor, opts \\ []),
+    do: can({resource, action(verb), input}, actor, Keyword.take(opts, [:tenant]), verb)
 
   # `run_queries?: false`: a policy that would need a query is answered no,
   # so the offer never costs a query per record. A refusal (forbidden, or an

@@ -196,6 +196,24 @@ defmodule PostgresTest.VerbsTenantShelf do
   end
 end
 
+defmodule PostgresTest.VerbsTenantShelfExists do
+  @moduledoc false
+  # A create that checks its parent inside its own tenant, as apps do.
+  use Ash.Resource.Validation
+  require Ash.Query
+
+  @impl true
+  def validate(changeset, _opts, _context) do
+    id = Ash.Changeset.get_attribute(changeset, :shelf_id)
+
+    if PostgresTest.VerbsTenantShelf
+       |> Ash.Query.filter(id == ^id)
+       |> Ash.exists?(tenant: changeset.tenant, authorize?: false),
+       do: :ok,
+       else: {:error, field: :shelf_id, message: "no such shelf"}
+  end
+end
+
 defmodule PostgresTest.VerbsTenantBook do
   @moduledoc false
   use Ash.Resource,
@@ -220,7 +238,13 @@ defmodule PostgresTest.VerbsTenantBook do
   end
 
   actions do
-    defaults([:read, create: [:shelf_id]])
+    defaults([:read])
+
+    create :create do
+      primary?(true)
+      accept([:shelf_id])
+      validate(PostgresTest.VerbsTenantShelfExists)
+    end
   end
 
   verbs do

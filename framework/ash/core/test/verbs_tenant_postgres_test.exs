@@ -43,4 +43,13 @@ defmodule Mana.VerbsTenantPostgresTest do
     assert {:ok, _} = Ash.create(VerbsTenantBook, %{shelf_id: open.id}, tenant: org)
     assert {:error, _} = Ash.create(VerbsTenantBook, %{shelf_id: closed.id}, tenant: org)
   end
+
+  test "a parent offers its children's collection verbs inside its own tenant" do
+    org = Ash.UUID.generate()
+    open = shelf(org)
+    closed = shelf(org, :closed)
+
+    assert "verbs_tenant_book.create" in Mana.Verbs.offered(open, nil)
+    refute "verbs_tenant_book.create" in Mana.Verbs.offered(closed, nil)
+  end
 end
